@@ -12,6 +12,7 @@
 #include "src/cpu-profiler.h"
 #include "src/debug.h"
 #include "src/deoptimizer.h"
+#include "src/event-racer-rewriter.h"
 #include "src/full-codegen.h"
 #include "src/gdb-jit.h"
 #include "src/hydrogen.h"
@@ -824,7 +825,11 @@ static Handle<SharedFunctionInfo> CompileToplevel(CompilationInfo* info) {
       return Handle<SharedFunctionInfo>::null();
     }
 
-    FunctionLiteral* lit = info->function();
+    EventRacerRewriter rw(info->zone(), info->ast_value_factory());
+    FunctionLiteral* lit;
+    lit = static_cast<FunctionLiteral *>(rw.Visit(info->function()));
+    info->SetFunction(lit);
+
     LiveEditFunctionTracker live_edit_tracker(isolate, lit);
 
     // Measure how long it takes to do the compilation; only take the

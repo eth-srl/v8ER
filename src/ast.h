@@ -107,6 +107,7 @@ namespace internal {
 class AstConstructionVisitor;
 template<class> class AstNodeFactory;
 class AstVisitor;
+class AstRewriter;
 class Declaration;
 class Module;
 class BreakableStatement;
@@ -143,6 +144,7 @@ typedef ZoneList<Handle<Object> > ZoneObjectList;
 
 #define DECLARE_NODE_TYPE(type)                                 \
   virtual void Accept(AstVisitor* v) V8_OVERRIDE;                  \
+  virtual type* Accept(AstRewriter* v) V8_OVERRIDE;                \
   virtual AstNode::NodeType node_type() const V8_FINAL V8_OVERRIDE {  \
     return AstNode::k##type;                                    \
   }                                                             \
@@ -195,6 +197,7 @@ class AstNode: public ZoneObject {
   virtual ~AstNode() {}
 
   virtual void Accept(AstVisitor* v) = 0;
+  virtual AstNode* Accept(AstRewriter* v) = 0;
   virtual NodeType node_type() const = 0;
   int position() const { return position_; }
 
@@ -1245,6 +1248,7 @@ class TargetCollector V8_FINAL : public AstNode {
 
   // Virtual behaviour. TargetCollectors are never part of the AST.
   virtual void Accept(AstVisitor* v) V8_OVERRIDE { UNREACHABLE(); }
+  virtual AstNode* Accept(AstRewriter* v) V8_OVERRIDE { UNREACHABLE(); return 0; }
   virtual NodeType node_type() const V8_OVERRIDE { return kInvalid; }
   virtual TargetCollector* AsTargetCollector() V8_OVERRIDE { return this; }
 
@@ -3026,7 +3030,54 @@ class AstNullVisitor BASE_EMBEDDED {
 #undef DEF_VISIT
 };
 
+// ----------------------------------------------------------------------------
+// AST rewriter
 
+class AstRewriter BASE_EMBEDDED {
+ public:
+  AstRewriter() {}
+  virtual ~AstRewriter() {}
+
+  // Stack overflow check and dynamic dispatch.
+  virtual AstNode* Visit(AstNode* node) = 0;
+
+  // Individual AST nodes.
+#define DEF_VISIT(type)                         \
+  virtual type* Visit##type(type* node) = 0;
+  AST_NODE_LIST(DEF_VISIT)
+#undef DEF_VISIT
+};
+
+#define DEFINE_AST_REWRITER_SUBCLASS_MEMBERS()                      \
+public:                                                             \
+   virtual AstNode* Visit(AstNode* node) V8_FINAL V8_OVERRIDE {     \
+   if (!CheckStackOverflow())                                       \
+     return node->Accept(this);                                     \
+   else                                                             \
+     return node;                                                   \
+  }                                                                 \
+                                                                    \
+  void SetStackOverflow() { stack_overflow_ = true; }               \
+  void ClearStackOverflow() { stack_overflow_ = false; }            \
+  bool HasStackOverflow() const { return stack_overflow_; }         \
+                                                                    \
+  bool CheckStackOverflow() {                                       \
+    if (stack_overflow_) return true;                               \
+    StackLimitCheck check(zone_->isolate());                        \
+    if (!check.HasOverflowed()) return false;                       \
+    return (stack_overflow_ = true);                                \
+  }                                                                 \
+                                                                    \
+private:                                                            \
+  void InitializeAstRewriter(Zone* zone) {                          \
+    zone_ = zone;                                                   \
+    stack_overflow_ = false;                                        \
+  }                                                                 \
+  Zone* zone() { return zone_; }                                    \
+  Isolate* isolate() { return zone_->isolate(); }                   \
+                                                                    \
+  Zone* zone_;                                                      \
+  bool stack_overflow_
 
 // ----------------------------------------------------------------------------
 // AstNode factory

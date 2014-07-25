@@ -204,7 +204,6 @@ class CompilationInfo {
   }
 
   void SetFunction(FunctionLiteral* literal) {
-    ASSERT(function_ == NULL);
     function_ = literal;
   }
   void PrepareForCompilation(Scope* scope);
