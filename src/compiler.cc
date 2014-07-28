@@ -825,9 +825,9 @@ static Handle<SharedFunctionInfo> CompileToplevel(CompilationInfo* info) {
       return Handle<SharedFunctionInfo>::null();
     }
 
+    FunctionLiteral* lit = info->function();
     EventRacerRewriter rw(info->zone(), info->ast_value_factory());
-    FunctionLiteral* lit;
-    lit = static_cast<FunctionLiteral *>(rw.Visit(info->function()));
+    lit = lit->Accept(&rw);
     info->SetFunction(lit);
 
     LiveEditFunctionTracker live_edit_tracker(isolate, lit);

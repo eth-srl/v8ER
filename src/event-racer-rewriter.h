@@ -6,58 +6,59 @@
 namespace v8 {
 namespace internal {
 
-#define TMP_AST_NODE_LIST(V)                    \
+// Only concrete AST classes
+#define INSTRUMENTED_AST_NODE_LIST(V)
+
+#define UNMODIFIED_AST_NODE_LIST(V)             \
+  V(Block)                                      \
   V(VariableDeclaration)                        \
   V(FunctionDeclaration)                        \
   V(ModuleDeclaration)                          \
   V(ImportDeclaration)                          \
   V(ExportDeclaration)                          \
-                                                \
   V(ModuleLiteral)                              \
   V(ModuleVariable)                             \
   V(ModulePath)                                 \
   V(ModuleUrl)                                  \
-                                                \
-  V(Block)                                      \
   V(ModuleStatement)                            \
-  V(ExpressionStatement)                        \
-  V(EmptyStatement)                             \
-  V(IfStatement)                                \
-  V(ContinueStatement)                          \
-  V(BreakStatement)                             \
-  V(ReturnStatement)                            \
-  V(WithStatement)                              \
-  V(SwitchStatement)                            \
   V(DoWhileStatement)                           \
   V(WhileStatement)                             \
   V(ForStatement)                               \
   V(ForInStatement)                             \
   V(ForOfStatement)                             \
+  V(ExpressionStatement)                        \
+  V(ContinueStatement)                          \
+  V(BreakStatement)                             \
+  V(ReturnStatement)                            \
+  V(WithStatement)                              \
+  V(CaseClause)                                 \
+  V(SwitchStatement)                            \
+  V(IfStatement)                                \
   V(TryCatchStatement)                          \
   V(TryFinallyStatement)                        \
   V(DebuggerStatement)                          \
-                                                \
-  V(FunctionLiteral)                            \
-  V(NativeFunctionLiteral)                      \
-  V(Conditional)                                \
-  V(VariableProxy)                              \
+  V(EmptyStatement)                             \
   V(Literal)                                    \
-  V(RegExpLiteral)                              \
   V(ObjectLiteral)                              \
+  V(RegExpLiteral)                              \
   V(ArrayLiteral)                               \
-  V(Assignment)                                 \
-  V(Yield)                                      \
-  V(Throw)                                      \
+  V(VariableProxy)                              \
   V(Property)                                   \
   V(Call)                                       \
   V(CallNew)                                    \
   V(CallRuntime)                                \
   V(UnaryOperation)                             \
-  V(CountOperation)                             \
   V(BinaryOperation)                            \
+  V(CountOperation)                             \
   V(CompareOperation)                           \
-  V(ThisFunction)                               \
-  V(CaseClause)
+  V(Conditional)                                \
+  V(Assignment)                                 \
+  V(Yield)                                      \
+  V(Throw)                                      \
+  V(FunctionLiteral)                            \
+  V(NativeFunctionLiteral)                      \
+  V(ThisFunction)
+
 
 class EventRacerRewriter : public AstRewriter {
 public:
@@ -68,11 +69,14 @@ public:
   }
 
 #define DEF_VISIT(type) \
-   virtual type* Visit##type(type *nd) V8_FINAL V8_OVERRIDE { return nd; }
-   TMP_AST_NODE_LIST(DEF_VISIT)
+  virtual type* doVisit(type *nd) V8_FINAL V8_OVERRIDE;
+  INSTRUMENTED_AST_NODE_LIST(DEF_VISIT)
 #undef DEF_VISIT
 
-  DEFINE_AST_REWRITER_SUBCLASS_MEMBERS();
+#define DEF_VISIT(type) \
+  virtual type* doVisit(type *nd) V8_FINAL V8_OVERRIDE { return nd; }
+  UNMODIFIED_AST_NODE_LIST(DEF_VISIT)
+#undef DEF_VISIT
 
 private:
   AstValueFactory *value_factory_;

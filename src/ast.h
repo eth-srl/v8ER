@@ -103,6 +103,56 @@ namespace internal {
   STATEMENT_NODE_LIST(V)                        \
   EXPRESSION_NODE_LIST(V)
 
+#define AST_CONCRETE_NODE_LIST(V)               \
+  V(Block)                                      \
+  V(VariableDeclaration)                        \
+  V(FunctionDeclaration)                        \
+  V(ModuleDeclaration)                          \
+  V(ImportDeclaration)                          \
+  V(ExportDeclaration)                          \
+  V(ModuleLiteral)                              \
+  V(ModuleVariable)                             \
+  V(ModulePath)                                 \
+  V(ModuleUrl)                                  \
+  V(ModuleStatement)                            \
+  V(DoWhileStatement)                           \
+  V(WhileStatement)                             \
+  V(ForStatement)                               \
+  V(ForInStatement)                             \
+  V(ForOfStatement)                             \
+  V(ExpressionStatement)                        \
+  V(ContinueStatement)                          \
+  V(BreakStatement)                             \
+  V(ReturnStatement)                            \
+  V(WithStatement)                              \
+  V(CaseClause)                                 \
+  V(SwitchStatement)                            \
+  V(IfStatement)                                \
+  V(TryCatchStatement)                          \
+  V(TryFinallyStatement)                        \
+  V(DebuggerStatement)                          \
+  V(EmptyStatement)                             \
+  V(Literal)                                    \
+  V(ObjectLiteral)                              \
+  V(RegExpLiteral)                              \
+  V(ArrayLiteral)                               \
+  V(VariableProxy)                              \
+  V(Property)                                   \
+  V(Call)                                       \
+  V(CallNew)                                    \
+  V(CallRuntime)                                \
+  V(UnaryOperation)                             \
+  V(BinaryOperation)                            \
+  V(CountOperation)                             \
+  V(CompareOperation)                           \
+  V(Conditional)                                \
+  V(Assignment)                                 \
+  V(Yield)                                      \
+  V(Throw)                                      \
+  V(FunctionLiteral)                            \
+  V(NativeFunctionLiteral)                      \
+  V(ThisFunction)
+
 // Forward declarations
 class AstConstructionVisitor;
 template<class> class AstNodeFactory;
@@ -142,14 +192,17 @@ typedef ZoneList<Handle<String> > ZoneStringList;
 typedef ZoneList<Handle<Object> > ZoneObjectList;
 
 
-#define DECLARE_NODE_TYPE(type)                                 \
-  virtual void Accept(AstVisitor* v) V8_OVERRIDE;                  \
-  virtual type* Accept(AstRewriter* v) V8_OVERRIDE;                \
+#define DECLARE_NODE_TYPE(type)                                       \
+  virtual void Accept(AstVisitor* v) V8_OVERRIDE;                     \
+  virtual type* Accept(AstRewriter* v) V8_FINAL V8_OVERRIDE;          \
   virtual AstNode::NodeType node_type() const V8_FINAL V8_OVERRIDE {  \
-    return AstNode::k##type;                                    \
-  }                                                             \
+    return AstNode::k##type;                                          \
+  }                                                                   \
   template<class> friend class AstNodeFactory;
 
+#define DECLARE_ABSTRACT_NODE_TYPE(type)        \
+  using AstNode::Accept;                        \
+  virtual type* Accept(AstRewriter *) = 0
 
 enum AstPropertiesFlag {
   kDontSelfOptimize,
@@ -248,6 +301,8 @@ class AstNode: public ZoneObject {
 
 class Statement : public AstNode {
  public:
+  DECLARE_ABSTRACT_NODE_TYPE(Statement);
+
   explicit Statement(Zone* zone, int position) : AstNode(position) {}
 
   bool IsEmpty() { return AsEmptyStatement() != NULL; }
@@ -304,6 +359,8 @@ class SmallMapList V8_FINAL {
 
 class Expression : public AstNode {
  public:
+  DECLARE_ABSTRACT_NODE_TYPE(Expression);
+
   enum Context {
     // Not assigned a context yet, or else will not be visited during
     // code generation.
@@ -488,6 +545,8 @@ class Block V8_FINAL : public BreakableStatement {
 
 class Declaration : public AstNode {
  public:
+  DECLARE_ABSTRACT_NODE_TYPE(Declaration);
+
   VariableProxy* proxy() const { return proxy_; }
   VariableMode mode() const { return mode_; }
   Scope* scope() const { return scope_; }
@@ -628,6 +687,8 @@ class ExportDeclaration V8_FINAL : public Declaration {
 
 class Module : public AstNode {
  public:
+  DECLARE_ABSTRACT_NODE_TYPE(Module);
+
   Interface* interface() const { return interface_; }
   Block* body() const { return body_; }
 
@@ -1248,7 +1309,7 @@ class TargetCollector V8_FINAL : public AstNode {
 
   // Virtual behaviour. TargetCollectors are never part of the AST.
   virtual void Accept(AstVisitor* v) V8_OVERRIDE { UNREACHABLE(); }
-  virtual AstNode* Accept(AstRewriter* v) V8_OVERRIDE { UNREACHABLE(); return 0; }
+  virtual TargetCollector* Accept(AstRewriter*) V8_OVERRIDE { UNREACHABLE(); return 0; }
   virtual NodeType node_type() const V8_OVERRIDE { return kInvalid; }
   virtual TargetCollector* AsTargetCollector() V8_OVERRIDE { return this; }
 
@@ -3038,46 +3099,40 @@ class AstRewriter BASE_EMBEDDED {
   AstRewriter() {}
   virtual ~AstRewriter() {}
 
-  // Stack overflow check and dynamic dispatch.
-  virtual AstNode* Visit(AstNode* node) = 0;
-
-  // Individual AST nodes.
-#define DEF_VISIT(type)                         \
-  virtual type* Visit##type(type* node) = 0;
-  AST_NODE_LIST(DEF_VISIT)
+  // Individual AST nodes, only concrete classes.
+#define DEF_VISIT(type)                                             \
+  type *Visit(type *node) {                                         \
+    if (!CheckStackOverflow())                                      \
+      return doVisit(node);                                         \
+    else                                                            \
+      return node;                                                  \
+  }                                                                 \
+  virtual type* doVisit(type* node) = 0;
+  AST_CONCRETE_NODE_LIST(DEF_VISIT)
 #undef DEF_VISIT
-};
 
-#define DEFINE_AST_REWRITER_SUBCLASS_MEMBERS()                      \
-public:                                                             \
-   virtual AstNode* Visit(AstNode* node) V8_FINAL V8_OVERRIDE {     \
-   if (!CheckStackOverflow())                                       \
-     return node->Accept(this);                                     \
-   else                                                             \
-     return node;                                                   \
-  }                                                                 \
-                                                                    \
-  void SetStackOverflow() { stack_overflow_ = true; }               \
-  void ClearStackOverflow() { stack_overflow_ = false; }            \
-  bool HasStackOverflow() const { return stack_overflow_; }         \
-                                                                    \
-  bool CheckStackOverflow() {                                       \
-    if (stack_overflow_) return true;                               \
-    StackLimitCheck check(zone_->isolate());                        \
-    if (!check.HasOverflowed()) return false;                       \
-    return (stack_overflow_ = true);                                \
-  }                                                                 \
-                                                                    \
-private:                                                            \
-  void InitializeAstRewriter(Zone* zone) {                          \
-    zone_ = zone;                                                   \
-    stack_overflow_ = false;                                        \
-  }                                                                 \
-  Zone* zone() { return zone_; }                                    \
-  Isolate* isolate() { return zone_->isolate(); }                   \
-                                                                    \
-  Zone* zone_;                                                      \
-  bool stack_overflow_
+  void SetStackOverflow() { stack_overflow_ = true; }
+  void ClearStackOverflow() { stack_overflow_ = false; }
+  bool HasStackOverflow() const { return stack_overflow_; }
+
+  bool CheckStackOverflow() {
+    if (stack_overflow_) return true;
+    StackLimitCheck check(zone_->isolate());
+    if (!check.HasOverflowed()) return false;
+    return (stack_overflow_ = true);
+  }
+
+protected:
+  void InitializeAstRewriter(Zone* zone) {
+    zone_ = zone;
+    stack_overflow_ = false;
+  }
+  Zone* zone() { return zone_; }
+  Isolate* isolate() { return zone_->isolate(); }
+
+  Zone* zone_;
+  bool stack_overflow_;
+};
 
 // ----------------------------------------------------------------------------
 // AstNode factory

@@ -29,10 +29,9 @@ AST_NODE_LIST(DECL_ACCEPT)
 #undef DECL_ACCEPT
 
 #define DECL_ACCEPT(type)                                       \
-  type* type::Accept(AstRewriter* w) { return w->Visit##type(this); }
-AST_NODE_LIST(DECL_ACCEPT)
+  type* type::Accept(AstRewriter* w) { return w->Visit(this); }
+AST_CONCRETE_NODE_LIST(DECL_ACCEPT)
 #undef DECL_ACCEPT
-
 
 // ----------------------------------------------------------------------------
 // Implementation of other node functionality.
