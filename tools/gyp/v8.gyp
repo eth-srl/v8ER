@@ -411,6 +411,8 @@
         '../../src/elements-kind.h',
         '../../src/elements.cc',
         '../../src/elements.h',
+        '../../src/event-racer-rewriter.cc',
+        '../../src/event-racer-rewriter.h',
         '../../src/execution.cc',
         '../../src/execution.h',
         '../../src/extensions/externalize-string-extension.cc',

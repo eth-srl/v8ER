@@ -7,26 +7,14 @@ namespace v8 {
 namespace internal {
 
 // Only concrete AST classes
-#define INSTRUMENTED_AST_NODE_LIST(V)
-
-#define UNMODIFIED_AST_NODE_LIST(V)             \
+#define INSTRUMENTED_AST_NODE_LIST(V)           \
   V(Block)                                      \
-  V(VariableDeclaration)                        \
-  V(FunctionDeclaration)                        \
-  V(ModuleDeclaration)                          \
-  V(ImportDeclaration)                          \
-  V(ExportDeclaration)                          \
-  V(ModuleLiteral)                              \
-  V(ModuleVariable)                             \
-  V(ModulePath)                                 \
-  V(ModuleUrl)                                  \
-  V(ModuleStatement)                            \
+  V(ExpressionStatement)                        \
   V(DoWhileStatement)                           \
   V(WhileStatement)                             \
   V(ForStatement)                               \
   V(ForInStatement)                             \
   V(ForOfStatement)                             \
-  V(ExpressionStatement)                        \
   V(ContinueStatement)                          \
   V(BreakStatement)                             \
   V(ReturnStatement)                            \
@@ -36,11 +24,7 @@ namespace internal {
   V(IfStatement)                                \
   V(TryCatchStatement)                          \
   V(TryFinallyStatement)                        \
-  V(DebuggerStatement)                          \
-  V(EmptyStatement)                             \
-  V(Literal)                                    \
   V(ObjectLiteral)                              \
-  V(RegExpLiteral)                              \
   V(ArrayLiteral)                               \
   V(VariableProxy)                              \
   V(Property)                                   \
@@ -55,14 +39,32 @@ namespace internal {
   V(Assignment)                                 \
   V(Yield)                                      \
   V(Throw)                                      \
-  V(FunctionLiteral)                            \
+  V(FunctionLiteral)
+
+#define UNMODIFIED_AST_NODE_LIST(V)             \
+  V(VariableDeclaration)                        \
+  V(FunctionDeclaration)                        \
+  V(ModuleDeclaration)                          \
+  V(ImportDeclaration)                          \
+  V(ExportDeclaration)                          \
+  V(ModuleLiteral)                              \
+  V(ModuleVariable)                             \
+  V(ModulePath)                                 \
+  V(ModuleUrl)                                  \
+  V(ModuleStatement)                            \
+  V(DebuggerStatement)                          \
+  V(EmptyStatement)                             \
+  V(Literal)                                    \
+  V(RegExpLiteral)                              \
   V(NativeFunctionLiteral)                      \
   V(ThisFunction)
 
+struct EventRacerRewriterTag {};
 
-class EventRacerRewriter : public AstRewriter {
+template<>
+class AstRewriterImpl<EventRacerRewriterTag> : public AstRewriter {
 public:
-  EventRacerRewriter(Zone *z, AstValueFactory *f)
+  AstRewriterImpl(Zone *z, AstValueFactory *f)
     : value_factory_(f),
       factory_(z, f) {
     InitializeAstRewriter(z);
@@ -82,6 +84,8 @@ private:
   AstValueFactory *value_factory_;
   AstNodeFactory<AstConstructionVisitor> factory_;
 };
+
+typedef AstRewriterImpl<EventRacerRewriterTag> EventRacerRewriter;
 
 } }  // namespace v8::internal
 
