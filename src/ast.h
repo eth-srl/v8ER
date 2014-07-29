@@ -198,11 +198,13 @@ typedef ZoneList<Handle<Object> > ZoneObjectList;
   virtual AstNode::NodeType node_type() const V8_FINAL V8_OVERRIDE {  \
     return AstNode::k##type;                                          \
   }                                                                   \
-  template<class> friend class AstNodeFactory;
+  template<class> friend class AstNodeFactory;                        \
+  template<class> friend class AstRewriterImpl;
 
 #define DECLARE_ABSTRACT_NODE_TYPE(type)        \
   using AstNode::Accept;                        \
-  virtual type* Accept(AstRewriter *) = 0
+  virtual type* Accept(AstRewriter *) = 0;      \
+  template<class> friend class AstRewriterImpl
 
 enum AstPropertiesFlag {
   kDontSelfOptimize,
@@ -454,6 +456,8 @@ class Expression : public AstNode {
 
 class BreakableStatement : public Statement {
  public:
+  DECLARE_ABSTRACT_NODE_TYPE(BreakableStatement);
+
   enum BreakableType {
     TARGET_FOR_ANONYMOUS,
     TARGET_FOR_NAMED_ONLY
@@ -787,6 +791,8 @@ class ModuleStatement V8_FINAL : public Statement {
 
 class IterationStatement : public BreakableStatement {
  public:
+  DECLARE_ABSTRACT_NODE_TYPE(IterationStatement);
+
   // Type testing & conversion.
   virtual IterationStatement* AsIterationStatement() V8_FINAL V8_OVERRIDE {
     return this;
@@ -951,6 +957,8 @@ class ForStatement V8_FINAL : public IterationStatement {
 
 class ForEachStatement : public IterationStatement {
  public:
+  DECLARE_ABSTRACT_NODE_TYPE(ForEachStatement);
+
   enum VisitMode {
     ENUMERATE,   // for (each in subject) body;
     ITERATE      // for (each of subject) body;
@@ -1322,6 +1330,8 @@ class TargetCollector V8_FINAL : public AstNode {
 
 class TryStatement : public Statement {
  public:
+  DECLARE_ABSTRACT_NODE_TYPE(TryStatement);
+
   void set_escaping_targets(ZoneList<Label*>* targets) {
     escaping_targets_ = targets;
   }
@@ -1549,6 +1559,7 @@ class ObjectLiteralProperty V8_FINAL : public ZoneObject {
 
  protected:
   template<class> friend class AstNodeFactory;
+  template<class> friend class AstRewriterImpl;
 
   ObjectLiteralProperty(Zone* zone, bool is_getter, FunctionLiteral* value);
   void set_key(Literal* key) { key_ = key; }
@@ -3133,6 +3144,8 @@ protected:
   Zone* zone_;
   bool stack_overflow_;
 };
+
+template<class> class AstRewriterImpl {};
 
 // ----------------------------------------------------------------------------
 // AstNode factory
