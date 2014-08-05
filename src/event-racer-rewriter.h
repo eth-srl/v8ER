@@ -15,8 +15,6 @@ namespace internal {
   V(ForStatement)                               \
   V(ForInStatement)                             \
   V(ForOfStatement)                             \
-  V(ContinueStatement)                          \
-  V(BreakStatement)                             \
   V(ReturnStatement)                            \
   V(WithStatement)                              \
   V(CaseClause)                                 \
@@ -51,6 +49,8 @@ namespace internal {
   V(ModuleUrl)                                  \
   V(ModuleStatement)                            \
   V(DebuggerStatement)                          \
+  V(ContinueStatement)                          \
+  V(BreakStatement)                             \
   V(EmptyStatement)                             \
   V(Literal)                                    \
   V(RegExpLiteral)                              \

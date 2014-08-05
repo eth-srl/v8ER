@@ -4,124 +4,121 @@ namespace v8 {
 
 namespace internal {
 
+template<typename T> void rewrite(AstRewriter *w, T *&node) {
+  if (node)
+    node = node->Accept(w);
+};
+
+template<typename T> void rewrite(AstRewriter *w, ZoneList<T *> *lst) {
+  if (lst) {
+    const int n = lst->length();
+    for (int i = 0; i < n; ++i)
+      lst->at(i) = lst->at(i)->Accept(w);
+  }
+}
+
 Block* EventRacerRewriter::doVisit(Block *blk) {
-  ZoneList<Statement *> &stmts = *blk->statements();
-  for(int i = 0; i < stmts.length(); ++i)
-    stmts[i] = stmts[i]->Accept(this);
+  rewrite(this, blk->statements());
   return blk;
 }
 
 ExpressionStatement *EventRacerRewriter::doVisit(ExpressionStatement *st) {
-  st->expression_ = st->expression_->Accept(this);
+  rewrite(this, st->expression_);
   return st;
 }
 
 DoWhileStatement *EventRacerRewriter::doVisit(DoWhileStatement *st) {
-  st->cond_ = st->cond_->Accept(this);
-  st->body_ = st->body_->Accept(this);
+  rewrite(this, st->cond_);
+  rewrite(this, st->body_);
   return st;
 }
 
 WhileStatement *EventRacerRewriter::doVisit(WhileStatement *st) {
-  st->cond_ = st->cond_->Accept(this);
-  st->body_ = st->body_->Accept(this);
+  rewrite(this, st->cond_);
+  rewrite(this, st->body_);
   return st;
 }
 
 ForStatement *EventRacerRewriter::doVisit(ForStatement *st) {
-  st->init_ = st->init_->Accept(this);
-  st->cond_ = st->cond_->Accept(this);
-  st->next_ = st->next_->Accept(this);
-  st->body_ = st->body_->Accept(this);
+  rewrite(this, st->init_);
+  rewrite(this, st->cond_);
+  rewrite(this, st->next_);
+  rewrite(this, st->body_);
   return st;
 }
 
 ForInStatement *EventRacerRewriter::doVisit(ForInStatement *st) {
-  st->each_ = st->each_->Accept(this);
-  st->subject_ = st->subject_->Accept(this);
-  st->body_ = st->body_->Accept(this);
+  // TODO rewrite(this, st->each_);
+  rewrite(this, st->subject_);
+  rewrite(this, st->body_);
   return st;
 }
 
 ForOfStatement *EventRacerRewriter::doVisit(ForOfStatement *st) {
-  st->each_ = st->each_->Accept(this);
-  st->subject_ = st->subject_->Accept(this);
-  st->body_ = st->body_->Accept(this);
-  st->assign_iterable_ = st->assign_iterable_->Accept(this);
-  st->assign_iterator_ = st->assign_iterator_->Accept(this);
-  st->next_result_ = st->next_result_->Accept(this);
-  st->result_done_ = st->result_done_->Accept(this);
-  st->assign_each_ = st->assign_each_->Accept(this);
-  return st;
-}
-
-ContinueStatement *EventRacerRewriter::doVisit(ContinueStatement *st) {
-  st->target_ = st->target_->Accept(this);
-  return st;
-}
-
-BreakStatement *EventRacerRewriter::doVisit(BreakStatement *st) {
-  st->target_ = st->target_->Accept(this);
+  // TODO rewrite(this, st->each_);
+  rewrite(this, st->subject_);
+  rewrite(this, st->body_);
+  rewrite(this, st->assign_iterable_);
+  rewrite(this, st->assign_iterator_);
+  rewrite(this, st->next_result_);
+  rewrite(this, st->result_done_);
+  rewrite(this, st->assign_each_);
   return st;
 }
 
 ReturnStatement *EventRacerRewriter::doVisit(ReturnStatement *st) {
-  st->expression_ = st->expression_->Accept(this);
+  rewrite(this, st->expression_);
   return st;
 }
 
 WithStatement *EventRacerRewriter::doVisit(WithStatement *st) {
-  st->expression_ = st->expression_->Accept(this);
-  st->statement_ = st->statement_->Accept(this);
+  rewrite(this, st->expression_);
+  rewrite(this, st->statement_);
   return st;
 }
 
 CaseClause *EventRacerRewriter::doVisit(CaseClause *ex) {
-  ex->label_ = ex->label_->Accept(this);
-  ZoneList<Statement *> &ss = *ex->statements();
-  for (int i = 0; i < ss.length(); ++i)
-    ss[i] = ss[i]->Accept(this);
+  rewrite(this, ex->label_);
+  rewrite(this, ex->statements());
   return ex;
 }
 
 SwitchStatement *EventRacerRewriter::doVisit(SwitchStatement *st) {
-  st->tag_ = st->tag_->Accept(this);
-  ZoneList<CaseClause *> &cs = *st->cases();
-  for (int i = 0; i < cs.length(); ++i)
-    cs[i] = cs[i]->Accept(this);
+  rewrite(this, st->tag_);
+  rewrite(this, st->cases());
   return st;
 }
 
 IfStatement *EventRacerRewriter::doVisit(IfStatement *st) {
-  st->condition_ = st->condition_->Accept(this);
-  st->then_statement_ = st->then_statement_->Accept(this);
-  st->else_statement_ = st->else_statement_->Accept(this);
+  rewrite(this, st->condition_);
+  rewrite(this, st->then_statement_);
+  rewrite(this, st->else_statement_);
   return st;
 }
 
 TryCatchStatement *EventRacerRewriter::doVisit(TryCatchStatement *st) {
-  st->try_block_ = st->try_block_->Accept(this);
-  st->catch_block_ = st->catch_block_->Accept(this);
+  rewrite(this, st->try_block_);
+  rewrite(this, st->catch_block_);
   return st;
 }
 
 TryFinallyStatement *EventRacerRewriter::doVisit(TryFinallyStatement *st) {
-  st->try_block_ = st->try_block_->Accept(this);
-  st->finally_block_ = st->finally_block_->Accept(this);
+  rewrite(this, st->try_block_);
+  rewrite(this, st->finally_block_);
   return st;
 }
 
 ObjectLiteral* EventRacerRewriter::doVisit(ObjectLiteral *lit) {
-  ZoneList<ObjectLiteral::Property *> &ps = *lit->properties();
-  for (int i = 0; i < ps.length(); ++i)
-    ps[i]->value_ = ps[i]->value_->Accept(this);
+  if (lit->properties()) {
+    ZoneList<ObjectLiteral::Property *> &ps = *lit->properties();
+    for (int i = 0; i < ps.length(); ++i)
+      rewrite(this, ps[i]->value_);
+  }
   return lit;
 }
 
 ArrayLiteral* EventRacerRewriter::doVisit(ArrayLiteral *lit) {
-  ZoneList<Expression *> &vs = *lit->values();
-  for (int i = 0; i < vs.length(); ++i)
-    vs[i] = vs[i]->Accept(this);
+  rewrite(this, lit->values());
   return lit;
 }
 
@@ -132,84 +129,76 @@ Expression* EventRacerRewriter::doVisit(VariableProxy *var) {
 
 Expression* EventRacerRewriter::doVisit(Property *p) {
   // TODO
-  p->obj_ = p->obj_->Accept(this);
-  p->key_ = p->key_->Accept(this);
+  rewrite(this, p->obj_);
+  rewrite(this, p->key_);
   return p;
 }
 
 Call* EventRacerRewriter::doVisit(Call *c) {
-  c->expression_ = c->expression_->Accept(this);
-  ZoneList<Expression *> &as = *c->arguments();
-  for (int i = 0; i < as.length(); ++i)
-    as[i] = as[i]->Accept(this);
+  rewrite(this, c->expression_);
+  rewrite(this, c->arguments());
   return c;
 }
 
 CallNew* EventRacerRewriter::doVisit(CallNew *c) {
-  c->expression_ = c->expression_->Accept(this);
-  ZoneList<Expression *> &as = *c->arguments();
-  for (int i = 0; i < as.length(); ++i)
-    as[i] = as[i]->Accept(this);
+  rewrite(this, c->expression_);
+  rewrite(this, c->arguments());
   return c;
 }
 
 CallRuntime* EventRacerRewriter::doVisit(CallRuntime *c) {
-  ZoneList<Expression *> &as = *c->arguments();
-  for (int i = 0; i < as.length(); ++i)
-    as[i] = as[i]->Accept(this);
+  rewrite(this, c->arguments());
   return c;
 }
 
 UnaryOperation* EventRacerRewriter::doVisit(UnaryOperation *op) {
-  op->expression_ = op->expression_->Accept(this);
+  rewrite(this, op->expression_);
   return op;
 }
 
 BinaryOperation* EventRacerRewriter::doVisit(BinaryOperation *op) {
-  op->left_ = op->left_->Accept(this);
-  op->right_ = op->right_->Accept(this);
+  rewrite(this, op->left_);
+  rewrite(this, op->right_);
   return op;
 }
 
 CountOperation* EventRacerRewriter::doVisit(CountOperation *op) {
-  op->expression_ = op->expression_->Accept(this);
+  // TODO: rewrite(this, op->expression_);
   return op;
 }
 
 CompareOperation* EventRacerRewriter::doVisit(CompareOperation *op) {
-  op->left_ = op->left_->Accept(this);
-  op->right_ = op->right_->Accept(this);
+  rewrite(this, op->left_);
+  rewrite(this, op->right_);
   return op;
 }
 
 Conditional* EventRacerRewriter::doVisit(Conditional *op) {
-  op->condition_ = op->condition_->Accept(this);
-  op->then_expression_ = op->then_expression_->Accept(this);
-  op->else_expression_ = op->else_expression_->Accept(this);
+  rewrite(this, op->condition_);
+  rewrite(this, op->then_expression_);
+  rewrite(this, op->else_expression_);
   return op;
 }
 
 Assignment* EventRacerRewriter::doVisit(Assignment *op) {
-  op->target_ = op->target_->Accept(this);
-  op->value_ = op->value_->Accept(this);
+  // TODO:  rewrite(this, op->target_);
+  rewrite(this, op->value_);
   return op;
 }
 
 Yield* EventRacerRewriter::doVisit(Yield *op) {
   if (op->yield_kind() == Yield::SUSPEND || op->yield_kind() == Yield::FINAL)
-    op->expression_ = op->expression_->Accept(this);
+    rewrite(this, op->expression_);
   return op;
 }
 
 Throw* EventRacerRewriter::doVisit(Throw *op) {
-  op->exception_ = op->exception_->Accept(this);
+  rewrite(this, op->exception_);
   return op;
 }
 
 FunctionLiteral* EventRacerRewriter::doVisit(FunctionLiteral *lit) {
-  ZoneList<Statement *> &body = *lit->body();
-  for (int i = 0; i < body.length(); ++i)
-    body[i] = body[i]->Accept(this);
+  rewrite(this, lit->body());
   return lit;
 }
 
