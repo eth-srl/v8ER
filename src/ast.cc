@@ -30,8 +30,11 @@ AST_NODE_LIST(DECL_ACCEPT)
 
 #define DECL_ACCEPT(type)                                       \
   type* type::Accept(AstRewriter* w) { return w->Visit(this); }
-AST_CONCRETE_NODE_LIST(DECL_ACCEPT)
+AST_FIXED_REWRITE_NODE_LIST(DECL_ACCEPT)
 #undef DECL_ACCEPT
+
+Expression* VariableProxy::Accept(AstRewriter* w) { return w->Visit(this); }
+Expression* Property::Accept(AstRewriter* w) { return w->Visit(this); }
 
 // ----------------------------------------------------------------------------
 // Implementation of other node functionality.

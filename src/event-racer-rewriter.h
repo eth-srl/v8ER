@@ -26,8 +26,6 @@ namespace internal {
   V(TryFinallyStatement)                        \
   V(ObjectLiteral)                              \
   V(ArrayLiteral)                               \
-  V(VariableProxy)                              \
-  V(Property)                                   \
   V(Call)                                       \
   V(CallNew)                                    \
   V(CallRuntime)                                \
@@ -79,6 +77,9 @@ public:
   virtual type* doVisit(type *nd) V8_FINAL V8_OVERRIDE { return nd; }
   UNMODIFIED_AST_NODE_LIST(DEF_VISIT)
 #undef DEF_VISIT
+
+  virtual Expression* doVisit(VariableProxy *) V8_FINAL V8_OVERRIDE;
+  virtual Expression* doVisit(Property *) V8_FINAL V8_OVERRIDE;
 
 private:
   AstValueFactory *value_factory_;

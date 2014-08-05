@@ -103,7 +103,11 @@ namespace internal {
   STATEMENT_NODE_LIST(V)                        \
   EXPRESSION_NODE_LIST(V)
 
-#define AST_CONCRETE_NODE_LIST(V)               \
+// Nodes, which are rewritten to the same node type, i.e. almost all
+// concrete AST classes, except some Expression subclasses like
+// VariableProxy, Property and Assignment, which are rewritten to a
+// general Expression.
+#define AST_FIXED_REWRITE_NODE_LIST(V)          \
   V(Block)                                      \
   V(VariableDeclaration)                        \
   V(FunctionDeclaration)                        \
@@ -136,8 +140,6 @@ namespace internal {
   V(ObjectLiteral)                              \
   V(RegExpLiteral)                              \
   V(ArrayLiteral)                               \
-  V(VariableProxy)                              \
-  V(Property)                                   \
   V(Call)                                       \
   V(CallNew)                                    \
   V(CallRuntime)                                \
@@ -194,17 +196,20 @@ typedef ZoneList<Handle<Object> > ZoneObjectList;
 
 #define DECLARE_NODE_TYPE(type)                                       \
   virtual void Accept(AstVisitor* v) V8_OVERRIDE;                     \
-  virtual type* Accept(AstRewriter* v) V8_FINAL V8_OVERRIDE;          \
   virtual AstNode::NodeType node_type() const V8_FINAL V8_OVERRIDE {  \
     return AstNode::k##type;                                          \
   }                                                                   \
-  template<class> friend class AstNodeFactory;                        \
+  template<class> friend class AstNodeFactory;
+
+#define DECLARE_FIXED_REWRITE_NODE(type)                             \
+  using AstNode::Accept;                                             \
+  virtual type* Accept(AstRewriter *) V8_FINAL V8_OVERRIDE;          \
   template<class> friend class AstRewriterImpl;
 
-#define DECLARE_ABSTRACT_NODE_TYPE(type)        \
+#define DECLARE_POLYMORPHIC_REWRITE_NODE(type)  \
   using AstNode::Accept;                        \
   virtual type* Accept(AstRewriter *) = 0;      \
-  template<class> friend class AstRewriterImpl
+  template<class> friend class AstRewriterImpl;
 
 enum AstPropertiesFlag {
   kDontSelfOptimize,
@@ -303,7 +308,7 @@ class AstNode: public ZoneObject {
 
 class Statement : public AstNode {
  public:
-  DECLARE_ABSTRACT_NODE_TYPE(Statement);
+  DECLARE_POLYMORPHIC_REWRITE_NODE(Statement)
 
   explicit Statement(Zone* zone, int position) : AstNode(position) {}
 
@@ -361,7 +366,7 @@ class SmallMapList V8_FINAL {
 
 class Expression : public AstNode {
  public:
-  DECLARE_ABSTRACT_NODE_TYPE(Expression);
+  DECLARE_POLYMORPHIC_REWRITE_NODE(Expression)
 
   enum Context {
     // Not assigned a context yet, or else will not be visited during
@@ -456,7 +461,7 @@ class Expression : public AstNode {
 
 class BreakableStatement : public Statement {
  public:
-  DECLARE_ABSTRACT_NODE_TYPE(BreakableStatement);
+  DECLARE_POLYMORPHIC_REWRITE_NODE(BreakableStatement)
 
   enum BreakableType {
     TARGET_FOR_ANONYMOUS,
@@ -508,6 +513,7 @@ class BreakableStatement : public Statement {
 class Block V8_FINAL : public BreakableStatement {
  public:
   DECLARE_NODE_TYPE(Block)
+  DECLARE_FIXED_REWRITE_NODE(Block)
 
   void AddStatement(Statement* statement, Zone* zone) {
     statements_.Add(statement, zone);
@@ -549,7 +555,7 @@ class Block V8_FINAL : public BreakableStatement {
 
 class Declaration : public AstNode {
  public:
-  DECLARE_ABSTRACT_NODE_TYPE(Declaration);
+  DECLARE_POLYMORPHIC_REWRITE_NODE(Declaration)
 
   VariableProxy* proxy() const { return proxy_; }
   VariableMode mode() const { return mode_; }
@@ -582,6 +588,7 @@ class Declaration : public AstNode {
 class VariableDeclaration V8_FINAL : public Declaration {
  public:
   DECLARE_NODE_TYPE(VariableDeclaration)
+  DECLARE_FIXED_REWRITE_NODE(VariableDeclaration)
 
   virtual InitializationFlag initialization() const V8_OVERRIDE {
     return mode() == VAR ? kCreatedInitialized : kNeedsInitialization;
@@ -601,6 +608,7 @@ class VariableDeclaration V8_FINAL : public Declaration {
 class FunctionDeclaration V8_FINAL : public Declaration {
  public:
   DECLARE_NODE_TYPE(FunctionDeclaration)
+  DECLARE_FIXED_REWRITE_NODE(FunctionDeclaration)
 
   FunctionLiteral* fun() const { return fun_; }
   virtual InitializationFlag initialization() const V8_OVERRIDE {
@@ -630,6 +638,7 @@ class FunctionDeclaration V8_FINAL : public Declaration {
 class ModuleDeclaration V8_FINAL : public Declaration {
  public:
   DECLARE_NODE_TYPE(ModuleDeclaration)
+  DECLARE_FIXED_REWRITE_NODE(ModuleDeclaration)
 
   Module* module() const { return module_; }
   virtual InitializationFlag initialization() const V8_OVERRIDE {
@@ -654,6 +663,7 @@ class ModuleDeclaration V8_FINAL : public Declaration {
 class ImportDeclaration V8_FINAL : public Declaration {
  public:
   DECLARE_NODE_TYPE(ImportDeclaration)
+  DECLARE_FIXED_REWRITE_NODE(ImportDeclaration)
 
   Module* module() const { return module_; }
   virtual InitializationFlag initialization() const V8_OVERRIDE {
@@ -678,6 +688,7 @@ class ImportDeclaration V8_FINAL : public Declaration {
 class ExportDeclaration V8_FINAL : public Declaration {
  public:
   DECLARE_NODE_TYPE(ExportDeclaration)
+  DECLARE_FIXED_REWRITE_NODE(ExportDeclaration)
 
   virtual InitializationFlag initialization() const V8_OVERRIDE {
     return kCreatedInitialized;
@@ -691,7 +702,7 @@ class ExportDeclaration V8_FINAL : public Declaration {
 
 class Module : public AstNode {
  public:
-  DECLARE_ABSTRACT_NODE_TYPE(Module);
+  DECLARE_POLYMORPHIC_REWRITE_NODE(Module)
 
   Interface* interface() const { return interface_; }
   Block* body() const { return body_; }
@@ -715,6 +726,7 @@ class Module : public AstNode {
 class ModuleLiteral V8_FINAL : public Module {
  public:
   DECLARE_NODE_TYPE(ModuleLiteral)
+  DECLARE_FIXED_REWRITE_NODE(ModuleLiteral)
 
  protected:
   ModuleLiteral(Zone* zone, Block* body, Interface* interface, int pos)
@@ -725,6 +737,7 @@ class ModuleLiteral V8_FINAL : public Module {
 class ModuleVariable V8_FINAL : public Module {
  public:
   DECLARE_NODE_TYPE(ModuleVariable)
+  DECLARE_FIXED_REWRITE_NODE(ModuleVariable)
 
   VariableProxy* proxy() const { return proxy_; }
 
@@ -739,6 +752,7 @@ class ModuleVariable V8_FINAL : public Module {
 class ModulePath V8_FINAL : public Module {
  public:
   DECLARE_NODE_TYPE(ModulePath)
+  DECLARE_FIXED_REWRITE_NODE(ModulePath)
 
   Module* module() const { return module_; }
   Handle<String> name() const { return name_->string(); }
@@ -756,6 +770,7 @@ class ModulePath V8_FINAL : public Module {
 class ModuleUrl V8_FINAL : public Module {
  public:
   DECLARE_NODE_TYPE(ModuleUrl)
+  DECLARE_FIXED_REWRITE_NODE(ModuleUrl)
 
   Handle<String> url() const { return url_; }
 
@@ -772,6 +787,7 @@ class ModuleUrl V8_FINAL : public Module {
 class ModuleStatement V8_FINAL : public Statement {
  public:
   DECLARE_NODE_TYPE(ModuleStatement)
+  DECLARE_FIXED_REWRITE_NODE(ModuleStatement)
 
   VariableProxy* proxy() const { return proxy_; }
   Block* body() const { return body_; }
@@ -791,7 +807,7 @@ class ModuleStatement V8_FINAL : public Statement {
 
 class IterationStatement : public BreakableStatement {
  public:
-  DECLARE_ABSTRACT_NODE_TYPE(IterationStatement);
+  DECLARE_POLYMORPHIC_REWRITE_NODE(IterationStatement)
 
   // Type testing & conversion.
   virtual IterationStatement* AsIterationStatement() V8_FINAL V8_OVERRIDE {
@@ -829,6 +845,7 @@ class IterationStatement : public BreakableStatement {
 class DoWhileStatement V8_FINAL : public IterationStatement {
  public:
   DECLARE_NODE_TYPE(DoWhileStatement)
+  DECLARE_FIXED_REWRITE_NODE(DoWhileStatement)
 
   void Initialize(Expression* cond, Statement* body) {
     IterationStatement::Initialize(body);
@@ -860,6 +877,7 @@ class DoWhileStatement V8_FINAL : public IterationStatement {
 class WhileStatement V8_FINAL : public IterationStatement {
  public:
   DECLARE_NODE_TYPE(WhileStatement)
+  DECLARE_FIXED_REWRITE_NODE(WhileStatement)
 
   void Initialize(Expression* cond, Statement* body) {
     IterationStatement::Initialize(body);
@@ -899,6 +917,7 @@ class WhileStatement V8_FINAL : public IterationStatement {
 class ForStatement V8_FINAL : public IterationStatement {
  public:
   DECLARE_NODE_TYPE(ForStatement)
+  DECLARE_FIXED_REWRITE_NODE(ForStatement)
 
   void Initialize(Statement* init,
                   Expression* cond,
@@ -957,7 +976,7 @@ class ForStatement V8_FINAL : public IterationStatement {
 
 class ForEachStatement : public IterationStatement {
  public:
-  DECLARE_ABSTRACT_NODE_TYPE(ForEachStatement);
+  DECLARE_POLYMORPHIC_REWRITE_NODE(ForEachStatement)
 
   enum VisitMode {
     ENUMERATE,   // for (each in subject) body;
@@ -987,6 +1006,7 @@ class ForInStatement V8_FINAL : public ForEachStatement,
     public FeedbackSlotInterface {
  public:
   DECLARE_NODE_TYPE(ForInStatement)
+  DECLARE_FIXED_REWRITE_NODE(ForInStatement)
 
   Expression* enumerable() const {
     return subject();
@@ -1029,6 +1049,7 @@ class ForInStatement V8_FINAL : public ForEachStatement,
 class ForOfStatement V8_FINAL : public ForEachStatement {
  public:
   DECLARE_NODE_TYPE(ForOfStatement)
+  DECLARE_FIXED_REWRITE_NODE(ForOfStatement)
 
   void Initialize(Expression* each,
                   Expression* subject,
@@ -1102,6 +1123,7 @@ class ForOfStatement V8_FINAL : public ForEachStatement {
 class ExpressionStatement V8_FINAL : public Statement {
  public:
   DECLARE_NODE_TYPE(ExpressionStatement)
+  DECLARE_FIXED_REWRITE_NODE(ExpressionStatement)
 
   void set_expression(Expression* e) { expression_ = e; }
   Expression* expression() const { return expression_; }
@@ -1128,6 +1150,7 @@ class JumpStatement : public Statement {
 class ContinueStatement V8_FINAL : public JumpStatement {
  public:
   DECLARE_NODE_TYPE(ContinueStatement)
+  DECLARE_FIXED_REWRITE_NODE(ContinueStatement)
 
   IterationStatement* target() const { return target_; }
 
@@ -1143,6 +1166,7 @@ class ContinueStatement V8_FINAL : public JumpStatement {
 class BreakStatement V8_FINAL : public JumpStatement {
  public:
   DECLARE_NODE_TYPE(BreakStatement)
+  DECLARE_FIXED_REWRITE_NODE(BreakStatement)
 
   BreakableStatement* target() const { return target_; }
 
@@ -1158,6 +1182,7 @@ class BreakStatement V8_FINAL : public JumpStatement {
 class ReturnStatement V8_FINAL : public JumpStatement {
  public:
   DECLARE_NODE_TYPE(ReturnStatement)
+  DECLARE_FIXED_REWRITE_NODE(ReturnStatement)
 
   Expression* expression() const { return expression_; }
 
@@ -1173,6 +1198,7 @@ class ReturnStatement V8_FINAL : public JumpStatement {
 class WithStatement V8_FINAL : public Statement {
  public:
   DECLARE_NODE_TYPE(WithStatement)
+  DECLARE_FIXED_REWRITE_NODE(WithStatement)
 
   Scope* scope() { return scope_; }
   Expression* expression() const { return expression_; }
@@ -1197,6 +1223,7 @@ class WithStatement V8_FINAL : public Statement {
 class CaseClause V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(CaseClause)
+  DECLARE_FIXED_REWRITE_NODE(CaseClause)
 
   bool is_default() const { return label_ == NULL; }
   Expression* label() const {
@@ -1232,6 +1259,7 @@ class CaseClause V8_FINAL : public Expression {
 class SwitchStatement V8_FINAL : public BreakableStatement {
  public:
   DECLARE_NODE_TYPE(SwitchStatement)
+  DECLARE_FIXED_REWRITE_NODE(SwitchStatement)
 
   void Initialize(Expression* tag, ZoneList<CaseClause*>* cases) {
     tag_ = tag;
@@ -1261,6 +1289,7 @@ class SwitchStatement V8_FINAL : public BreakableStatement {
 class IfStatement V8_FINAL : public Statement {
  public:
   DECLARE_NODE_TYPE(IfStatement)
+  DECLARE_FIXED_REWRITE_NODE(IfStatement)
 
   bool HasThenStatement() const { return !then_statement()->IsEmpty(); }
   bool HasElseStatement() const { return !else_statement()->IsEmpty(); }
@@ -1330,7 +1359,7 @@ class TargetCollector V8_FINAL : public AstNode {
 
 class TryStatement : public Statement {
  public:
-  DECLARE_ABSTRACT_NODE_TYPE(TryStatement);
+  DECLARE_POLYMORPHIC_REWRITE_NODE(TryStatement)
 
   void set_escaping_targets(ZoneList<Label*>* targets) {
     escaping_targets_ = targets;
@@ -1359,6 +1388,7 @@ class TryStatement : public Statement {
 class TryCatchStatement V8_FINAL : public TryStatement {
  public:
   DECLARE_NODE_TYPE(TryCatchStatement)
+  DECLARE_FIXED_REWRITE_NODE(TryCatchStatement)
 
   Scope* scope() { return scope_; }
   Variable* variable() { return variable_; }
@@ -1388,6 +1418,7 @@ class TryCatchStatement V8_FINAL : public TryStatement {
 class TryFinallyStatement V8_FINAL : public TryStatement {
  public:
   DECLARE_NODE_TYPE(TryFinallyStatement)
+  DECLARE_FIXED_REWRITE_NODE(TryFinallyStatement)
 
   Block* finally_block() const { return finally_block_; }
 
@@ -1405,6 +1436,7 @@ class TryFinallyStatement V8_FINAL : public TryStatement {
 class DebuggerStatement V8_FINAL : public Statement {
  public:
   DECLARE_NODE_TYPE(DebuggerStatement)
+  DECLARE_FIXED_REWRITE_NODE(DebuggerStatement)
 
  protected:
   explicit DebuggerStatement(Zone* zone, int pos): Statement(zone, pos) {}
@@ -1414,6 +1446,7 @@ class DebuggerStatement V8_FINAL : public Statement {
 class EmptyStatement V8_FINAL : public Statement {
  public:
   DECLARE_NODE_TYPE(EmptyStatement)
+  DECLARE_FIXED_REWRITE_NODE(EmptyStatement)
 
  protected:
   explicit EmptyStatement(Zone* zone, int pos): Statement(zone, pos) {}
@@ -1423,6 +1456,7 @@ class EmptyStatement V8_FINAL : public Statement {
 class Literal V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(Literal)
+  DECLARE_FIXED_REWRITE_NODE(Literal)
 
   virtual bool IsPropertyName() const V8_OVERRIDE {
     return value_->IsPropertyName();
@@ -1580,6 +1614,7 @@ class ObjectLiteral V8_FINAL : public MaterializedLiteral {
   typedef ObjectLiteralProperty Property;
 
   DECLARE_NODE_TYPE(ObjectLiteral)
+  DECLARE_FIXED_REWRITE_NODE(ObjectLiteral)
 
   Handle<FixedArray> constant_properties() const {
     return constant_properties_;
@@ -1640,6 +1675,7 @@ class ObjectLiteral V8_FINAL : public MaterializedLiteral {
 class RegExpLiteral V8_FINAL : public MaterializedLiteral {
  public:
   DECLARE_NODE_TYPE(RegExpLiteral)
+  DECLARE_FIXED_REWRITE_NODE(RegExpLiteral)
 
   Handle<String> pattern() const { return pattern_->string(); }
   Handle<String> flags() const { return flags_->string(); }
@@ -1667,6 +1703,7 @@ class RegExpLiteral V8_FINAL : public MaterializedLiteral {
 class ArrayLiteral V8_FINAL : public MaterializedLiteral {
  public:
   DECLARE_NODE_TYPE(ArrayLiteral)
+  DECLARE_FIXED_REWRITE_NODE(ArrayLiteral)
 
   Handle<FixedArray> constant_elements() const { return constant_elements_; }
   ZoneList<Expression*>* values() const { return values_; }
@@ -1704,6 +1741,7 @@ class ArrayLiteral V8_FINAL : public MaterializedLiteral {
 class VariableProxy V8_FINAL : public Expression, public FeedbackSlotInterface {
  public:
   DECLARE_NODE_TYPE(VariableProxy)
+  virtual Expression *Accept(AstRewriter *);
 
   virtual bool IsValidReferenceExpression() const V8_OVERRIDE {
     return var_ == NULL ? true : var_->IsValidReference();
@@ -1751,6 +1789,8 @@ class VariableProxy V8_FINAL : public Expression, public FeedbackSlotInterface {
 class Property V8_FINAL : public Expression, public FeedbackSlotInterface {
  public:
   DECLARE_NODE_TYPE(Property)
+  virtual Expression *Accept(AstRewriter *);
+  template<class> friend class AstRewriterImpl;
 
   virtual bool IsValidReferenceExpression() const V8_OVERRIDE { return true; }
 
@@ -1823,6 +1863,7 @@ class Property V8_FINAL : public Expression, public FeedbackSlotInterface {
 class Call V8_FINAL : public Expression, public FeedbackSlotInterface {
  public:
   DECLARE_NODE_TYPE(Call)
+  DECLARE_FIXED_REWRITE_NODE(Call)
 
   Expression* expression() const { return expression_; }
   ZoneList<Expression*>* arguments() const { return arguments_; }
@@ -1923,6 +1964,7 @@ class Call V8_FINAL : public Expression, public FeedbackSlotInterface {
 class CallNew V8_FINAL : public Expression, public FeedbackSlotInterface {
  public:
   DECLARE_NODE_TYPE(CallNew)
+  DECLARE_FIXED_REWRITE_NODE(CallNew)
 
   Expression* expression() const { return expression_; }
   ZoneList<Expression*>* arguments() const { return arguments_; }
@@ -1991,6 +2033,7 @@ class CallNew V8_FINAL : public Expression, public FeedbackSlotInterface {
 class CallRuntime V8_FINAL : public Expression, public FeedbackSlotInterface {
  public:
   DECLARE_NODE_TYPE(CallRuntime)
+  DECLARE_FIXED_REWRITE_NODE(CallRuntime)
 
   Handle<String> name() const { return raw_name_->string(); }
   const AstRawString* raw_name() const { return raw_name_; }
@@ -2036,6 +2079,7 @@ class CallRuntime V8_FINAL : public Expression, public FeedbackSlotInterface {
 class UnaryOperation V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(UnaryOperation)
+  DECLARE_FIXED_REWRITE_NODE(UnaryOperation)
 
   Token::Value op() const { return op_; }
   Expression* expression() const { return expression_; }
@@ -2073,6 +2117,7 @@ class UnaryOperation V8_FINAL : public Expression {
 class BinaryOperation V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(BinaryOperation)
+  DECLARE_FIXED_REWRITE_NODE(BinaryOperation)
 
   virtual bool ResultOverwriteAllowed() const V8_OVERRIDE;
 
@@ -2126,6 +2171,7 @@ class BinaryOperation V8_FINAL : public Expression {
 class CountOperation V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(CountOperation)
+  DECLARE_FIXED_REWRITE_NODE(CountOperation)
 
   bool is_prefix() const { return is_prefix_; }
   bool is_postfix() const { return !is_prefix_; }
@@ -2186,6 +2232,7 @@ class CountOperation V8_FINAL : public Expression {
 class CompareOperation V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(CompareOperation)
+  DECLARE_FIXED_REWRITE_NODE(CompareOperation)
 
   Token::Value op() const { return op_; }
   Expression* left() const { return left_; }
@@ -2227,6 +2274,7 @@ class CompareOperation V8_FINAL : public Expression {
 class Conditional V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(Conditional)
+  DECLARE_FIXED_REWRITE_NODE(Conditional)
 
   Expression* condition() const { return condition_; }
   Expression* then_expression() const { return then_expression_; }
@@ -2260,6 +2308,7 @@ class Conditional V8_FINAL : public Expression {
 class Assignment V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(Assignment)
+  DECLARE_FIXED_REWRITE_NODE(Assignment)
 
   Assignment* AsSimpleAssignment() { return !is_compound() ? this : NULL; }
 
@@ -2326,6 +2375,7 @@ class Assignment V8_FINAL : public Expression {
 class Yield V8_FINAL : public Expression, public FeedbackSlotInterface {
  public:
   DECLARE_NODE_TYPE(Yield)
+  DECLARE_FIXED_REWRITE_NODE(Yield)
 
   enum Kind {
     INITIAL,     // The initial yield that returns the unboxed generator object.
@@ -2398,6 +2448,7 @@ class Yield V8_FINAL : public Expression, public FeedbackSlotInterface {
 class Throw V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(Throw)
+  DECLARE_FIXED_REWRITE_NODE(Throw)
 
   Expression* exception() const { return exception_; }
 
@@ -2446,6 +2497,7 @@ class FunctionLiteral V8_FINAL : public Expression {
   };
 
   DECLARE_NODE_TYPE(FunctionLiteral)
+  DECLARE_FIXED_REWRITE_NODE(FunctionLiteral)
 
   Handle<String> name() const { return raw_name_->string(); }
   const AstRawString* raw_name() const { return raw_name_; }
@@ -2608,6 +2660,7 @@ class FunctionLiteral V8_FINAL : public Expression {
 class NativeFunctionLiteral V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(NativeFunctionLiteral)
+  DECLARE_FIXED_REWRITE_NODE(NativeFunctionLiteral)
 
   Handle<String> name() const { return name_->string(); }
   v8::Extension* extension() const { return extension_; }
@@ -2626,13 +2679,15 @@ class NativeFunctionLiteral V8_FINAL : public Expression {
 class ThisFunction V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(ThisFunction)
+  DECLARE_FIXED_REWRITE_NODE(ThisFunction)
 
  protected:
   explicit ThisFunction(Zone* zone, int pos): Expression(zone, pos) {}
 };
 
 #undef DECLARE_NODE_TYPE
-
+#undef DECLARE_FIXED_REWRITE_NODE
+#undef DECLARE_POLYMORPHIC_REWRITE_NODE
 
 // ----------------------------------------------------------------------------
 // Regular expressions
@@ -3119,8 +3174,26 @@ class AstRewriter BASE_EMBEDDED {
       return node;                                                  \
   }                                                                 \
   virtual type* doVisit(type* node) = 0;
-  AST_CONCRETE_NODE_LIST(DEF_VISIT)
+  AST_FIXED_REWRITE_NODE_LIST(DEF_VISIT)
 #undef DEF_VISIT
+
+  Expression *Visit(VariableProxy *node) {
+    if (!CheckStackOverflow())
+      return doVisit(node);
+    else
+      return node;
+  }
+
+  virtual Expression* doVisit(VariableProxy *) = 0;
+
+  Expression *Visit(Property *node) {
+    if (!CheckStackOverflow())
+      return doVisit(node);
+    else
+      return node;
+  }
+
+  virtual Expression* doVisit(Property *) = 0;
 
   void SetStackOverflow() { stack_overflow_ = true; }
   void ClearStackOverflow() { stack_overflow_ = false; }

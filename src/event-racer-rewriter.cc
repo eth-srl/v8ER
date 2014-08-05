@@ -125,12 +125,12 @@ ArrayLiteral* EventRacerRewriter::doVisit(ArrayLiteral *lit) {
   return lit;
 }
 
-VariableProxy* EventRacerRewriter::doVisit(VariableProxy *var) {
+Expression* EventRacerRewriter::doVisit(VariableProxy *var) {
   // TODO
   return var;
 }
 
-Property* EventRacerRewriter::doVisit(Property *p) {
+Expression* EventRacerRewriter::doVisit(Property *p) {
   // TODO
   p->obj_ = p->obj_->Accept(this);
   p->key_ = p->key_->Accept(this);
