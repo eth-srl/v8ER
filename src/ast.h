@@ -2066,7 +2066,8 @@ class CallRuntime V8_FINAL : public Expression, public FeedbackSlotInterface {
       : Expression(zone, pos),
         raw_name_(name),
         function_(function),
-        arguments_(arguments) { }
+        arguments_(arguments),
+        callruntime_feedback_slot_(kInvalidFeedbackSlot) { }
 
  private:
   const AstRawString* raw_name_;
