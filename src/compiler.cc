@@ -636,7 +636,23 @@ static bool CompileUnoptimizedCode(CompilationInfo* info) {
   ASSERT(AllowCompilation::IsAllowed(info->isolate()));
   ASSERT(info->function() != NULL);
   if (!Rewriter::Rewrite(info)) return false;
-  if (!Scope::Analyze(info)) return false;
+
+  if (info->is_native()) {
+    if (!Scope::Analyze(info))
+      return false;
+  } else {
+    EventRacerRewriter rw(info);
+    if (FLAG_instrument)
+      info->function()->Accept(&rw);
+
+    if (!Scope::Analyze(info))
+      return false;
+
+    if (FLAG_instrument) {
+      rw.scope_analysis_complete();
+      info->function()->Accept(&rw);
+    }
+  }
   ASSERT(info->scope() != NULL);
 
   if (!FullCodeGenerator::MakeCode(info)) {
@@ -826,10 +842,6 @@ static Handle<SharedFunctionInfo> CompileToplevel(CompilationInfo* info) {
     }
 
     FunctionLiteral* lit = info->function();
-    EventRacerRewriter rw(info->zone(), info->ast_value_factory());
-    lit = lit->Accept(&rw);
-    info->SetFunction(lit);
-
     LiveEditFunctionTracker live_edit_tracker(isolate, lit);
 
     // Measure how long it takes to do the compilation; only take the

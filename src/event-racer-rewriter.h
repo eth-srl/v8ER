@@ -62,11 +62,7 @@ struct EventRacerRewriterTag {};
 template<>
 class AstRewriterImpl<EventRacerRewriterTag> : public AstRewriter {
 public:
-  AstRewriterImpl(Zone *z, AstValueFactory *f)
-    : value_factory_(f),
-      factory_(z, f) {
-    InitializeAstRewriter(z);
-  }
+  AstRewriterImpl(CompilationInfo *info);
 
 #define DEF_VISIT(type) \
   virtual type* doVisit(type *nd) V8_FINAL V8_OVERRIDE;
@@ -81,9 +77,43 @@ public:
   virtual Expression* doVisit(VariableProxy *) V8_FINAL V8_OVERRIDE;
   virtual Expression* doVisit(Property *) V8_FINAL V8_OVERRIDE;
 
+  void scope_analysis_complete() { post_scope_analysis_ = true; }
+
 private:
-  AstValueFactory *value_factory_;
-  AstNodeFactory<AstConstructionVisitor> factory_;
+  struct ContextScope {
+    ContextScope(AstRewriterImpl<EventRacerRewriterTag> *w,
+                 Scope *s = NULL)
+      : rewriter(w) {
+      prev = w->current_context_;
+      if (s)
+        scope = s;
+      else if (prev)
+        scope = prev->scope;
+      else
+        scope = NULL;
+      w->current_context_ = this;
+    }
+
+    ~ContextScope() {
+      rewriter->current_context_ = prev;
+    }
+
+    AstRewriterImpl<EventRacerRewriterTag> *rewriter;
+    Scope *scope;
+    ContextScope *prev;
+  };
+
+  ContextScope *context() const { return current_context_; }
+
+  CompilationInfo *info_;
+  bool post_scope_analysis_;
+  ContextScope *current_context_;
+
+  AstNodeFactory<AstNullVisitor> factory_;
+  VariableProxy *ER_read_proxy_;
+  VariableProxy *ER_readProp_proxy_;
+
+  Scope *NewScope(Scope* outer, ScopeType type);
 };
 
 typedef AstRewriterImpl<EventRacerRewriterTag> EventRacerRewriter;
