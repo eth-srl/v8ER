@@ -654,3 +654,9 @@ function ToPositiveInteger(x, rangeErrorName) {
 // that is cloned when running the code.  It is essential that the
 // boilerplate gets the right prototype.
 %FunctionSetPrototype($Array, new $Array(0));
+
+// Stubs for EventRacer calls, for use with D8.
+global.ER_read = function(name, value) { return value; }
+global.ER_write = function(name, value) { return value; }
+global.ER_readProp = function(obj, name, value) { return value; }
+global.ER_writeProp = function(obj, name, value) { return value; }
