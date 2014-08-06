@@ -169,10 +169,10 @@ Expression* EventRacerRewriter::doVisit(VariableProxy *vp) {
     return vp;
   }
 
-  // Instrument only access to variables, which are properties of the
-  // global (or the window) object.
-  Variable *v = vp->var();
-  if (!v || v->mode() != VariableMode::VAR)
+  // Instrument only access to potentially shared variables, namely
+  // those declared by the user (as opposed to being introduced by the
+  // compiler), which aren't stack allocated.
+  if (!is_potentially_shared(vp))
     return vp;
 
   // Read of a property of the global object is rewritten into a call to

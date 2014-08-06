@@ -103,6 +103,12 @@ private:
     ContextScope *prev;
   };
 
+  bool is_potentially_shared(const VariableProxy *vp) const {
+    ASSERT(post_scope_analysis_);
+    Variable *var = vp->var();
+    return var == NULL || (var->mode() < INTERNAL && !var->IsStackAllocated());
+  }
+
   ContextScope *context() const { return current_context_; }
 
   CompilationInfo *info_;
