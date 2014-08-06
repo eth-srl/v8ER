@@ -651,6 +651,9 @@ static bool CompileUnoptimizedCode(CompilationInfo* info) {
     if (FLAG_instrument) {
       rw.scope_analysis_complete();
       info->function()->Accept(&rw);
+
+      AstSlotCounter cnt;
+      info->function()->Accept(&cnt);
     }
   }
   ASSERT(info->scope() != NULL);

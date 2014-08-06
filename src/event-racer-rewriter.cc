@@ -344,5 +344,318 @@ FunctionLiteral* EventRacerRewriter::doVisit(FunctionLiteral *lit) {
   rewrite(this, lit->body());
   return lit;
 }
+
+
+// -----------------------------------------------------------------------------
+
+void AstSlotCounter::add_node() {
+  ++state_->node_count;
+}
+
+void AstSlotCounter::add_materialized_literal(MaterializedLiteral *lit) {
+  lit->set_literal_index(state_->materialized_literal_count++);
+}
+
+void AstSlotCounter::add_feedback_slot(FeedbackSlotInterface *nd) {
+  int cnt = nd->ComputeFeedbackSlotCount();
+  if (cnt > 0) {
+    nd->SetFirstFeedbackSlot(state_->feedback_slot_count);
+    state_->feedback_slot_count += cnt;
+  }
+}
+
+template<typename T> void traverse(AstVisitor *v, T *node) {
+  if (node)
+    node->Accept(v);
+}
+
+template<typename T> void traverse(AstVisitor *v, ZoneList<T *> *lst) {
+  if (lst) {
+    const int n = lst->length();
+    for (int i = 0; i < n; ++i)
+      lst->at(i)->Accept(v);
+  }
+}
+
+#define AST_LEAF_NODE_LIST(V)                   \
+  V(ModuleUrl)                                  \
+  V(DebuggerStatement)                          \
+  V(ContinueStatement)                          \
+  V(BreakStatement)                             \
+  V(EmptyStatement)                             \
+  V(Literal)                                    \
+  V(NativeFunctionLiteral)                      \
+  V(ThisFunction)
+
+#define LEAF_VISIT(type)                                \
+    void AstSlotCounter::Visit##type(type *nd) {        \
+      add_node();                                       \
+    }
+  AST_LEAF_NODE_LIST(LEAF_VISIT)
+#undef LEAF_VISIT
+    
+void AstSlotCounter::VisitVariableDeclaration(VariableDeclaration *dcl) {
+  add_node();
+  traverse(this, dcl->proxy());
+}
+
+void AstSlotCounter::VisitFunctionDeclaration(FunctionDeclaration *dcl) {
+  add_node();
+  traverse(this, dcl->proxy());
+  traverse(this, dcl->fun());
+}
+
+void AstSlotCounter::VisitModuleDeclaration(ModuleDeclaration *dcl) {
+  add_node();
+  traverse(this, dcl->proxy());
+  traverse(this, dcl->module());
+}
+
+void AstSlotCounter::VisitImportDeclaration(ImportDeclaration *dcl) {
+  add_node();
+  traverse(this, dcl->proxy());
+  // FIXME: traverse(this, dcl->module());
+}
+
+void AstSlotCounter::VisitExportDeclaration(ExportDeclaration *dcl) {
+  add_node();
+  traverse(this, dcl->proxy());
+}
+
+void AstSlotCounter::VisitModuleLiteral(ModuleLiteral *mod) {
+  add_node();
+  traverse(this, mod->body());
+}
+
+void AstSlotCounter::VisitModuleVariable(ModuleVariable *mod) {
+  add_node();
+  traverse(this, mod->proxy());
+}
+
+void AstSlotCounter::VisitModulePath(ModulePath *path) {
+  add_node();
+}
+
+void AstSlotCounter::VisitModuleStatement(ModuleStatement *st) {
+  add_node();
+  traverse(this, st->proxy());
+  traverse(this, st->body());
+}
+
+void AstSlotCounter::VisitBlock(Block *blk) {
+  add_node();
+  traverse(this, blk->statements());
+}
+
+void AstSlotCounter::VisitExpressionStatement(ExpressionStatement *st) {
+  add_node();
+  traverse(this, st->expression());
+}
+
+void AstSlotCounter::VisitDoWhileStatement(DoWhileStatement *st) {
+  add_node();
+  traverse(this, st->cond());
+  traverse(this, st->body());
+}
+
+void AstSlotCounter::VisitWhileStatement(WhileStatement *st) {
+  add_node();
+  traverse(this, st->cond());
+  traverse(this, st->body());
+}
+
+void AstSlotCounter::VisitForStatement(ForStatement *st) {
+  add_node();
+  traverse(this, st->init());
+  traverse(this, st->cond());
+  traverse(this, st->next());
+  traverse(this, st->body());
+}
+
+void AstSlotCounter::VisitForInStatement(ForInStatement *st) {
+  add_node();
+  add_feedback_slot(st);
+  traverse(this, st->each());
+  traverse(this, st->subject());
+  traverse(this, st->body());
+}
+
+void AstSlotCounter::VisitForOfStatement(ForOfStatement *st) {
+  add_node();
+  traverse(this, st->each());
+  traverse(this, st->subject());
+  traverse(this, st->body());
+  traverse(this, st->assign_iterable());
+  traverse(this, st->assign_iterator());
+  traverse(this, st->next_result());
+  traverse(this, st->result_done());
+  traverse(this, st->assign_each());
+}
+
+void AstSlotCounter::VisitReturnStatement(ReturnStatement *st) {
+  add_node();
+  traverse(this, st->expression());
+}
+
+void AstSlotCounter::VisitWithStatement(WithStatement *st) {
+  add_node();
+  traverse(this, st->expression());
+  traverse(this, st->statement());
+}
+
+void AstSlotCounter::VisitCaseClause(CaseClause *ex) {
+  add_node();
+  if (!ex->is_default())
+    traverse(this, ex->label());
+  traverse(this, ex->statements());
+}
+
+void AstSlotCounter::VisitSwitchStatement(SwitchStatement *st) {
+  add_node();
+  traverse(this, st->tag());
+  traverse(this, st->cases());
+}
+
+void AstSlotCounter::VisitIfStatement(IfStatement *st) {
+  add_node();
+  traverse(this, st->condition());
+  traverse(this, st->then_statement());
+  traverse(this, st->else_statement());
+}
+
+void AstSlotCounter::VisitTryCatchStatement(TryCatchStatement *st) {
+  add_node();
+  traverse(this, st->try_block());
+  traverse(this, st->catch_block());
+}
+
+void AstSlotCounter::VisitTryFinallyStatement(TryFinallyStatement *st) {
+  add_node();
+  traverse(this, st->try_block());
+  traverse(this, st->finally_block());
+}
+
+void AstSlotCounter::VisitObjectLiteral(ObjectLiteral *lit) {
+  add_node();
+  add_materialized_literal(lit);
+  if (lit->properties()) {
+    ZoneList<ObjectLiteral::Property *> &ps = *lit->properties();
+    for (int i = 0; i < ps.length(); ++i)
+      traverse(this, ps[i]->value());
+  }
+}
+
+void AstSlotCounter::VisitArrayLiteral(ArrayLiteral *lit) {
+  add_node();
+  add_materialized_literal(lit);
+  traverse(this, lit->values());
+}
+
+void AstSlotCounter::VisitVariableProxy(VariableProxy *vp) {
+  add_node();
+  // We may encounter variables created with the AstNullVisitor,
+  // therefore without a feedback slot assigned.
+  if (vp->VariableFeedbackSlot() != FeedbackSlotInterface::kInvalidFeedbackSlot)
+    add_feedback_slot(vp);
+}
+
+void AstSlotCounter::VisitProperty(Property *p) {
+  add_node();
+  add_feedback_slot(p);
+  traverse(this, p->obj());
+  traverse(this, p->key());
+}
+
+void AstSlotCounter::VisitCall(Call *c) {
+  add_node();
+  add_feedback_slot(c);
+  traverse(this, c->expression());    
+  traverse(this, c->arguments());
+}
+
+void AstSlotCounter::VisitCallNew(CallNew *c) {
+  add_node();
+  add_feedback_slot(c);
+  traverse(this, c->expression());
+  traverse(this, c->arguments());
+}
+
+void AstSlotCounter::VisitCallRuntime(CallRuntime *c) {
+  add_node();
+  add_feedback_slot(c);
+  traverse(this, c->arguments());
+}
+
+void AstSlotCounter::VisitUnaryOperation(UnaryOperation *op) {
+  add_node();
+  traverse(this, op->expression());
+}
+
+void AstSlotCounter::VisitBinaryOperation(BinaryOperation *op) {
+  add_node();
+  traverse(this, op->left());
+  traverse(this, op->right());
+}
+
+void AstSlotCounter::VisitCountOperation(CountOperation *op) {
+  add_node();
+  traverse(this, op->expression());
+}
+
+void AstSlotCounter::VisitCompareOperation(CompareOperation *op) {
+  add_node();
+  traverse(this, op->left());
+  traverse(this, op->right());
+}
+
+void AstSlotCounter::VisitConditional(Conditional *op) {
+  add_node();
+  traverse(this, op->condition());
+  traverse(this, op->then_expression());
+  traverse(this, op->else_expression());
+}
+
+void AstSlotCounter::VisitAssignment(Assignment *op) {
+  add_node();
+  traverse(this, op->target());
+  traverse(this, op->value());
+}
+
+void AstSlotCounter::VisitYield(Yield *op) {
+  // FIXME:  if (op->yield_kind() == Yield::SUSPEND || op->yield_kind() == Yield::FINAL)
+  add_node();
+  add_feedback_slot(op);
+  traverse(this, op->expression());
+}
+
+void AstSlotCounter::VisitThrow(Throw *op) {
+  add_node();
+  traverse(this, op->exception());
+}
+
+void AstSlotCounter::VisitRegExpLiteral(RegExpLiteral *lit) {
+  add_node();
+  add_materialized_literal(lit);
+}
+
+void AstSlotCounter::VisitFunctionLiteral(FunctionLiteral *fn) {
+  FunctionState state;
+  begin_function(&state);
+  add_node();
+  Scope *scope = fn->scope();
+  if (scope->is_function_scope())
+    traverse(this, scope->function());
+  traverse(this, scope->declarations());
+  traverse(this, fn->body());
+  fn->set_materialized_literal_count(state.materialized_literal_count - JSFunction::kLiteralsPrefixSize);
+
+  AstProperties props;
+  *props.flags() = *fn->flags();
+  props.add_node_count(fn->ast_node_count());
+  props.increase_feedback_slots(state.feedback_slot_count);
+  fn->set_ast_properties(&props);
+
+  end_function();
+}
 
 } } // namespace v8::internal

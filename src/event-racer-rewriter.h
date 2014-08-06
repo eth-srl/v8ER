@@ -118,6 +118,47 @@ private:
 
 typedef AstRewriterImpl<EventRacerRewriterTag> EventRacerRewriter;
 
+class AstSlotCounter : public AstVisitor {
+public:
+  AstSlotCounter() : state_(NULL) {}
+
+#define DECLARE_VISIT(type) virtual void Visit##type(type* node);
+  AST_NODE_LIST(DECLARE_VISIT)
+#undef DECLARE_VISIT
+
+
+  void add_node();
+  void add_materialized_literal(MaterializedLiteral *);
+  void add_feedback_slot(FeedbackSlotInterface *);
+
+private:
+  struct FunctionState {
+    FunctionState()
+      : prev(NULL),
+        materialized_literal_count(JSFunction::kLiteralsPrefixSize),
+        feedback_slot_count(0),
+        node_count(0) {}
+
+    FunctionState *prev;
+    int materialized_literal_count;
+    int feedback_slot_count;
+    int node_count;
+  };
+
+  void begin_function (FunctionState *st) {
+    st->prev = state_;
+    state_ = st;
+  }
+  void end_function() {
+    state_ = state_->prev;
+  }
+
+  FunctionState *state_;
+
+  DEFINE_AST_VISITOR_SUBCLASS_MEMBERS();
+};
+
+
 } }  // namespace v8::internal
 
 #endif // V8_EVENT_RACER_REWRITER_H_

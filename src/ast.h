@@ -1515,6 +1515,7 @@ class MaterializedLiteral : public Expression {
   virtual MaterializedLiteral* AsMaterializedLiteral() { return this; }
 
   int literal_index() { return literal_index_; }
+  void set_literal_index(int idx) { literal_index_ = idx; }
 
   int depth() const {
     // only callable after initialization.
@@ -2514,6 +2515,7 @@ class FunctionLiteral V8_FINAL : public Expression {
   StrictMode strict_mode() const;
 
   int materialized_literal_count() { return materialized_literal_count_; }
+  void set_materialized_literal_count(int n) { materialized_literal_count_ = n; }
   int expected_property_count() { return expected_property_count_; }
   int handler_count() { return handler_count_; }
   int parameter_count() { return parameter_count_; }
