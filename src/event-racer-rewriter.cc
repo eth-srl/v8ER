@@ -21,6 +21,8 @@ EventRacerRewriter::AstRewriterImpl(CompilationInfo *info)
   ER_read_proxy_ = factory_.NewVariableProxy(v);
   v = globals.DeclareDynamicGlobal(values.GetOneByteString("ER_readProp"));
   ER_readProp_proxy_ = factory_.NewVariableProxy(v);
+  o_string_ = values.GetOneByteString("$obj");
+  k_string_ = values.GetOneByteString("$key");
 }
 
 Scope *EventRacerRewriter::NewScope(Scope* outer, ScopeType type) {
@@ -183,77 +185,72 @@ Expression* EventRacerRewriter::doVisit(VariableProxy *vp) {
   return factory_.NewCall(ER_read_proxy_, args, vp->position());
 }
 
+
 Expression* EventRacerRewriter::doVisit(Property *p) {
-  // Read of a property of an object is rewritten into a call to
-  // ER_readProp:
-
-  // |obj.key| =>
-  // |function() {let o = obj, k = key; return ER_readProp(o, k, o.k); }()|
-
-  // The function literal is needed in order to ensure |obj| and |key|
-  // are evaluated exactly once.
 
   // Property read is rewritten pre scope analysis.
-  if (post_scope_analysis_) {
+  if (post_scope_analysis_)
     return p;
-  }
 
-  Scope *scope = NewScope(context()->scope, ScopeType::FUNCTION_SCOPE);
+  // Read of a property of an object is rewritten into a call to
+  // ER_readProp.
+
+  // If the key is a literal, the Property is rewritten into a call
+  // like:
+
+  // |obj.key|
+  //  => |(function(o) { return ER_readProp(p, "key", o.key); })(obj)|
+  
+  // If the key as a general expression, the Property is rewritten into
+  // a call like:
+ 
+  // |obj.key|
+  //  => |(function(o, k) { return ER_readProp(o, k, o[k]); })(obj, key);|
+
+  // The function literal is needed in order to ensure |obj| and |key|
+  // are evaluated exactly once. Passing the expressions as parameters
+  // avoids capturing variabes in the inner closure, which may cause
+  // them to be context allocated.
+
+  Expression *obj = p->obj_, *key = p->key_;
+
+  Scope *scope = NewScope(context()->scope, FUNCTION_SCOPE);
   scope->set_start_position(p->position());
   scope->set_end_position(p->position() + 1);
 
-  Block *init = factory_.NewBlock(NULL, 2, true, p->position());
+  // Declare parameters of the new function.
+  scope->DeclareParameter(o_string_, VAR);
+  if (!key->IsLiteral())
+    scope->DeclareParameter(k_string_, VAR);
 
-  VariableProxy *o_proxy = 
-    scope->NewUnresolved(&factory_,
-                         info_->ast_value_factory()->GetOneByteString("$o"),
-                         Interface::NewValue(),
-                         p->position());
-  Declaration *decl =
-    factory_.NewVariableDeclaration(o_proxy, VariableMode::LET, scope,
-                                    p->position());
-  Variable *var = scope->DeclareLocal(o_proxy->raw_name(), decl->mode(),
-                                      decl->initialization(),
-                                      o_proxy->interface());
-  var->set_initializer_position(p->position());
-  o_proxy->BindTo(var);
-  scope->AddDeclaration(decl);
-  Statement *stmt =
-    factory_.NewExpressionStatement(
-      factory_.NewAssignment(Token::INIT_LET, o_proxy, p->obj_, p->position()),
-      p->position());
-  init->AddStatement(stmt, zone());
-  
-  VariableProxy *k_proxy;
-  k_proxy = scope->NewUnresolved(&factory_,
-                                 info_->ast_value_factory()->GetOneByteString("$k"),
-                                 Interface::NewValue(),
-                                 p->position());
-  decl = factory_.NewVariableDeclaration(k_proxy, VariableMode::LET, scope,
-                                         p->position());
-  var = scope->DeclareLocal(k_proxy->raw_name(), decl->mode(),
-                            decl->initialization(),
-                            k_proxy->interface());
-  var->set_initializer_position(p->position());
-  k_proxy->BindTo(var);
-  scope->AddDeclaration(decl);
-  stmt =
-    factory_.NewExpressionStatement(
-      factory_.NewAssignment(Token::INIT_LET, k_proxy, p->key_, p->position()),
-      p->position());
-  init->AddStatement(stmt, zone());
-
-  Expression *key = p->key_->IsLiteral() ? p->key_ : k_proxy;
+  // Setup arguments of the call to |ER_readProp|.
   ZoneList<Expression*> *args = new (zone()) ZoneList<Expression*>(3, zone());
+
+  // First argument is the |$obj| parameter.
+  VariableProxy *o_proxy = 
+    scope->NewUnresolved(&factory_, o_string_, Interface::NewValue(),
+                         p->position());
   args->Add(o_proxy, zone());
-  args->Add(k_proxy, zone());
+
+  // Second argument is either the |$key| parameter or, if the
+  // property name is a literal, the literal itself.
+  if (key->IsLiteral())
+    args->Add(key, zone());
+  else {
+    VariableProxy *k_proxy;
+    k_proxy = scope->NewUnresolved(&factory_, k_string_, Interface::NewValue(),
+                                   p->position());
+    args->Add(k_proxy, zone());
+    p->key_ = k_proxy;
+  }
   p->obj_ = o_proxy;
-  p->key_ = key;
+
+  // Third parameter is the property expression.
   args->Add(p, zone());
   Call *ret = factory_.NewCall(ER_readProp_proxy_, args, p->position());
 
-  ZoneList<Statement*> *body = new (zone()) ZoneList<Statement*>(3, zone());
-  body->Add(init, zone());
+  // Define the new function.
+  ZoneList<Statement*> *body = new (zone()) ZoneList<Statement*>(1, zone());
 
   FunctionLiteral* fn = factory_.NewFunctionLiteral(
     info_->ast_value_factory()->empty_string(),
@@ -263,17 +260,23 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
     /* materialized_literal_count */ 0,
     /* expected_property_count */ 0,
     /* handler_count */ 0,
-    /* num_parameters */ 0,
+    /* num_parameters */ 1 + !key->IsLiteral(),
     FunctionLiteral::kNoDuplicateParameters,
     FunctionLiteral::ANONYMOUS_EXPRESSION,
     FunctionLiteral::kIsFunction,
     FunctionLiteral::kIsParenthesized,
     FunctionLiteral::kNormalFunction,
     p->position());
-  rewrite(this, fn);
+  // FIXME  rewrite(this, fn);
   body->Add(factory_.NewReturnStatement(ret, p->position()), zone());
-  return factory_.NewCall(fn, new(zone()) ZoneList<Expression*>(0, zone()),
-                          p->position());
+
+  // Build the call to the new function.
+  args = new (zone()) ZoneList<Expression*>(2, zone());
+  args->Add(obj, zone());
+  if (!key->IsLiteral())
+    args->Add(key, zone());
+
+  return factory_.NewCall(fn, args, p->position());
 }
 
 Call* EventRacerRewriter::doVisit(Call *c) {

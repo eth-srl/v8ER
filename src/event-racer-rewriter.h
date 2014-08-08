@@ -118,6 +118,7 @@ private:
   AstNodeFactory<AstNullVisitor> factory_;
   VariableProxy *ER_read_proxy_;
   VariableProxy *ER_readProp_proxy_;
+  const AstRawString *o_string_, *k_string_;
 
   Scope *NewScope(Scope* outer, ScopeType type);
 };
