@@ -27,7 +27,6 @@
 
 // Flags: --harmony-iteration
 // Flags: --harmony-generators --harmony-scoping --harmony-proxies
-// Flags: --harmony-symbols
 
 // Test for-of semantics.
 
@@ -213,9 +212,9 @@ assertEquals([1, 2],
                            { value: 37, done: true },
                            never_getter(never_getter({}, 'done'), 'value')])));
 
-// Null and undefined do not cause an error.
-assertEquals(0, fold(sum, 0, unreachable(null)));
-assertEquals(0, fold(sum, 0, unreachable(undefined)));
+// Unlike the case with for-in, null and undefined cause an error.
+assertThrows('fold(sum, 0, unreachable(null))', TypeError);
+assertThrows('fold(sum, 0, unreachable(undefined))', TypeError);
 
 // Other non-iterators do cause an error.
 assertThrows('fold(sum, 0, unreachable({}))', TypeError);

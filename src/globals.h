@@ -25,6 +25,19 @@
 # define V8_INFINITY INFINITY
 #endif
 
+#if V8_TARGET_ARCH_IA32 || V8_TARGET_ARCH_X64 || V8_TARGET_ARCH_ARM || \
+    V8_TARGET_ARCH_ARM64
+#define V8_TURBOFAN_BACKEND 1
+#else
+#define V8_TURBOFAN_BACKEND 0
+#endif
+#if V8_TURBOFAN_BACKEND && !V8_TARGET_ARCH_ARM64 && \
+    !(V8_OS_WIN && V8_TARGET_ARCH_X64)
+#define V8_TURBOFAN_TARGET 1
+#else
+#define V8_TURBOFAN_TARGET 0
+#endif
+
 namespace v8 {
 
 namespace base {
@@ -216,11 +229,15 @@ const int kCodeAlignmentBits = 5;
 const intptr_t kCodeAlignment = 1 << kCodeAlignmentBits;
 const intptr_t kCodeAlignmentMask = kCodeAlignment - 1;
 
-// Tag information for Failure.
-// TODO(yangguo): remove this from space owner calculation.
-const int kFailureTag = 3;
-const int kFailureTagSize = 2;
-const intptr_t kFailureTagMask = (1 << kFailureTagSize) - 1;
+// The owner field of a page is tagged with the page header tag. We need that
+// to find out if a slot is part of a large object. If we mask out the lower
+// 0xfffff bits (1M pages), go to the owner offset, and see that this field
+// is tagged with the page header tag, we can just look up the owner.
+// Otherwise, we know that we are somewhere (not within the first 1M) in a
+// large object.
+const int kPageHeaderTag = 3;
+const int kPageHeaderTagSize = 2;
+const intptr_t kPageHeaderTagMask = (1 << kPageHeaderTagSize) - 1;
 
 
 // Zap-value: The value used for zapping dead objects.
@@ -716,6 +733,9 @@ enum InitializationFlag {
   kNeedsInitialization,
   kCreatedInitialized
 };
+
+
+enum MaybeAssignedFlag { kNotAssigned, kMaybeAssigned };
 
 
 enum ClearExceptionFlag {

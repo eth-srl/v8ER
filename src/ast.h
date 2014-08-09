@@ -15,7 +15,6 @@
 #include "src/isolate.h"
 #include "src/jsregexp.h"
 #include "src/list-inl.h"
-#include "src/ostreams.h"
 #include "src/runtime.h"
 #include "src/small-pointer-list.h"
 #include "src/smart-pointers.h"
@@ -166,6 +165,7 @@ class BreakableStatement;
 class Expression;
 class IterationStatement;
 class MaterializedLiteral;
+class OStream;
 class Statement;
 class TargetCollector;
 class TypeFeedbackOracle;
@@ -497,7 +497,7 @@ class BreakableStatement : public Statement {
         breakable_type_(breakable_type),
         entry_id_(GetNextId(zone)),
         exit_id_(GetNextId(zone)) {
-    ASSERT(labels == NULL || labels->length() > 0);
+    DCHECK(labels == NULL || labels->length() > 0);
   }
 
 
@@ -573,7 +573,7 @@ class Declaration : public AstNode {
         proxy_(proxy),
         mode_(mode),
         scope_(scope) {
-    ASSERT(IsDeclaredVariableMode(mode));
+    DCHECK(IsDeclaredVariableMode(mode));
   }
 
  private:
@@ -626,8 +626,8 @@ class FunctionDeclaration V8_FINAL : public Declaration {
       : Declaration(zone, proxy, mode, scope, pos),
         fun_(fun) {
     // At the moment there are no "const functions" in JavaScript...
-    ASSERT(mode == VAR || mode == LET);
-    ASSERT(fun != NULL);
+    DCHECK(mode == VAR || mode == LET);
+    DCHECK(fun != NULL);
   }
 
  private:
@@ -1017,7 +1017,7 @@ class ForInStatement V8_FINAL : public ForEachStatement,
   virtual void SetFirstFeedbackSlot(int slot) { for_in_feedback_slot_ = slot; }
 
   int ForInFeedbackSlot() {
-    ASSERT(for_in_feedback_slot_ != kInvalidFeedbackSlot);
+    DCHECK(for_in_feedback_slot_ != kInvalidFeedbackSlot);
     return for_in_feedback_slot_;
   }
 
@@ -1054,13 +1054,11 @@ class ForOfStatement V8_FINAL : public ForEachStatement {
   void Initialize(Expression* each,
                   Expression* subject,
                   Statement* body,
-                  Expression* assign_iterable,
                   Expression* assign_iterator,
                   Expression* next_result,
                   Expression* result_done,
                   Expression* assign_each) {
     ForEachStatement::Initialize(each, subject, body);
-    assign_iterable_ = assign_iterable;
     assign_iterator_ = assign_iterator;
     next_result_ = next_result;
     result_done_ = result_done;
@@ -1071,12 +1069,7 @@ class ForOfStatement V8_FINAL : public ForEachStatement {
     return subject();
   }
 
-  // var iterable = subject;
-  Expression* assign_iterable() const {
-    return assign_iterable_;
-  }
-
-  // var iterator = iterable[Symbol.iterator]();
+  // var iterator = subject[Symbol.iterator]();
   Expression* assign_iterator() const {
     return assign_iterator_;
   }
@@ -1111,7 +1104,6 @@ class ForOfStatement V8_FINAL : public ForEachStatement {
         back_edge_id_(GetNextId(zone)) {
   }
 
-  Expression* assign_iterable_;
   Expression* assign_iterator_;
   Expression* next_result_;
   Expression* result_done_;
@@ -1463,12 +1455,12 @@ class Literal V8_FINAL : public Expression {
   }
 
   Handle<String> AsPropertyName() {
-    ASSERT(IsPropertyName());
+    DCHECK(IsPropertyName());
     return Handle<String>::cast(value());
   }
 
   const AstRawString* AsRawPropertyName() {
-    ASSERT(IsPropertyName());
+    DCHECK(IsPropertyName());
     return value_->AsString();
   }
 
@@ -1519,7 +1511,7 @@ class MaterializedLiteral : public Expression {
 
   int depth() const {
     // only callable after initialization.
-    ASSERT(depth_ >= 1);
+    DCHECK(depth_ >= 1);
     return depth_;
   }
 
@@ -1539,7 +1531,7 @@ class MaterializedLiteral : public Expression {
   friend class CompileTimeValue;
 
   void set_depth(int depth) {
-    ASSERT(depth >= 1);
+    DCHECK(depth >= 1);
     depth_ = depth;
   }
 
@@ -1636,6 +1628,13 @@ class ObjectLiteral V8_FINAL : public MaterializedLiteral {
   // marked expressions, no store code is emitted.
   void CalculateEmitStore(Zone* zone);
 
+  // Assemble bitfield of flags for the CreateObjectLiteral helper.
+  int ComputeFlags() const {
+    int flags = fast_elements() ? kFastElements : kNoFlags;
+    flags |= has_function() ? kHasFunction : kNoFlags;
+    return flags;
+  }
+
   enum Flags {
     kNoFlags = 0,
     kFastElements = 1,
@@ -1716,6 +1715,13 @@ class ArrayLiteral V8_FINAL : public MaterializedLiteral {
 
   // Populate the constant elements fixed array.
   void BuildConstantElements(Isolate* isolate);
+
+  // Assemble bitfield of flags for the CreateArrayLiteral helper.
+  int ComputeFlags() const {
+    int flags = depth() == 1 ? kShallowElements : kNoFlags;
+    flags |= ArrayLiteral::kDisableMementos;
+    return flags;
+  }
 
   enum Flags {
     kNoFlags = 0,
@@ -1801,7 +1807,6 @@ class Property V8_FINAL : public Expression, public FeedbackSlotInterface {
   BailoutId LoadId() const { return load_id_; }
 
   bool IsStringAccess() const { return is_string_access_; }
-  bool IsFunctionPrototype() const { return is_function_prototype_; }
 
   // Type feedback information.
   virtual bool IsMonomorphic() V8_OVERRIDE {
@@ -1819,7 +1824,6 @@ class Property V8_FINAL : public Expression, public FeedbackSlotInterface {
   }
   void set_is_uninitialized(bool b) { is_uninitialized_ = b; }
   void set_is_string_access(bool b) { is_string_access_ = b; }
-  void set_is_function_prototype(bool b) { is_function_prototype_ = b; }
   void mark_for_call() { is_for_call_ = true; }
   bool IsForCall() { return is_for_call_; }
 
@@ -1833,10 +1837,7 @@ class Property V8_FINAL : public Expression, public FeedbackSlotInterface {
   int PropertyFeedbackSlot() const { return property_feedback_slot_; }
 
  protected:
-  Property(Zone* zone,
-           Expression* obj,
-           Expression* key,
-           int pos)
+  Property(Zone* zone, Expression* obj, Expression* key, int pos)
       : Expression(zone, pos),
         obj_(obj),
         key_(key),
@@ -1844,8 +1845,7 @@ class Property V8_FINAL : public Expression, public FeedbackSlotInterface {
         property_feedback_slot_(kInvalidFeedbackSlot),
         is_for_call_(false),
         is_uninitialized_(false),
-        is_string_access_(false),
-        is_function_prototype_(false) { }
+        is_string_access_(false) {}
 
  private:
   Expression* obj_;
@@ -1857,7 +1857,6 @@ class Property V8_FINAL : public Expression, public FeedbackSlotInterface {
   bool is_for_call_ : 1;
   bool is_uninitialized_ : 1;
   bool is_string_access_ : 1;
-  bool is_function_prototype_ : 1;
 };
 
 
@@ -1979,12 +1978,12 @@ class CallNew V8_FINAL : public Expression, public FeedbackSlotInterface {
   }
 
   int CallNewFeedbackSlot() {
-    ASSERT(callnew_feedback_slot_ != kInvalidFeedbackSlot);
+    DCHECK(callnew_feedback_slot_ != kInvalidFeedbackSlot);
     return callnew_feedback_slot_;
   }
   int AllocationSiteFeedbackSlot() {
-    ASSERT(callnew_feedback_slot_ != kInvalidFeedbackSlot);
-    ASSERT(FLAG_pretenuring_call_new);
+    DCHECK(callnew_feedback_slot_ != kInvalidFeedbackSlot);
+    DCHECK(FLAG_pretenuring_call_new);
     return callnew_feedback_slot_ + 1;
   }
 
@@ -2051,7 +2050,7 @@ class CallRuntime V8_FINAL : public Expression, public FeedbackSlotInterface {
   }
 
   int CallRuntimeFeedbackSlot() {
-    ASSERT(!is_jsruntime() ||
+    DCHECK(!is_jsruntime() ||
            callruntime_feedback_slot_ != kInvalidFeedbackSlot);
     return callruntime_feedback_slot_;
   }
@@ -2102,7 +2101,7 @@ class UnaryOperation V8_FINAL : public Expression {
         expression_(expression),
         materialize_true_id_(GetNextId(zone)),
         materialize_false_id_(GetNextId(zone)) {
-    ASSERT(Token::IsUnaryOp(op));
+    DCHECK(Token::IsUnaryOp(op));
   }
 
  private:
@@ -2151,7 +2150,7 @@ class BinaryOperation V8_FINAL : public Expression {
         left_(left),
         right_(right),
         right_id_(GetNextId(zone)) {
-    ASSERT(Token::IsBinaryOp(op));
+    DCHECK(Token::IsBinaryOp(op));
   }
 
  private:
@@ -2261,7 +2260,7 @@ class CompareOperation V8_FINAL : public Expression {
         left_(left),
         right_(right),
         combined_type_(Type::None(zone)) {
-    ASSERT(Token::IsCompareOp(op));
+    DCHECK(Token::IsCompareOp(op));
   }
 
  private:
@@ -2353,7 +2352,7 @@ class Assignment V8_FINAL : public Expression {
 
   template<class Visitor>
   void Init(Zone* zone, AstNodeFactory<Visitor>* factory) {
-    ASSERT(Token::IsAssignmentOp(op_));
+    DCHECK(Token::IsAssignmentOp(op_));
     if (is_compound()) {
       binary_operation_ = factory->NewBinaryOperation(
           binary_op(), target_, value_, position() + 1);
@@ -2394,11 +2393,11 @@ class Yield V8_FINAL : public Expression, public FeedbackSlotInterface {
   // locates the catch handler in the handler table, and is equivalent to
   // TryCatchStatement::index().
   int index() const {
-    ASSERT(yield_kind() == DELEGATING);
+    DCHECK(yield_kind() == DELEGATING);
     return index_;
   }
   void set_index(int index) {
-    ASSERT(yield_kind() == DELEGATING);
+    DCHECK(yield_kind() == DELEGATING);
     index_ = index;
   }
 
@@ -2411,17 +2410,17 @@ class Yield V8_FINAL : public Expression, public FeedbackSlotInterface {
   }
 
   int KeyedLoadFeedbackSlot() {
-    ASSERT(yield_first_feedback_slot_ != kInvalidFeedbackSlot);
+    DCHECK(yield_first_feedback_slot_ != kInvalidFeedbackSlot);
     return yield_first_feedback_slot_;
   }
 
   int DoneFeedbackSlot() {
-    ASSERT(yield_first_feedback_slot_ != kInvalidFeedbackSlot);
+    DCHECK(yield_first_feedback_slot_ != kInvalidFeedbackSlot);
     return yield_first_feedback_slot_ + 1;
   }
 
   int ValueFeedbackSlot() {
-    ASSERT(yield_first_feedback_slot_ != kInvalidFeedbackSlot);
+    DCHECK(yield_first_feedback_slot_ != kInvalidFeedbackSlot);
     return yield_first_feedback_slot_ + 2;
   }
 
@@ -2534,7 +2533,7 @@ class FunctionLiteral V8_FINAL : public Expression {
 
   Handle<String> inferred_name() const {
     if (!inferred_name_.is_null()) {
-      ASSERT(raw_inferred_name_ == NULL);
+      DCHECK(raw_inferred_name_ == NULL);
       return inferred_name_;
     }
     if (raw_inferred_name_ != NULL) {
@@ -2546,16 +2545,16 @@ class FunctionLiteral V8_FINAL : public Expression {
 
   // Only one of {set_inferred_name, set_raw_inferred_name} should be called.
   void set_inferred_name(Handle<String> inferred_name) {
-    ASSERT(!inferred_name.is_null());
+    DCHECK(!inferred_name.is_null());
     inferred_name_ = inferred_name;
-    ASSERT(raw_inferred_name_== NULL || raw_inferred_name_->IsEmpty());
+    DCHECK(raw_inferred_name_== NULL || raw_inferred_name_->IsEmpty());
     raw_inferred_name_ = NULL;
   }
 
   void set_raw_inferred_name(const AstString* raw_inferred_name) {
-    ASSERT(raw_inferred_name != NULL);
+    DCHECK(raw_inferred_name != NULL);
     raw_inferred_name_ = raw_inferred_name;
-    ASSERT(inferred_name_.is_null());
+    DCHECK(inferred_name_.is_null());
     inferred_name_ = Handle<String>();
   }
 

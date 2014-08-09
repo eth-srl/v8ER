@@ -28,7 +28,7 @@
 
 #ifdef DEBUG
 #ifndef OPTIMIZED_DEBUG
-#define ENABLE_SLOW_ASSERTS    1
+#define ENABLE_SLOW_DCHECKS    1
 #endif
 #endif
 
@@ -41,20 +41,26 @@ namespace internal {
 
 intptr_t HeapObjectTagMask();
 
-#ifdef ENABLE_SLOW_ASSERTS
-#define SLOW_ASSERT(condition) \
+#ifdef ENABLE_SLOW_DCHECKS
+#define SLOW_DCHECK(condition) \
   CHECK(!v8::internal::FLAG_enable_slow_asserts || (condition))
 extern bool FLAG_enable_slow_asserts;
 #else
-#define SLOW_ASSERT(condition) ((void) 0)
+#define SLOW_DCHECK(condition) ((void) 0)
 const bool FLAG_enable_slow_asserts = false;
 #endif
 
 } }  // namespace v8::internal
 
 
-void CheckNonEqualsHelper(const char* file,
-                          int line,
+void CheckNonEqualsHelper(const char* file, int line,
+                          const char* expected_source, double expected,
+                          const char* value_source, double value);
+
+void CheckEqualsHelper(const char* file, int line, const char* expected_source,
+                       double expected, const char* value_source, double value);
+
+void CheckNonEqualsHelper(const char* file, int line,
                           const char* unexpected_source,
                           v8::Handle<v8::Value> unexpected,
                           const char* value_source,
@@ -67,9 +73,9 @@ void CheckEqualsHelper(const char* file,
                        const char* value_source,
                        v8::Handle<v8::Value> value);
 
-#define ASSERT_TAG_ALIGNED(address) \
-  ASSERT((reinterpret_cast<intptr_t>(address) & HeapObjectTagMask()) == 0)
+#define DCHECK_TAG_ALIGNED(address) \
+  DCHECK((reinterpret_cast<intptr_t>(address) & HeapObjectTagMask()) == 0)
 
-#define ASSERT_SIZE_TAG_ALIGNED(size) ASSERT((size & HeapObjectTagMask()) == 0)
+#define DCHECK_SIZE_TAG_ALIGNED(size) DCHECK((size & HeapObjectTagMask()) == 0)
 
 #endif  // V8_CHECKS_H_

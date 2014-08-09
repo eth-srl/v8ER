@@ -104,7 +104,7 @@ private:
   };
 
   bool is_potentially_shared(const VariableProxy *vp) const {
-    ASSERT(post_scope_analysis_);
+    DCHECK(post_scope_analysis_);
     Variable *var = vp->var();
     return var == NULL || (var->mode() < INTERNAL && !var->IsStackAllocated());
   }

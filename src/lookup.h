@@ -93,12 +93,13 @@ class LookupIterator V8_FINAL BASE_EMBEDDED {
     return Handle<Object>::cast(maybe_receiver_.ToHandleChecked());
   }
   Handle<Map> holder_map() const { return holder_map_; }
-  Handle<JSObject> GetHolder() const {
-    ASSERT(IsFound() && state_ != JSPROXY);
-    return Handle<JSObject>::cast(maybe_holder_.ToHandleChecked());
+  template <class T>
+  Handle<T> GetHolder() const {
+    DCHECK(IsFound());
+    return Handle<T>::cast(maybe_holder_.ToHandleChecked());
   }
   Handle<JSReceiver> GetRoot() const;
-  bool HolderIsReceiver() const;
+  bool HolderIsReceiverOrHiddenPrototype() const;
 
   /* Dynamically reduce the trapped types. */
   void skip_interceptor() {
@@ -123,34 +124,34 @@ class LookupIterator V8_FINAL BASE_EMBEDDED {
                                 PropertyAttributes attributes,
                                 Object::StoreFromKeyed store_mode);
   PropertyKind property_kind() const {
-    ASSERT(has_property_);
+    DCHECK(has_property_);
     return property_kind_;
   }
+  PropertyEncoding property_encoding() const {
+    DCHECK(has_property_);
+    return property_encoding_;
+  }
   PropertyDetails property_details() const {
-    ASSERT(has_property_);
+    DCHECK(has_property_);
     return property_details_;
   }
-  int descriptor_number() const {
-    ASSERT(has_property_);
-    ASSERT_EQ(DESCRIPTOR, property_encoding_);
-    return number_;
+  bool IsConfigurable() const { return !property_details().IsDontDelete(); }
+  Representation representation() const {
+    return property_details().representation();
   }
+  FieldIndex GetFieldIndex() const;
+  Handle<PropertyCell> GetPropertyCell() const;
   Handle<Object> GetAccessors() const;
   Handle<Object> GetDataValue() const;
   void WriteDataValue(Handle<Object> value);
 
   void InternalizeName();
 
-  /* JSPROXY */
-  Handle<JSProxy> GetJSProxy() const {
-    return Handle<JSProxy>::cast(maybe_holder_.ToHandleChecked());
-  }
-
  private:
   Handle<Map> GetReceiverMap() const;
 
-  MUST_USE_RESULT bool NextHolder();
-  State LookupInHolder();
+  MUST_USE_RESULT inline JSReceiver* NextHolder(Map* map);
+  inline State LookupInHolder(Map* map);
   Handle<Object> FetchValue() const;
 
   bool IsBootstrapping() const;
@@ -173,6 +174,16 @@ class LookupIterator V8_FINAL BASE_EMBEDDED {
   }
   bool check_access_check() const {
     return (configuration_ & CHECK_ACCESS_CHECK) != 0;
+  }
+  int descriptor_number() const {
+    DCHECK(has_property_);
+    DCHECK_EQ(DESCRIPTOR, property_encoding_);
+    return number_;
+  }
+  int dictionary_entry() const {
+    DCHECK(has_property_);
+    DCHECK_EQ(DICTIONARY, property_encoding_);
+    return number_;
   }
 
   Configuration configuration_;

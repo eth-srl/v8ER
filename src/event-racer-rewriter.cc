@@ -89,7 +89,6 @@ ForOfStatement *EventRacerRewriter::doVisit(ForOfStatement *st) {
   // TODO rewrite(this, st->each_);
   rewrite(this, st->subject_);
   rewrite(this, st->body_);
-  rewrite(this, st->assign_iterable_);
   rewrite(this, st->assign_iterator_);
   rewrite(this, st->next_result_);
   rewrite(this, st->result_done_);
@@ -488,7 +487,6 @@ void AstSlotCounter::VisitForOfStatement(ForOfStatement *st) {
   traverse(this, st->each());
   traverse(this, st->subject());
   traverse(this, st->body());
-  traverse(this, st->assign_iterable());
   traverse(this, st->assign_iterator());
   traverse(this, st->next_result());
   traverse(this, st->result_done());

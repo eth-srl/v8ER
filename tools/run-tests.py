@@ -59,9 +59,10 @@ TIMEOUT_SCALEFACTOR = {"debug"   : 4,
 VARIANT_FLAGS = {
     "default": [],
     "stress": ["--stress-opt", "--always-opt"],
+    "turbofan": ["--turbo-filter=*", "--always-opt"],
     "nocrankshaft": ["--nocrankshaft"]}
 
-VARIANTS = ["default", "stress", "nocrankshaft"]
+VARIANTS = ["default", "stress", "turbofan", "nocrankshaft"]
 
 MODE_FLAGS = {
     "debug"   : ["--nohard-abort", "--nodead-code-elimination",
@@ -213,6 +214,9 @@ def BuildOptions():
                     default=False, action="store_true")
   result.add_option("-t", "--timeout", help="Timeout in seconds",
                     default= -1, type="int")
+  result.add_option("--tsan",
+                    help="Regard test expectations for TSAN",
+                    default=False, action="store_true")
   result.add_option("-v", "--verbose", help="Verbose output",
                     default=False, action="store_true")
   result.add_option("--valgrind", help="Run tests through valgrind",
@@ -274,6 +278,9 @@ def ProcessOptions(options):
 
   if options.asan:
     options.extra_flags.append("--invoke-weak-callbacks")
+
+  if options.tsan:
+    VARIANTS = ["default"]
 
   if options.j == 0:
     options.j = multiprocessing.cpu_count()
@@ -459,6 +466,7 @@ def Execute(arch, mode, args, options, suites, workspace):
     "simulator_run": simulator_run,
     "simulator": utils.UseSimulator(arch),
     "system": utils.GuessOS(),
+    "tsan": options.tsan,
   }
   all_tests = []
   num_tests = 0

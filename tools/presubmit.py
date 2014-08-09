@@ -62,7 +62,6 @@ legal/copyright
 readability/boost
 readability/braces
 readability/casting
-readability/check
 readability/constructors
 readability/fn_size
 readability/function
@@ -81,7 +80,6 @@ runtime/mutex
 runtime/nonconf
 runtime/printf
 runtime/printf_format
-runtime/references
 runtime/rtti
 runtime/sizeof
 runtime/string
@@ -102,6 +100,7 @@ whitespace/tab
 whitespace/todo
 """.split()
 
+# TODO(bmeurer): Fix and re-enable readability/check
 
 LINT_OUTPUT_PATTERN = re.compile(r'^.+[:(]\d+[:)]|^Done processing')
 
