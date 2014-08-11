@@ -11967,6 +11967,7 @@ class ScopeIterator {
         }
         if (Parser::Parse(&info) && Scope::Analyze(&info)) {
           scope = info.function()->scope();
+          info.PrepareForCompilation(scope);
         }
         RetrieveScopeChain(scope, shared_info);
       } else {
@@ -11974,6 +11975,7 @@ class ScopeIterator {
         CompilationInfoWithZone info(shared_info);
         if (Parser::Parse(&info) && Scope::Analyze(&info)) {
           scope = info.function()->scope();
+          info.PrepareForCompilation(scope);
         }
         RetrieveScopeChain(scope, shared_info);
       }

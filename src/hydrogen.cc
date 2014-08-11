@@ -7764,6 +7764,8 @@ bool HOptimizedGraphBuilder::TryInline(Handle<JSFunction> target,
     TraceInline(target, caller, "parse failure");
     return false;
   }
+  target_info.PrepareForCompilation(target_info.function()->scope());
+  DCHECK(target_info.scope() != NULL);
 
   if (target_info.scope()->num_heap_slots() > 0) {
     TraceInline(target, caller, "target has context-allocated variables");

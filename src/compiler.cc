@@ -690,6 +690,7 @@ static bool CompileUnoptimizedCode(CompilationInfo* info) {
       info->function()->Accept(&cnt);
     }
   }
+  info->PrepareForCompilation(info->function()->scope());
   DCHECK(info->scope() != NULL);
 
   if (!FullCodeGenerator::MakeCode(info)) {
@@ -1192,6 +1193,7 @@ static bool CompileOptimizedPrologue(CompilationInfo* info) {
 
   if (!Rewriter::Rewrite(info)) return false;
   if (!Scope::Analyze(info)) return false;
+  info->PrepareForCompilation(info->function()->scope());
   DCHECK(info->scope() != NULL);
   return true;
 }

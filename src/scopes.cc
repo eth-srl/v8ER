@@ -286,7 +286,6 @@ bool Scope::Analyze(CompilationInfo* info) {
   }
 #endif
 
-  info->PrepareForCompilation(scope);
   return true;
 }
 
