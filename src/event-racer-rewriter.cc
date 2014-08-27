@@ -27,7 +27,6 @@ EventRacerRewriter::AstRewriterImpl(CompilationInfo *info)
 }
 
 Scope *EventRacerRewriter::NewScope(Scope* outer, ScopeType type) {
-  
   Scope* s = new (zone()) Scope(outer ? outer : info_->global_scope(),
                                 type, info_->ast_value_factory(),
                                 zone());
@@ -49,7 +48,7 @@ void EventRacerRewriter::ensure_arg_names(int n) {
 template<typename T> void rewrite(AstRewriter *w, T *&node) {
   if (node)
     node = node->Accept(w);
-};
+}
 
 template<typename T> void rewrite(AstRewriter *w, ZoneList<T *> *lst) {
   if (lst) {
@@ -211,10 +210,10 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
 
   // |obj.key|
   //  => |(function(o) { return ER_readProp(p, "key", o.key); })(obj)|
-  
+
   // If the key as a general expression, the Property is rewritten into
   // a call like:
- 
+
   // |obj.key|
   //  => |(function(o, k) { return ER_readProp(o, k, o[k]); })(obj, key);|
 
@@ -238,7 +237,7 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
   ZoneList<Expression*> *args = new (zone()) ZoneList<Expression*>(3, zone());
 
   // First argument is the |$obj| parameter.
-  VariableProxy *o_proxy = 
+  VariableProxy *o_proxy =
     scope->NewUnresolved(&factory_, o_string_, Interface::NewValue(),
                          p->position());
   args->Add(o_proxy, zone());
@@ -330,7 +329,7 @@ Call* EventRacerRewriter::doVisit(Call *c) {
   ZoneList<Expression*> *args = new (zone()) ZoneList<Expression*>(3, zone());
 
   // First argument is the |$obj| parameter.
-  VariableProxy *o_proxy = 
+  VariableProxy *o_proxy =
     scope->NewUnresolved(&factory_, o_string_, Interface::NewValue(),
                          c->position());
   args->Add(o_proxy, zone());
@@ -510,7 +509,7 @@ template<typename T> void traverse(AstVisitor *v, ZoneList<T *> *lst) {
     }
   AST_LEAF_NODE_LIST(LEAF_VISIT)
 #undef LEAF_VISIT
-    
+
 void AstSlotCounter::VisitVariableDeclaration(VariableDeclaration *dcl) {
   add_node();
   traverse(this, dcl->proxy());
@@ -685,7 +684,7 @@ void AstSlotCounter::VisitProperty(Property *p) {
 void AstSlotCounter::VisitCall(Call *c) {
   add_node();
   add_feedback_slot(c);
-  traverse(this, c->expression());    
+  traverse(this, c->expression());
   traverse(this, c->arguments());
 }
 
