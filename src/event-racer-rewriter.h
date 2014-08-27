@@ -119,8 +119,10 @@ private:
   VariableProxy *ER_read_proxy_;
   VariableProxy *ER_readProp_proxy_;
   const AstRawString *o_string_, *k_string_;
+  ZoneList<const AstRawString *> *arg_names_;
 
   Scope *NewScope(Scope* outer, ScopeType type);
+  void ensure_arg_names(int n);
 };
 
 typedef AstRewriterImpl<EventRacerRewriterTag> EventRacerRewriter;
