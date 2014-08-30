@@ -582,6 +582,8 @@ class ParserTraits {
   V8_INLINE void CheckConflictingVarDeclarations(v8::internal::Scope* scope,
                                                  bool* ok);
 
+  static int next_ast_node_id(Zone *z) { return z->isolate()->ast_node_id(); }
+
  private:
   Parser* parser_;
 };

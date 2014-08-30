@@ -9,6 +9,7 @@ namespace internal {
 EventRacerRewriter::AstRewriterImpl(CompilationInfo *info)
   : info_(info), post_scope_analysis_(false),
     current_context_(NULL),
+    id_alloc_scope_(NULL),
     factory_(info_->zone(), info_->ast_value_factory()),
     arg_names_(NULL) {
 
@@ -17,15 +18,23 @@ EventRacerRewriter::AstRewriterImpl(CompilationInfo *info)
   Scope &globals = *info->global_scope();
   AstValueFactory &values = *info->ast_value_factory();
 
-  Variable *v;
-  v = globals.DeclareDynamicGlobal(values.GetOneByteString("ER_read"));
-  ER_read_proxy_ = factory_.NewVariableProxy(v);
-  ER_read_proxy_->set_do_not_instrument();
-  v = globals.DeclareDynamicGlobal(values.GetOneByteString("ER_readProp"));
-  ER_readProp_proxy_ = factory_.NewVariableProxy(v);
-  ER_readProp_proxy_->set_do_not_instrument();
+  ER_read_ = globals.DeclareDynamicGlobal(values.GetOneByteString("ER_read"));
+  ER_readProp_ =
+    globals.DeclareDynamicGlobal(values.GetOneByteString("ER_readProp"));
   o_string_ = values.GetOneByteString("$obj");
   k_string_ = values.GetOneByteString("$key");
+}
+
+VariableProxy *EventRacerRewriter::ER_read_proxy(Scope *scope) {
+  VariableProxy *vp = factory_.NewVariableProxy(ER_read_);
+  vp->set_do_not_instrument();
+  return vp;
+}
+
+VariableProxy *EventRacerRewriter::ER_readProp_proxy(Scope *scope) {
+  VariableProxy *vp = factory_.NewVariableProxy(ER_readProp_);
+  vp->set_do_not_instrument();
+  return vp;
 }
 
 Scope *EventRacerRewriter::NewScope(Scope* outer, ScopeType type) {
@@ -34,6 +43,12 @@ Scope *EventRacerRewriter::NewScope(Scope* outer, ScopeType type) {
                                 zone());
   s->Initialize();
   return s;
+}
+
+VariableProxy *EventRacerRewriter::NewProxy(Scope *scope,
+                                            const AstRawString *name,
+                                            int pos) {
+  return scope->NewUnresolved(&factory_, name, Interface::NewValue(), pos);
 }
 
 void EventRacerRewriter::ensure_arg_names(int n) {
@@ -45,6 +60,34 @@ void EventRacerRewriter::ensure_arg_names(int n) {
     arg_names_->Add(info_->ast_value_factory()->GetOneByteString(buf.start()),
                     zone());
   }
+}
+
+int EventRacerRewriter::ast_node_id() const {
+  return isolate()->ast_node_id();
+}
+
+void EventRacerRewriter::set_ast_node_id(int id) {
+  isolate()->set_ast_node_id(id);
+}
+
+bool EventRacerRewriter::is_literal_key(const Expression *ex) const {
+  if (const Literal *lit = ex->AsLiteral()) {
+    const AstValue *v = lit->raw_value();
+    return v->IsString() || v->IsNumber();
+  }
+  return false;
+}
+
+Literal *EventRacerRewriter::duplicate_key(const Literal *lit) {
+  const AstValue *value = lit->raw_value();
+  if (value->IsString())
+    return factory_.NewStringLiteral(value->AsString(), lit->position());
+  else if (value->IsSmi())
+    return factory_.NewSmiLiteral(value->AsSmi(), lit->position());
+  else if (value->IsNumber())
+    return factory_.NewNumberLiteral(value->AsNumber(), lit->position());
+  UNREACHABLE();
+  return NULL;
 }
 
 template<typename T> void rewrite(AstRewriter *w, T *&node) {
@@ -171,15 +214,13 @@ Expression* EventRacerRewriter::doVisit(VariableProxy *vp) {
   // Postpone the rewriting of variable proxies for after the scope
   // analysis and variable resolution have ran.
   if (!post_scope_analysis_) {
-    if (vp->var() == NULL)
+    if (vp->var() == NULL) {
       // If the variable proxy is not yet bound to a variable, record it
       // as unresolved in the current scope. Note that we may introduce
       // scopes, for which the parser haven't had the chance to record
       // the names, which need resolutuion.
-      vp = context()->scope->NewUnresolved(&factory_,
-                                           vp->raw_name(),
-                                           Interface::NewValue(),
-                                           vp->position());
+      vp = NewProxy(context()->scope, vp->raw_name(), vp->position());
+    }
     return vp;
   }
 
@@ -194,9 +235,8 @@ Expression* EventRacerRewriter::doVisit(VariableProxy *vp) {
   ZoneList<Expression*> *args = new (zone()) ZoneList<Expression*>(2, zone());
   args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()), zone());
   args->Add(vp, zone());
-  return factory_.NewCall(ER_read_proxy_, args, vp->position());
+  return factory_.NewCall(ER_read_proxy(context()->scope), args, vp->position());
 }
-
 
 Expression* EventRacerRewriter::doVisit(Property *p) {
 
@@ -224,47 +264,61 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
   // avoids capturing variabes in the inner closure, which may cause
   // them to be context allocated.
 
-  Expression *obj = p->obj_, *key = p->key_;
+  Scope *scope;
+  ZoneList<Statement*> *body;
+  ZoneList<Expression*> *args;
+  int fn_ast_node_id;
+  Expression *obj = p->obj(), *key = p->key();
+  {
+    AstNodeIdAllocationScope _(this);
 
-  Scope *scope = NewScope(context()->scope, FUNCTION_SCOPE);
-  scope->set_start_position(p->position());
-  scope->set_end_position(p->position() + 1);
+    scope = NewScope(context()->scope, FUNCTION_SCOPE);
+    scope->set_start_position(p->position());
+    scope->set_end_position(p->position() + 1);
 
-  // Declare parameters of the new function.
-  scope->DeclareParameter(o_string_, VAR);
-  if (!key->IsLiteral())
-    scope->DeclareParameter(k_string_, VAR);
+    // Declare parameters of the new function.
+    scope->DeclareParameter(o_string_, VAR);
+    if (!is_literal_key(key))
+      scope->DeclareParameter(k_string_, VAR);
 
-  // Setup arguments of the call to |ER_readProp|.
-  ZoneList<Expression*> *args = new (zone()) ZoneList<Expression*>(3, zone());
+    // The |$obj| parameter is referenced in two places, so is the
+    // |$key| parameter. Create separate AST nodes for each reference.
+    Expression *o[2], *k[2];
+    o[0] = NewProxy(scope, o_string_, p->position());
+    o[1] = NewProxy(scope, o_string_, p->position());
 
-  // First argument is the |$obj| parameter.
-  VariableProxy *o_proxy =
-    scope->NewUnresolved(&factory_, o_string_, Interface::NewValue(),
-                         p->position());
-  args->Add(o_proxy, zone());
+    if (is_literal_key(key)) {
+      k[0] = duplicate_key(key->AsLiteral());
+      k[1] = duplicate_key(key->AsLiteral());
+    } else {
+      k[0] = NewProxy(scope, k_string_, p->position());
+      k[1] = NewProxy(scope, k_string_, p->position());
+    }
 
-  // Second argument is either the |$key| parameter or, if the
-  // property name is a literal, the literal itself.
-  if (key->IsLiteral())
-    args->Add(key, zone());
-  else {
-    VariableProxy *k_proxy;
-    k_proxy = scope->NewUnresolved(&factory_, k_string_, Interface::NewValue(),
-                                   p->position());
-    args->Add(k_proxy, zone());
-    p->key_ = k_proxy;
+    // Setup arguments of the call to |ER_readProp|.
+    args = new (zone()) ZoneList<Expression*>(3, zone());
+
+    // First argument is the |$obj| parameter.
+    args->Add(o[0], zone());
+
+    // Second argument is either the |$key| parameter or, if the
+    // property name is a literal, the literal itself.
+    args->Add(k[0], zone());
+
+    // Third argument is the property expression.
+    args->Add(factory_.NewProperty(o[1], k[1], p->position()), zone());
+
+    // Create the return statement.
+    body = new (zone()) ZoneList<Statement*>(1, zone());
+    body->Add(factory_.NewReturnStatement(
+                factory_.NewCall(ER_readProp_proxy(scope), args, p->position()),
+                p->position()),
+              zone());
+    fn_ast_node_id = ast_node_id();
   }
-  p->obj_ = o_proxy;
-
-  // Third parameter is the property expression.
-  args->Add(p, zone());
-  Call *ret = factory_.NewCall(ER_readProp_proxy_, args, p->position());
 
   // Define the new function.
-  ZoneList<Statement*> *body = new (zone()) ZoneList<Statement*>(1, zone());
-
-  FunctionLiteral* fn = factory_.NewFunctionLiteral(
+  FunctionLiteral *fn = factory_.NewFunctionLiteral(
     info_->ast_value_factory()->empty_string(),
     info_->ast_value_factory(),
     scope,
@@ -272,19 +326,19 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
     /* materialized_literal_count */ 0,
     /* expected_property_count */ 0,
     /* handler_count */ 0,
-    /* num_parameters */ 1 + !key->IsLiteral(),
+    /* num_parameters */ 1 + !is_literal_key(key),
     FunctionLiteral::kNoDuplicateParameters,
     FunctionLiteral::ANONYMOUS_EXPRESSION,
     FunctionLiteral::kIsFunction,
     FunctionLiteral::kIsParenthesized,
     FunctionLiteral::kNormalFunction,
     p->position());
-  body->Add(factory_.NewReturnStatement(ret, p->position()), zone());
+  fn->set_next_ast_node_id(fn_ast_node_id);
 
   // Build the call to the new function.
   args = new (zone()) ZoneList<Expression*>(2, zone());
   args->Add(obj, zone());
-  if (!key->IsLiteral())
+  if (!is_literal_key(key))
     args->Add(key, zone());
 
   return factory_.NewCall(fn, args, p->position());
@@ -311,67 +365,83 @@ Call* EventRacerRewriter::doVisit(Call *c) {
   // instrumented expression, which also contains an analoguos property
   // call.
 
-  Property *p = c->expression_->AsProperty();
-  Expression *obj = p->obj_, *key = p->key_;
-
-  Scope *scope = NewScope(context()->scope, FUNCTION_SCOPE);
-  scope->set_start_position(c->position());
-  scope->set_end_position(c->position() + 1);
-
-  // Declare parameters of the new function.
+  Scope *scope;
+  ZoneList<Expression*> *args;
+  ZoneList<Statement*> *body;
+  int fn_ast_node_id;
+  Property *p = c->expression()->AsProperty();
+  Expression *obj = p->obj(), *key = p->key();
   const int n = c->arguments()->length();
-  ensure_arg_names(n);
-  for (int i = 0; i < n; ++i)
-    scope->DeclareParameter(arg_names_->at(i), VAR);
-  scope->DeclareParameter(o_string_, VAR);
-  if (!key->IsLiteral())
-    scope->DeclareParameter(k_string_, VAR);
+  {
+    AstNodeIdAllocationScope _(this);
 
-  // Setup arguments of the call to |ER_readProp|.
-  ZoneList<Expression*> *args = new (zone()) ZoneList<Expression*>(3, zone());
+    scope = NewScope(context()->scope, FUNCTION_SCOPE);
+    scope->set_start_position(c->position());
+    scope->set_end_position(c->position() + 1);
 
-  // First argument is the |$obj| parameter.
-  VariableProxy *o_proxy =
-    scope->NewUnresolved(&factory_, o_string_, Interface::NewValue(),
-                         c->position());
-  args->Add(o_proxy, zone());
+    // Declare parameters of the new function.
+    ensure_arg_names(n);
+    for (int i = 0; i < n; ++i)
+      scope->DeclareParameter(arg_names_->at(i), VAR);
+    scope->DeclareParameter(o_string_, VAR);
+    if (!is_literal_key(key))
+      scope->DeclareParameter(k_string_, VAR);
 
-  // Second argument is either the |$key| parameter or, if the
-  // property name is a literal, the literal itself.
-  if (key->IsLiteral())
-    args->Add(key, zone());
-  else {
-    VariableProxy *k_proxy;
-    k_proxy = scope->NewUnresolved(&factory_, k_string_, Interface::NewValue(),
-                                   c->position());
-    args->Add(k_proxy, zone());
-    p->key_ = k_proxy;
-  }
-  p->obj_ = o_proxy;
+    // The |$obj| parameter is referenced in three places, so is the
+    // |$key| parameter. Create separate AST nodes for each reference.
+    Expression *o[3], *k[3];
+    o[0] = NewProxy(scope, o_string_, p->position());
+    o[1] = NewProxy(scope, o_string_, p->position());
+    o[2] = NewProxy(scope, o_string_, p->position());
 
-  // Third parameter is the property expression.
-  args->Add(p, zone());
-  Statement *er_call = factory_.NewExpressionStatement(
-    factory_.NewCall(ER_readProp_proxy_, args, c->position()),
-    c->position());
+    if (is_literal_key(key)) {
+      k[0] = duplicate_key(key->AsLiteral());
+      k[1] = duplicate_key(key->AsLiteral());
+      k[2] = duplicate_key(key->AsLiteral());
+    } else {
+      k[0] = NewProxy(scope, k_string_, c->position());
+      k[1] = NewProxy(scope, k_string_, c->position());
+      k[2] = NewProxy(scope, k_string_, c->position());
+    }
 
-  // Build the inner property call.
-  args = new (zone()) ZoneList<Expression *>(n, zone());
-  for (int i = 0; i < n; ++i) {
-    args->Add(scope->NewUnresolved(&factory_, arg_names_->at(i),
-                                   Interface::NewValue(), c->position()),
+    // Setup arguments of the call to |ER_readProp|.
+    args = new (zone()) ZoneList<Expression*>(3, zone());
+
+    // First argument is the |$obj| parameter.
+    args->Add(o[0], zone());
+
+    // Second argument is either the |$key| parameter or, if the
+    // property name is a literal, the literal itself.
+    args->Add(k[0], zone());
+
+    // Third argument is the property expression.
+    args->Add(factory_.NewProperty(o[1], k[1], p->position()), zone());
+
+    Statement *er_call = factory_.NewExpressionStatement(
+      factory_.NewCall(ER_readProp_proxy(scope), args, c->position()),
+      c->position());
+
+    body = new (zone()) ZoneList<Statement*>(1, zone());
+    body->Add(factory_.NewExpressionStatement(
+                factory_.NewCall(ER_readProp_proxy(scope), args, c->position()),
+                c->position()),
               zone());
-  }
 
-  Statement *ret = factory_.NewReturnStatement(
-    factory_.NewCall(factory_.NewProperty(p->obj_, p->key_, p->position()),
-                     args, c->position()),
-    c->position());
+    // Build the inner property call.
+    args = new (zone()) ZoneList<Expression *>(n, zone());
+    for (int i = 0; i < n; ++i)
+      args->Add(NewProxy(scope, arg_names_->at(i), c->position()), zone());
+    body->Add(factory_.NewReturnStatement(
+                factory_.NewCall(factory_.NewProperty(o[2], k[2], p->position()),
+                                 args, c->position()),
+                c->position()),
+              zone());
+
+    fn_ast_node_id = ast_node_id();
+  }
 
   // Define the new function.
-  ZoneList<Statement*> *body = new (zone()) ZoneList<Statement*>(1, zone());
-
-  FunctionLiteral* fn = factory_.NewFunctionLiteral(
+  FunctionLiteral *fn = factory_.NewFunctionLiteral(
     info_->ast_value_factory()->empty_string(),
     info_->ast_value_factory(),
     scope,
@@ -379,22 +449,21 @@ Call* EventRacerRewriter::doVisit(Call *c) {
     /* materialized_literal_count */ 0,
     /* expected_property_count */ 0,
     /* handler_count */ 0,
-    /* num_parameters */ n + 1 + !key->IsLiteral(),
+    /* num_parameters */ n + 1 + !is_literal_key(key),
     FunctionLiteral::kNoDuplicateParameters,
     FunctionLiteral::ANONYMOUS_EXPRESSION,
     FunctionLiteral::kIsFunction,
     FunctionLiteral::kIsParenthesized,
     FunctionLiteral::kNormalFunction,
     c->position());
-  body->Add(er_call, zone());
-  body->Add(ret, zone());
+  fn->set_next_ast_node_id(fn_ast_node_id);
 
   // Build the call to the new function.
   args = new (zone()) ZoneList<Expression*>(n + 2, zone());
   for (int i = 0; i < n; ++i)
     args->Add(c->arguments()->at(i), zone());
   args->Add(obj, zone());
-  if (!key->IsLiteral())
+  if (!is_literal_key(key))
     args->Add(key, zone());
 
   return factory_.NewCall(fn, args, p->position());
@@ -459,7 +528,9 @@ Throw* EventRacerRewriter::doVisit(Throw *op) {
 
 FunctionLiteral* EventRacerRewriter::doVisit(FunctionLiteral *lit) {
   ContextScope _(this, lit->scope());
+  AstNodeIdAllocationScope __(this, lit);
   rewrite(this, lit->body());
+  lit->set_next_ast_node_id(ast_node_id());
   return lit;
 }
 

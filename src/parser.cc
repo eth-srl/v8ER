@@ -877,6 +877,7 @@ FunctionLiteral* Parser::DoParseProgram(CompilationInfo* info,
       result->set_ast_properties(factory()->visitor()->ast_properties());
       result->set_dont_optimize_reason(
           factory()->visitor()->dont_optimize_reason());
+      result->set_next_ast_node_id(isolate()->ast_node_id());
     } else if (stack_overflow()) {
       isolate()->StackOverflow();
     } else {
@@ -3414,6 +3415,7 @@ FunctionLiteral* Parser::ParseFunctionLiteral(
       : FunctionLiteral::kNotParenthesized;
   AstProperties ast_properties;
   BailoutReason dont_optimize_reason = kNoReason;
+  int next_ast_node_id;
   // Parse function body.
   {
     FunctionState function_state(&function_state_, &scope_, scope, zone(),
@@ -3576,6 +3578,7 @@ FunctionLiteral* Parser::ParseFunctionLiteral(
     }
     ast_properties = *factory()->visitor()->ast_properties();
     dont_optimize_reason = factory()->visitor()->dont_optimize_reason();
+    next_ast_node_id = isolate()->ast_node_id();
 
     if (allow_harmony_scoping() && strict_mode() == STRICT) {
       CheckConflictingVarDeclarations(scope, CHECK_OK);
@@ -3593,6 +3596,7 @@ FunctionLiteral* Parser::ParseFunctionLiteral(
   function_literal->set_function_token_position(function_token_pos);
   function_literal->set_ast_properties(&ast_properties);
   function_literal->set_dont_optimize_reason(dont_optimize_reason);
+  function_literal->set_next_ast_node_id(next_ast_node_id);
 
   if (fni_ != NULL && should_infer_name) fni_->AddFunction(function_literal);
   return function_literal;

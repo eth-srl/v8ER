@@ -2603,6 +2603,9 @@ class FunctionLiteral V8_FINAL : public Expression {
     dont_optimize_reason_ = reason;
   }
 
+  int next_ast_node_id() const { return next_ast_node_id_; }
+  void set_next_ast_node_id(int id) { next_ast_node_id_ = id; }
+
  protected:
   FunctionLiteral(Zone* zone, const AstRawString* name,
                   AstValueFactory* ast_value_factory, Scope* scope,
@@ -2623,6 +2626,7 @@ class FunctionLiteral V8_FINAL : public Expression {
         expected_property_count_(expected_property_count),
         handler_count_(handler_count),
         parameter_count_(parameter_count),
+        next_ast_node_id_(-1),
         function_token_position_(RelocInfo::kNoPosition) {
     bitfield_ = IsExpression::encode(function_type != DECLARATION) |
                 IsAnonymous::encode(function_type == ANONYMOUS_EXPRESSION) |
@@ -2649,6 +2653,7 @@ class FunctionLiteral V8_FINAL : public Expression {
   int expected_property_count_;
   int handler_count_;
   int parameter_count_;
+  int next_ast_node_id_;
   int function_token_position_;
 
   unsigned bitfield_;
@@ -3217,8 +3222,8 @@ protected:
     zone_ = zone;
     stack_overflow_ = false;
   }
-  Zone* zone() { return zone_; }
-  Isolate* isolate() { return zone_->isolate(); }
+  Zone* zone() const { return zone_; }
+  Isolate* isolate() const { return zone_->isolate(); }
 
   Zone* zone_;
   bool stack_overflow_;

@@ -103,6 +103,32 @@ private:
     ContextScope *prev;
   };
 
+  struct AstNodeIdAllocationScope {
+    AstNodeIdAllocationScope(AstRewriterImpl<EventRacerRewriterTag> *w)
+      : rewriter(w) {
+      prev = w->id_alloc_scope_;
+      saved_ast_node_id = w->ast_node_id();
+      w->set_ast_node_id(BailoutId::FirstUsable().ToInt());
+    }
+
+    AstNodeIdAllocationScope(AstRewriterImpl<EventRacerRewriterTag> *w,
+                             FunctionLiteral *fn)
+      : rewriter(w) {
+      prev = w->id_alloc_scope_;
+      saved_ast_node_id = w->ast_node_id();
+      w->set_ast_node_id(fn->next_ast_node_id());
+    }
+
+    ~AstNodeIdAllocationScope() {
+      rewriter->set_ast_node_id(saved_ast_node_id);
+      rewriter->id_alloc_scope_ = prev;
+    }
+
+    int saved_ast_node_id;
+    AstRewriterImpl<EventRacerRewriterTag> *rewriter;
+    AstNodeIdAllocationScope *prev;
+  };
+
   bool is_potentially_shared(const VariableProxy *vp) const {
     DCHECK(post_scope_analysis_);
     if (vp->do_not_instrument())
@@ -116,15 +142,24 @@ private:
   CompilationInfo *info_;
   bool post_scope_analysis_;
   ContextScope *current_context_;
+  AstNodeIdAllocationScope *id_alloc_scope_;
 
   AstNodeFactory<AstNullVisitor> factory_;
-  VariableProxy *ER_read_proxy_;
-  VariableProxy *ER_readProp_proxy_;
+  Variable *ER_read_;
+  Variable *ER_readProp_;
   const AstRawString *o_string_, *k_string_;
   ZoneList<const AstRawString *> *arg_names_;
 
+  VariableProxy *ER_read_proxy(Scope *);
+  VariableProxy *ER_readProp_proxy(Scope *);
   Scope *NewScope(Scope* outer, ScopeType type);
+  VariableProxy *NewProxy(Scope *, const AstRawString *, int);
   void ensure_arg_names(int n);
+  int ast_node_id() const;
+  void set_ast_node_id(int);
+
+  bool is_literal_key(const Expression *) const;
+  Literal *duplicate_key(const Literal *);
 };
 
 typedef AstRewriterImpl<EventRacerRewriterTag> EventRacerRewriter;

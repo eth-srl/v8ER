@@ -726,6 +726,7 @@ class PreParserExpression {
   void set_function_token_position(int position) {}
   void set_ast_properties(int* ast_properties) {}
   void set_dont_optimize_reason(BailoutReason dont_optimize_reason) {}
+  void set_next_ast_node_id(int) {}
 
   bool operator==(const PreParserExpression& other) const {
     return code_ == other.code_;
@@ -1278,6 +1279,8 @@ class PreParserTraits {
       FunctionLiteral::FunctionType type,
       FunctionLiteral::ArityRestriction arity_restriction,
       bool* ok);
+
+  static int next_ast_node_id(Type::Zone *) { return 0; }
 
  private:
   PreParser* pre_parser_;
@@ -2550,6 +2553,7 @@ typename ParserBase<Traits>::ExpressionT ParserBase<
   function_literal->set_function_token_position(start_pos);
   function_literal->set_ast_properties(&ast_properties);
   function_literal->set_dont_optimize_reason(dont_optimize_reason);
+  function_literal->set_next_ast_node_id(Traits::next_ast_node_id(zone()));
 
   if (fni_ != NULL) this->InferFunctionName(fni_, function_literal);
 

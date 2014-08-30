@@ -146,6 +146,10 @@ class AstValue : public ZoneObject {
     return type_ == NUMBER || type_ == SMI;
   }
 
+  bool IsSmi() const {
+    return type_ == SMI;
+  }
+
   const AstRawString* AsString() const {
     if (type_ == STRING)
       return string_;
@@ -160,6 +164,10 @@ class AstValue : public ZoneObject {
       return smi_;
     UNREACHABLE();
     return 0;
+  }
+
+  int AsSmi() const {
+    return smi_;
   }
 
   bool EqualsString(const AstRawString* string) const {

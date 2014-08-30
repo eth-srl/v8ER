@@ -260,6 +260,7 @@ bool Rewriter::Rewrite(CompilationInfo* info) {
           processor.factory()->NewReturnStatement(result_proxy, pos);
       body->Add(result_statement, info->zone());
     }
+    function->set_next_ast_node_id(info->isolate()->ast_node_id());
   }
 
   return true;
