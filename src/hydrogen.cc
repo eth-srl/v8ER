@@ -10,6 +10,7 @@
 
 #include "src/allocation-site-scopes.h"
 #include "src/codegen.h"
+#include "src/event-racer-rewriter.h"
 #include "src/full-codegen.h"
 #include "src/hashmap.h"
 #include "src/hydrogen-bce.h"
@@ -7755,7 +7756,25 @@ bool HOptimizedGraphBuilder::TryInline(Handle<JSFunction> target,
   // step, but don't transfer ownership to target_info.
   target_info.SetAstValueFactory(top_info()->ast_value_factory(), false);
   Handle<SharedFunctionInfo> target_shared(target->shared());
-  if (!Parser::Parse(&target_info) || !Scope::Analyze(&target_info)) {
+  bool ok = false;
+  if (target_info.is_native() || !FLAG_instrument)
+    ok = Parser::Parse(&target_info) && Scope::Analyze(&target_info);
+  else {
+    if (Parser::Parse(&target_info)) {
+      EventRacerRewriter rw(&target_info);
+      target_info.function()->Accept(&rw);
+
+      if (Scope::Analyze(&target_info)) {
+        rw.scope_analysis_complete();
+        target_info.function()->Accept(&rw);
+
+        AstSlotCounter cnt;
+        target_info.function()->Accept(&cnt);
+        ok = true;
+      }
+    }
+  }
+  if (!ok) {
     if (target_info.isolate()->has_pending_exception()) {
       // Parse or scope error, never optimize this function.
       SetStackOverflow();
