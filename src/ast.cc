@@ -72,6 +72,7 @@ VariableProxy::VariableProxy(Zone* zone, Variable* var, int position)
       var_(NULL),  // Will be set by the call to BindTo.
       is_this_(var->is_this()),
       is_assigned_(false),
+      do_not_instrument_(false),
       interface_(var->interface()),
       variable_feedback_slot_(kInvalidFeedbackSlot) {
   BindTo(var);
@@ -88,6 +89,7 @@ VariableProxy::VariableProxy(Zone* zone,
       var_(NULL),
       is_this_(is_this),
       is_assigned_(false),
+      do_not_instrument_(false),
       interface_(interface),
       variable_feedback_slot_(kInvalidFeedbackSlot) {
 }

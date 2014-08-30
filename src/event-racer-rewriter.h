@@ -105,8 +105,10 @@ private:
 
   bool is_potentially_shared(const VariableProxy *vp) const {
     DCHECK(post_scope_analysis_);
+    if (vp->do_not_instrument())
+      return false;
     Variable *var = vp->var();
-    return var == NULL || (var->mode() < INTERNAL && !var->IsStackAllocated());
+    return var == NULL || !var->IsStackAllocated();
   }
 
   ContextScope *context() const { return current_context_; }

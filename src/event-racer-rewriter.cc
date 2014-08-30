@@ -20,8 +20,10 @@ EventRacerRewriter::AstRewriterImpl(CompilationInfo *info)
   Variable *v;
   v = globals.DeclareDynamicGlobal(values.GetOneByteString("ER_read"));
   ER_read_proxy_ = factory_.NewVariableProxy(v);
+  ER_read_proxy_->set_do_not_instrument();
   v = globals.DeclareDynamicGlobal(values.GetOneByteString("ER_readProp"));
   ER_readProp_proxy_ = factory_.NewVariableProxy(v);
+  ER_readProp_proxy_->set_do_not_instrument();
   o_string_ = values.GetOneByteString("$obj");
   k_string_ = values.GetOneByteString("$key");
 }

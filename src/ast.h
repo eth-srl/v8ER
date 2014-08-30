@@ -1765,6 +1765,9 @@ class VariableProxy V8_FINAL : public Expression, public FeedbackSlotInterface {
   bool is_assigned() const { return is_assigned_; }
   void set_is_assigned() { is_assigned_ = true; }
 
+  bool do_not_instrument() const { return do_not_instrument_; }
+  void set_do_not_instrument() { do_not_instrument_ = true; }
+
   // Bind this proxy to the variable var. Interfaces must match.
   void BindTo(Variable* var);
 
@@ -1788,6 +1791,7 @@ class VariableProxy V8_FINAL : public Expression, public FeedbackSlotInterface {
   Variable* var_;  // resolved variable, or NULL
   bool is_this_;
   bool is_assigned_;
+  bool do_not_instrument_;
   Interface* interface_;
   int variable_feedback_slot_;
 };
