@@ -42,6 +42,7 @@ Scope *EventRacerRewriter::NewScope(Scope* outer, ScopeType type) {
                                 type, info_->ast_value_factory(),
                                 zone());
   s->Initialize();
+  s->ForceEagerCompilation();
   return s;
 }
 
