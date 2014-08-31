@@ -829,6 +829,9 @@ void AstSlotCounter::VisitRegExpLiteral(RegExpLiteral *lit) {
 void AstSlotCounter::VisitFunctionLiteral(FunctionLiteral *fn) {
   add_node();
 
+  if (!fn->body())
+    return;
+
   FunctionState state;
   begin_function(&state);
   Scope *scope = fn->scope();
