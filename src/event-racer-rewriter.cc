@@ -827,9 +827,10 @@ void AstSlotCounter::VisitRegExpLiteral(RegExpLiteral *lit) {
 }
 
 void AstSlotCounter::VisitFunctionLiteral(FunctionLiteral *fn) {
+  add_node();
+
   FunctionState state;
   begin_function(&state);
-  add_node();
   Scope *scope = fn->scope();
   if (scope->is_function_scope())
     traverse(this, scope->function());
@@ -845,5 +846,7 @@ void AstSlotCounter::VisitFunctionLiteral(FunctionLiteral *fn) {
 
   end_function();
 }
+
+AstSlotCounter::FunctionState AstSlotCounter::FunctionState::guard;
 
 } } // namespace v8::internal

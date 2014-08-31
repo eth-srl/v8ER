@@ -166,12 +166,11 @@ typedef AstRewriterImpl<EventRacerRewriterTag> EventRacerRewriter;
 
 class AstSlotCounter : public AstVisitor {
 public:
-  AstSlotCounter() : state_(NULL) {}
+  AstSlotCounter() : state_(&FunctionState::guard) {}
 
 #define DECLARE_VISIT(type) virtual void Visit##type(type* node);
   AST_NODE_LIST(DECLARE_VISIT)
 #undef DECLARE_VISIT
-
 
   void add_node();
   void add_materialized_literal(MaterializedLiteral *);
@@ -189,6 +188,8 @@ private:
     int materialized_literal_count;
     int feedback_slot_count;
     int node_count;
+
+    static FunctionState guard;
   };
 
   void begin_function (FunctionState *st) {
