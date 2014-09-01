@@ -583,7 +583,7 @@ bool Call::IsUsingCallFeedbackSlot(Isolate* isolate) const {
 
 Call::CallType Call::GetCallType(Isolate* isolate) const {
   VariableProxy* proxy = expression()->AsVariableProxy();
-  if (proxy != NULL) {
+  if (proxy != NULL && proxy->var() != NULL) {
     if (proxy->var()->is_possibly_eval(isolate)) {
       return POSSIBLY_EVAL_CALL;
     } else if (proxy->var()->IsUnallocated()) {

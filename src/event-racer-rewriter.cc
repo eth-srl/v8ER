@@ -341,7 +341,10 @@ Call* EventRacerRewriter::doVisit(Call *c) {
   // Calls are rewritten pre scope analysis and non-property-calls
   // aren't treated specially.
   if (post_scope_analysis_ || !c->expression_->IsProperty()) {
-    rewrite(this, c->expression_);
+    // Do not instrument direct |eval| calls, as the instrumentation
+    // changes them into indirect calls and the semantics differ.
+    if (c->GetCallType(zone()->isolate()) != Call::POSSIBLY_EVAL_CALL)
+      rewrite(this, c->expression_);
     rewrite(this, c->arguments());
     return c;
   }
