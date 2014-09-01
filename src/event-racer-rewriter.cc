@@ -410,10 +410,6 @@ Call* EventRacerRewriter::doVisit(Call *c) {
     // Third argument is the property expression.
     args->Add(factory_.NewProperty(o[1], k[1], p->position()), zone());
 
-    Statement *er_call = factory_.NewExpressionStatement(
-      factory_.NewCall(ER_readProp_proxy(scope), args, c->position()),
-      c->position());
-
     body = new (zone()) ZoneList<Statement*>(1, zone());
     body->Add(factory_.NewExpressionStatement(
                 factory_.NewCall(ER_readProp_proxy(scope), args, c->position()),
