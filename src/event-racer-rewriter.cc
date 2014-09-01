@@ -214,16 +214,8 @@ ArrayLiteral* EventRacerRewriter::doVisit(ArrayLiteral *lit) {
 Expression* EventRacerRewriter::doVisit(VariableProxy *vp) {
   // Postpone the rewriting of variable proxies for after the scope
   // analysis and variable resolution have ran.
-  if (!post_scope_analysis_) {
-    if (vp->var() == NULL) {
-      // If the variable proxy is not yet bound to a variable, record it
-      // as unresolved in the current scope. Note that we may introduce
-      // scopes, for which the parser haven't had the chance to record
-      // the names, which need resolutuion.
-      vp = NewProxy(context()->scope, vp->raw_name(), vp->position());
-    }
+  if (!post_scope_analysis_)
     return vp;
-  }
 
   // Instrument only access to potentially shared variables, namely
   // those declared by the user (as opposed to being introduced by the
