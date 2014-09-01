@@ -474,6 +474,9 @@ CallRuntime* EventRacerRewriter::doVisit(CallRuntime *c) {
 }
 
 UnaryOperation* EventRacerRewriter::doVisit(UnaryOperation *op) {
+  if (op->op() == Token::DELETE && op->expression()->IsProperty())
+    return op;
+
   rewrite(this, op->expression_);
   return op;
 }
