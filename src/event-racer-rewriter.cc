@@ -505,8 +505,9 @@ Conditional* EventRacerRewriter::doVisit(Conditional *op) {
 }
 
 Assignment* EventRacerRewriter::doVisit(Assignment *op) {
-  // TODO:  rewrite(this, op->target_);
   rewrite(this, op->value_);
+  if (op->is_compound())
+    op->binary_operation_->right_ = op->value_;
   return op;
 }
 
@@ -800,8 +801,12 @@ void AstSlotCounter::VisitConditional(Conditional *op) {
 
 void AstSlotCounter::VisitAssignment(Assignment *op) {
   add_node();
-  traverse(this, op->target());
-  traverse(this, op->value());
+  if (op->is_compound())
+    traverse(this, op->binary_operation());
+  else {
+    traverse(this, op->target());
+    traverse(this, op->value());
+  }
 }
 
 void AstSlotCounter::VisitYield(Yield *op) {
