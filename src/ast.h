@@ -147,7 +147,6 @@ namespace internal {
   V(CountOperation)                             \
   V(CompareOperation)                           \
   V(Conditional)                                \
-  V(Assignment)                                 \
   V(Yield)                                      \
   V(Throw)                                      \
   V(FunctionLiteral)                            \
@@ -2313,7 +2312,8 @@ class Conditional V8_FINAL : public Expression {
 class Assignment V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(Assignment)
-  DECLARE_FIXED_REWRITE_NODE(Assignment)
+  virtual Expression *Accept(AstRewriter *);
+  template<class> friend class AstRewriterImpl;
 
   Assignment* AsSimpleAssignment() { return !is_compound() ? this : NULL; }
 
@@ -3205,6 +3205,15 @@ class AstRewriter BASE_EMBEDDED {
   }
 
   virtual Expression* doVisit(Property *) = 0;
+
+  Expression *Visit(Assignment *node) {
+    if (!CheckStackOverflow())
+      return doVisit(node);
+    else
+      return node;
+  }
+
+  virtual Expression* doVisit(Assignment *) = 0;
 
   void SetStackOverflow() { stack_overflow_ = true; }
   void ClearStackOverflow() { stack_overflow_ = false; }

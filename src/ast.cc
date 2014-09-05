@@ -35,6 +35,7 @@ AST_FIXED_REWRITE_NODE_LIST(DECL_ACCEPT)
 
 Expression* VariableProxy::Accept(AstRewriter* w) { return w->Visit(this); }
 Expression* Property::Accept(AstRewriter* w) { return w->Visit(this); }
+Expression* Assignment::Accept(AstRewriter* w) { return w->Visit(this); }
 
 // ----------------------------------------------------------------------------
 // Implementation of other node functionality.

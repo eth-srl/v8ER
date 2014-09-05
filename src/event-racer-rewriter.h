@@ -32,7 +32,6 @@ namespace internal {
   V(CountOperation)                             \
   V(CompareOperation)                           \
   V(Conditional)                                \
-  V(Assignment)                                 \
   V(Yield)                                      \
   V(Throw)                                      \
   V(FunctionLiteral)
@@ -76,6 +75,7 @@ public:
 
   virtual Expression* doVisit(VariableProxy *) V8_FINAL V8_OVERRIDE;
   virtual Expression* doVisit(Property *) V8_FINAL V8_OVERRIDE;
+  virtual Expression* doVisit(Assignment *) V8_FINAL V8_OVERRIDE;
 
   void scope_analysis_complete() { post_scope_analysis_ = true; }
 
@@ -146,14 +146,19 @@ private:
 
   AstNodeFactory<AstNullVisitor> factory_;
   Variable *ER_read_;
+  Variable *ER_write_;
   Variable *ER_readProp_;
+  Variable *ER_writeProp_;
   Variable *ER_readPropIdx_;
-  const AstRawString *o_string_, *k_string_;
+  Variable *ER_writePropIdx_;
+  const AstRawString *o_string_, *k_string_, *v_string_;
   ZoneList<const AstRawString *> *arg_names_;
-
   VariableProxy *ER_read_proxy(Scope *);
+  VariableProxy *ER_write_proxy(Scope *);
   VariableProxy *ER_readProp_proxy(Scope *);
+  VariableProxy *ER_writeProp_proxy(Scope *);
   VariableProxy *ER_readPropIdx_proxy(Scope *);
+  VariableProxy *ER_writePropIdx_proxy(Scope *);
   Scope *NewScope(Scope* outer, ScopeType type);
   VariableProxy *NewProxy(Scope *, const AstRawString *, int);
   void ensure_arg_names(int n);
