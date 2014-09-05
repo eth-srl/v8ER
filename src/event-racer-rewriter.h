@@ -147,11 +147,13 @@ private:
   AstNodeFactory<AstNullVisitor> factory_;
   Variable *ER_read_;
   Variable *ER_readProp_;
+  Variable *ER_readPropIdx_;
   const AstRawString *o_string_, *k_string_;
   ZoneList<const AstRawString *> *arg_names_;
 
   VariableProxy *ER_read_proxy(Scope *);
   VariableProxy *ER_readProp_proxy(Scope *);
+  VariableProxy *ER_readPropIdx_proxy(Scope *);
   Scope *NewScope(Scope* outer, ScopeType type);
   VariableProxy *NewProxy(Scope *, const AstRawString *, int);
   void ensure_arg_names(int n);

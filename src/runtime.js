@@ -659,4 +659,7 @@ function ToPositiveInteger(x, rangeErrorName) {
 global.ER_read = function(name, value) { return value; }
 global.ER_write = function(name, value) { return value; }
 global.ER_readProp = function(obj, name, value) { return value; }
+global.ER_readPropIdx = function(arr, idx) {
+    return global.ER_readProp(arr, idx, arr[idx]);
+}
 global.ER_writeProp = function(obj, name, value) { return value; }
