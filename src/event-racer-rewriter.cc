@@ -348,12 +348,14 @@ Call* EventRacerRewriter::doVisit(Call *c) {
   }
 
   // Call of a property is instrumented like:
-  // o.f(e0, e2, ..., en)
+  //
+  // |o.f(e0, e2, ..., en)|
   // =>
-  // (function($a0, $a1, ..., $an, $obj, $key) {
-  //    ER_readProp($obj, $key, $obj.$key);
-  //    return $obj.$key($a0, $a1, ..., $an); })
-  //   (e0, e1, en, ..., o, f)
+  // |(function($obj, $key, $a0, $a1, ..., $an) {|
+  // |   ER_readProp($obj, $key, $obj.$key);     |
+  // |   return $obj.$key($a0, $a1, ..., $an);   |
+  // |})(o, f, e0, e1, ..., en)                  |
+  //
   // Property calls are treated by the compiler in a special manner -
   // the callee gets a receiver object - hence we should end up with an
   // instrumented expression, which also contains an analoguos property
@@ -374,22 +376,30 @@ Call* EventRacerRewriter::doVisit(Call *c) {
     scope->set_end_position(c->position() + 1);
 
     // Declare parameters of the new function.
+    Variable *o_parm = scope->DeclareParameter(o_string_, VAR);
+    o_parm->AllocateTo(Variable::PARAMETER, 0);
+
+    Variable *k_parm = NULL;
+    if (!is_literal_key(key)) {
+      k_parm = scope->DeclareParameter(k_string_, VAR);
+      k_parm->AllocateTo(Variable::PARAMETER, 1);
+    }
+
     ensure_arg_names(n);
-    for (int i = 0; i < n; ++i)
-      scope->DeclareParameter(arg_names_->at(i), VAR);
-    scope->DeclareParameter(o_string_, VAR);
-    if (!is_literal_key(key))
-      scope->DeclareParameter(k_string_, VAR);
+    for (int i = 0; i < n; ++i) {
+      Variable *parm = scope->DeclareParameter(arg_names_->at(i), VAR);
+      parm->AllocateTo(Variable::PARAMETER, i + 1 + !is_literal_key(key));
+    }
 
     // The |$obj| parameter is referenced in three places, so is the
     // |$key| parameter. Create separate AST nodes for each reference.
     Expression *o[3], *k[3];
     for (int i = 0; i < 3; ++i) {
-      o[i] = NewProxy(scope, o_string_, p->position());
+      o[i] = factory_.NewVariableProxy(o_parm);
       if (is_literal_key(key))
         k[i] = duplicate_key(key->AsLiteral());
       else
-        k[i] = NewProxy(scope, k_string_, c->position());
+        k[i] = factory_.NewVariableProxy(k_parm);
     }
 
     // Setup arguments of the call to |ER_readProp|.
@@ -406,8 +416,11 @@ Call* EventRacerRewriter::doVisit(Call *c) {
 
     // Build the inner property call.
     args = new (zone()) ZoneList<Expression *>(n, zone());
-    for (int i = 0; i < n; ++i)
-      args->Add(NewProxy(scope, arg_names_->at(i), c->position()), zone());
+    for (int i = 0; i < n; ++i) {
+      args->Add(factory_.NewVariableProxy(
+                  scope->parameter(i + 1 + !is_literal_key(key))),
+                zone());
+    }
     body->Add(factory_.NewReturnStatement(
                 factory_.NewCall(factory_.NewProperty(o[2], k[2], p->position()),
                                  args, c->position()),
@@ -421,11 +434,11 @@ Call* EventRacerRewriter::doVisit(Call *c) {
   FunctionLiteral *fn = make_fn(scope, body, n + 1 + !is_literal_key(key),
                                 fn_ast_node_id, c->position());
   args = new (zone()) ZoneList<Expression*>(n + 2, zone());
-  for (int i = 0; i < n; ++i)
-    args->Add(c->arguments()->at(i), zone());
   args->Add(obj, zone());
   if (!is_literal_key(key))
     args->Add(key, zone());
+  for (int i = 0; i < n; ++i)
+    args->Add(c->arguments()->at(i), zone());
 
   return factory_.NewCall(fn, args, p->position());
 }
