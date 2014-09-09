@@ -34,6 +34,30 @@ VariableProxy *EventRacerRewriter::fn_proxy(enum InstrumentationFunction fn) {
   return vp;
 }
 
+FunctionLiteral *EventRacerRewriter::make_fn(Scope *scope,
+                                             ZoneList<Statement *> *body,
+                                             int param_count, int ast_node_id,
+                                             int pos) {
+  FunctionLiteral *fn = factory_.NewFunctionLiteral(
+    info_->ast_value_factory()->empty_string(),
+    info_->ast_value_factory(),
+    scope,
+    body,
+    /* materialized_literal_count */ 0,
+    /* expected_property_count */ 0,
+    /* handler_count */ 0,
+    /* num_parameters */ param_count,
+    FunctionLiteral::kNoDuplicateParameters,
+    FunctionLiteral::ANONYMOUS_EXPRESSION,
+    FunctionLiteral::kIsFunction,
+    FunctionLiteral::kIsParenthesized,
+    FunctionLiteral::kNormalFunction,
+    pos);
+  fn->set_next_ast_node_id(ast_node_id);
+  return fn;
+}
+
+
 EventRacerRewriter::ScopeHack *EventRacerRewriter::NewScope(Scope* outer) {
   ScopeHack* s = new (zone()) ScopeHack(outer ? outer : info_->global_scope(),
                                         info_->ast_value_factory(), zone());
@@ -282,14 +306,8 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
 
         // Setup arguments of the call to |ER_readProp|.
         args = new (zone()) ZoneList<Expression*>(3, zone());
-
-        // First argument is the |$obj| parameter.
         args->Add(o[0], zone());
-
-        // Second argument is the literal/property-name.
         args->Add(k[0], zone());
-
-        // Third argument is the property expression.
         args->Add(factory_.NewProperty(o[1], k[1], p->position()), zone());
 
         // Create the return statement.
@@ -302,26 +320,10 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
         fn_ast_node_id = ast_node_id();
       } // end allocation scope
 
-      // Define the new function.
-      FunctionLiteral *fn = factory_.NewFunctionLiteral(
-        info_->ast_value_factory()->empty_string(),
-        info_->ast_value_factory(),
-        scope,
-        body,
-        /* materialized_literal_count */ 0,
-        /* expected_property_count */ 0,
-        /* handler_count */ 0,
-        /* num_parameters */ 1 + !is_literal_key(key),
-        FunctionLiteral::kNoDuplicateParameters,
-        FunctionLiteral::ANONYMOUS_EXPRESSION,
-        FunctionLiteral::kIsFunction,
-        FunctionLiteral::kIsParenthesized,
-        FunctionLiteral::kNormalFunction,
-        p->position());
-      fn->set_next_ast_node_id(fn_ast_node_id);
-
-      // Build the call to the new function.
-      args = new (zone()) ZoneList<Expression*>(2, zone());
+      // Define the new function and build the call.
+      FunctionLiteral *fn = make_fn(scope, body, 1 + !is_literal_key(key),
+                                    fn_ast_node_id, p->position());
+      args = new (zone()) ZoneList<Expression*>(1, zone());
       args->Add(obj, zone());
       return factory_.NewCall(fn, args, p->position());
     } else {
@@ -382,31 +384,18 @@ Call* EventRacerRewriter::doVisit(Call *c) {
     // The |$obj| parameter is referenced in three places, so is the
     // |$key| parameter. Create separate AST nodes for each reference.
     Expression *o[3], *k[3];
-    o[0] = NewProxy(scope, o_string_, p->position());
-    o[1] = NewProxy(scope, o_string_, p->position());
-    o[2] = NewProxy(scope, o_string_, p->position());
-
-    if (is_literal_key(key)) {
-      k[0] = duplicate_key(key->AsLiteral());
-      k[1] = duplicate_key(key->AsLiteral());
-      k[2] = duplicate_key(key->AsLiteral());
-    } else {
-      k[0] = NewProxy(scope, k_string_, c->position());
-      k[1] = NewProxy(scope, k_string_, c->position());
-      k[2] = NewProxy(scope, k_string_, c->position());
+    for (int i = 0; i < 3; ++i) {
+      o[i] = NewProxy(scope, o_string_, p->position());
+      if (is_literal_key(key))
+        k[i] = duplicate_key(key->AsLiteral());
+      else
+        k[i] = NewProxy(scope, k_string_, c->position());
     }
 
     // Setup arguments of the call to |ER_readProp|.
     args = new (zone()) ZoneList<Expression*>(3, zone());
-
-    // First argument is the |$obj| parameter.
     args->Add(o[0], zone());
-
-    // Second argument is either the |$key| parameter or, if the
-    // property name is a literal, the literal itself.
     args->Add(k[0], zone());
-
-    // Third argument is the property expression.
     args->Add(factory_.NewProperty(o[1], k[1], p->position()), zone());
 
     body = new (zone()) ZoneList<Statement*>(1, zone());
@@ -428,25 +417,9 @@ Call* EventRacerRewriter::doVisit(Call *c) {
     fn_ast_node_id = ast_node_id();
   }
 
-  // Define the new function.
-  FunctionLiteral *fn = factory_.NewFunctionLiteral(
-    info_->ast_value_factory()->empty_string(),
-    info_->ast_value_factory(),
-    scope,
-    body,
-    /* materialized_literal_count */ 0,
-    /* expected_property_count */ 0,
-    /* handler_count */ 0,
-    /* num_parameters */ n + 1 + !is_literal_key(key),
-    FunctionLiteral::kNoDuplicateParameters,
-    FunctionLiteral::ANONYMOUS_EXPRESSION,
-    FunctionLiteral::kIsFunction,
-    FunctionLiteral::kIsParenthesized,
-    FunctionLiteral::kNormalFunction,
-    c->position());
-  fn->set_next_ast_node_id(fn_ast_node_id);
-
-  // Build the call to the new function.
+  // Define the new function and build the call.
+  FunctionLiteral *fn = make_fn(scope, body, n + 1 + !is_literal_key(key),
+                                fn_ast_node_id, c->position());
   args = new (zone()) ZoneList<Expression*>(n + 2, zone());
   for (int i = 0; i < n; ++i)
     args->Add(c->arguments()->at(i), zone());
@@ -580,25 +553,9 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
           fn_ast_node_id = ast_node_id();
         } // end allocation scope
 
-        // Define the new function.
-        FunctionLiteral *fn = factory_.NewFunctionLiteral(
-          info_->ast_value_factory()->empty_string(),
-          info_->ast_value_factory(),
-          scope,
-          body,
-          /* materialized_literal_count */ 0,
-          /* expected_property_count */ 0,
-          /* handler_count */ 0,
-          /* num_parameters */ 1,
-          FunctionLiteral::kNoDuplicateParameters,
-          FunctionLiteral::ANONYMOUS_EXPRESSION,
-          FunctionLiteral::kIsFunction,
-          FunctionLiteral::kIsParenthesized,
-          FunctionLiteral::kNormalFunction,
-          op->position());
-        fn->set_next_ast_node_id(fn_ast_node_id);
-
-        // Build the call to the new function.
+        // Define the new function and build the call.
+        FunctionLiteral *fn = make_fn(scope, body, 1, fn_ast_node_id,
+                                      op->position());
         args = new (zone()) ZoneList<Expression*>(1, zone());
         args->Add(obj, zone());
         return factory_.NewCall(fn, args, op->position());
@@ -676,25 +633,9 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
         fn_ast_node_id = ast_node_id();
       } // end allocation scope
 
-        // Define the new function.
-      FunctionLiteral *fn = factory_.NewFunctionLiteral(
-        info_->ast_value_factory()->empty_string(),
-        info_->ast_value_factory(),
-        scope,
-        body,
-        /* materialized_literal_count */ 0,
-        /* expected_property_count */ 0,
-        /* handler_count */ 0,
-        /* num_parameters */ 0,
-        FunctionLiteral::kNoDuplicateParameters,
-        FunctionLiteral::ANONYMOUS_EXPRESSION,
-        FunctionLiteral::kIsFunction,
-        FunctionLiteral::kIsParenthesized,
-        FunctionLiteral::kNormalFunction,
-        op->position());
-      fn->set_next_ast_node_id(fn_ast_node_id);
-
-      // Build the call to the new function.
+      // Define the new function and build the call.
+      FunctionLiteral *fn = make_fn(scope, body, 0, fn_ast_node_id,
+                                    op->position());
       args = new (zone()) ZoneList<Expression*>(0, zone());
       return factory_.NewCall(fn, args, op->position());
     } else /* vp == NULL */ {
@@ -762,7 +703,6 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
           body = new (zone()) ZoneList<Statement*>(2, zone());  \
           body->Add(blk, zone());
 
-
           // Setup arguments of the call to |ER_writeProp|.
           args = new (zone()) ZoneList<Expression*>(2, zone());
           args->Add(o[1], zone());
@@ -793,25 +733,9 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
           fn_ast_node_id = ast_node_id();
         } // end allocation scope
 
-        // Define the new function.
-        FunctionLiteral *fn = factory_.NewFunctionLiteral(
-          info_->ast_value_factory()->empty_string(),
-          info_->ast_value_factory(),
-          scope,
-          body,
-          /* materialized_literal_count */ 0,
-          /* expected_property_count */ 0,
-          /* handler_count */ 0,
-          /* num_parameters */ 1,
-          FunctionLiteral::kNoDuplicateParameters,
-          FunctionLiteral::ANONYMOUS_EXPRESSION,
-          FunctionLiteral::kIsFunction,
-          FunctionLiteral::kIsParenthesized,
-          FunctionLiteral::kNormalFunction,
-          op->position());
-        fn->set_next_ast_node_id(fn_ast_node_id);
-
-        // Build the call to the new function.
+        // Define the new function and build the call.
+        FunctionLiteral *fn = make_fn(scope, body, 1, fn_ast_node_id,
+                                      op->position());
         args = new (zone()) ZoneList<Expression*>(0, zone());
         args->Add(obj, zone());
         return factory_.NewCall(fn, args, op->position());
@@ -947,14 +871,8 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
 
         // Setup arguments of the call to |ER_writeProp|.
         args = new (zone()) ZoneList<Expression*>(3, zone());
-
-        // First argument is the |$obj| parameter.
         args->Add(o[0], zone());
-
-        // Second argument is the literal/property-name.
         args->Add(k[0], zone());
-
-        // Third argument is RHS value.
         if (op->is_compound()) {
           args->Add(factory_.NewBinaryOperation(
                       op->binary_op(),
@@ -980,25 +898,9 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
         fn_ast_node_id = ast_node_id();
       } // end allocation scope
 
-      // Define the new function.
-      FunctionLiteral *fn = factory_.NewFunctionLiteral(
-        info_->ast_value_factory()->empty_string(),
-        info_->ast_value_factory(),
-        scope,
-        body,
-        /* materialized_literal_count */ 0,
-        /* expected_property_count */ 0,
-        /* handler_count */ 0,
-        /* num_parameters */ 2,
-        FunctionLiteral::kNoDuplicateParameters,
-        FunctionLiteral::ANONYMOUS_EXPRESSION,
-        FunctionLiteral::kIsFunction,
-        FunctionLiteral::kIsParenthesized,
-        FunctionLiteral::kNormalFunction,
-        op->position());
-      fn->set_next_ast_node_id(fn_ast_node_id);
-
-      // Build the call to the new function.
+      // Define the new function and buikld the call.
+      FunctionLiteral *fn = make_fn(scope, body, 2, fn_ast_node_id,
+                                    op->position());
       args = new (zone()) ZoneList<Expression*>(2, zone());
       args->Add(obj, zone());
       args->Add(op->value_, zone());
@@ -1049,14 +951,8 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
 
           // Setup arguments of the call to |ER_writeProp|.
           args = new (zone()) ZoneList<Expression*>(3, zone());
-
-          // First argument is the |$obj| parameter.
           args->Add(o[0], zone());
-
-          // Second argument is the |$key| parameter.
           args->Add(k[0], zone());
-
-          // Third argument is RHS value.
           args->Add(factory_.NewBinaryOperation(
                       op->binary_op(),
                       factory_.NewProperty(o[2], k[2], p->position()),
@@ -1077,25 +973,9 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
           fn_ast_node_id = ast_node_id();
         } // end allocation scope
 
-        // Define the new function.
-        FunctionLiteral *fn = factory_.NewFunctionLiteral(
-          info_->ast_value_factory()->empty_string(),
-          info_->ast_value_factory(),
-          scope,
-          body,
-          /* materialized_literal_count */ 0,
-          /* expected_property_count */ 0,
-          /* handler_count */ 0,
-          /* num_parameters */ 3,
-          FunctionLiteral::kNoDuplicateParameters,
-          FunctionLiteral::ANONYMOUS_EXPRESSION,
-          FunctionLiteral::kIsFunction,
-          FunctionLiteral::kIsParenthesized,
-          FunctionLiteral::kNormalFunction,
-          op->position());
-        fn->set_next_ast_node_id(fn_ast_node_id);
-
-        // Build the call to the new function.
+        // Define the new function and build the call.
+        FunctionLiteral *fn = make_fn(scope, body, 3, fn_ast_node_id,
+                                      op->position());
         args = new (zone()) ZoneList<Expression*>(3, zone());
         args->Add(obj, zone());
         args->Add(key, zone());

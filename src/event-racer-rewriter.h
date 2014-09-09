@@ -191,6 +191,9 @@ private:
 
   bool is_literal_key(const Expression *) const;
   Literal *duplicate_key(const Literal *);
+
+  FunctionLiteral *make_fn(Scope *scope, ZoneList<Statement *> *body,
+                           int param_count, int ast_node_id, int pos);
 };
 
 typedef AstRewriterImpl<EventRacerRewriterTag> EventRacerRewriter;
