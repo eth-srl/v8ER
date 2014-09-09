@@ -667,3 +667,22 @@ global.ER_writePropIdx = function(obj, idx, value) {
     return obj[idx] = global.ER_writeProp(obj, idx, value);
 }
 
+global.ER_preIncProp = function(obj, idx) {
+    return obj[idx] = global.ER_writeProp(obj, idx, obj[idx] + 1);
+}
+
+global.ER_preDecProp = function(obj, idx) {
+    return obj[idx] = global.ER_writeProp(obj, idx, obj[idx] - 1);
+}
+
+global.ER_postIncProp = function(obj, idx) {
+    var tmp = obj[idx];
+    obj[idx] = global.ER_writeProp(obj, idx, tmp + 1);
+    return tmp;
+}
+
+global.ER_postDecProp = function(obj, idx) {
+    var tmp = obj[idx];
+    obj[idx] = global.ER_writeProp(obj, idx, tmp - 1);
+    return tmp;
+}

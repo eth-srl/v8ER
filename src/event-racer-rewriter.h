@@ -2,6 +2,7 @@
 #define V8_EVENT_RACER_REWRITER_H_
 
 #include "src/ast.h"
+#include "src/scopes.h"
 
 namespace v8 {
 namespace internal {
@@ -29,7 +30,6 @@ namespace internal {
   V(CallRuntime)                                \
   V(UnaryOperation)                             \
   V(BinaryOperation)                            \
-  V(CountOperation)                             \
   V(CompareOperation)                           \
   V(Conditional)                                \
   V(Yield)                                      \
@@ -56,6 +56,7 @@ namespace internal {
   V(NativeFunctionLiteral)                      \
   V(ThisFunction)
 
+
 struct EventRacerRewriterTag {};
 
 template<>
@@ -75,6 +76,7 @@ public:
 
   virtual Expression* doVisit(VariableProxy *) V8_FINAL V8_OVERRIDE;
   virtual Expression* doVisit(Property *) V8_FINAL V8_OVERRIDE;
+  virtual Expression* doVisit(CountOperation *) V8_FINAL V8_OVERRIDE;
   virtual Expression* doVisit(Assignment *) V8_FINAL V8_OVERRIDE;
 
   void scope_analysis_complete() { post_scope_analysis_ = true; }
@@ -129,6 +131,19 @@ private:
     AstNodeIdAllocationScope *prev;
   };
 
+  // Hack around protected members of Scope, that we need to call.
+  class ScopeHack : public Scope {
+  public:
+    ScopeHack(Scope* outer_scope, AstValueFactory* value_factory, Zone* zone)
+      : Scope(outer_scope, FUNCTION_SCOPE, value_factory, zone)
+      {
+      }
+
+    void AllocateStackSlot(Variable* var) {
+      Scope::AllocateStackSlot(var);
+    }
+  };
+
   bool is_potentially_shared(const VariableProxy *vp) const {
     DCHECK(post_scope_analysis_);
     if (vp->do_not_instrument())
@@ -151,6 +166,10 @@ private:
   Variable *ER_writeProp_;
   Variable *ER_readPropIdx_;
   Variable *ER_writePropIdx_;
+  Variable *ER_preIncProp_;
+  Variable *ER_preDecProp_;
+  Variable *ER_postIncProp_;
+  Variable *ER_postDecProp_;
   const AstRawString *o_string_, *k_string_, *v_string_;
   ZoneList<const AstRawString *> *arg_names_;
   VariableProxy *ER_read_proxy(Scope *);
@@ -159,7 +178,11 @@ private:
   VariableProxy *ER_writeProp_proxy(Scope *);
   VariableProxy *ER_readPropIdx_proxy(Scope *);
   VariableProxy *ER_writePropIdx_proxy(Scope *);
-  Scope *NewScope(Scope* outer, ScopeType type);
+  VariableProxy *ER_preIncProp_proxy(Scope *);
+  VariableProxy *ER_preDecProp_proxy(Scope *);
+  VariableProxy *ER_postIncProp_proxy(Scope *);
+  VariableProxy *ER_postDecProp_proxy(Scope *);
+  ScopeHack *NewScope(Scope* outer);
   VariableProxy *NewProxy(Scope *, const AstRawString *, int);
   void ensure_arg_names(int n);
   int ast_node_id() const;

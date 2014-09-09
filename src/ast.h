@@ -144,7 +144,6 @@ namespace internal {
   V(CallRuntime)                                \
   V(UnaryOperation)                             \
   V(BinaryOperation)                            \
-  V(CountOperation)                             \
   V(CompareOperation)                           \
   V(Conditional)                                \
   V(Yield)                                      \
@@ -2175,7 +2174,8 @@ class BinaryOperation V8_FINAL : public Expression {
 class CountOperation V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(CountOperation)
-  DECLARE_FIXED_REWRITE_NODE(CountOperation)
+  virtual Expression *Accept(AstRewriter *);
+  template<class> friend class AstRewriterImpl;
 
   bool is_prefix() const { return is_prefix_; }
   bool is_postfix() const { return !is_prefix_; }
@@ -3205,6 +3205,15 @@ class AstRewriter BASE_EMBEDDED {
   }
 
   virtual Expression* doVisit(Property *) = 0;
+
+  Expression *Visit(CountOperation *node) {
+    if (!CheckStackOverflow())
+      return doVisit(node);
+    else
+      return node;
+  }
+
+  virtual Expression* doVisit(CountOperation *) = 0;
 
   Expression *Visit(Assignment *node) {
     if (!CheckStackOverflow())

@@ -28,6 +28,14 @@ EventRacerRewriter::AstRewriterImpl(CompilationInfo *info)
     globals.DeclareDynamicGlobal(values.GetOneByteString("ER_readPropIdx"));
   ER_writePropIdx_ =
     globals.DeclareDynamicGlobal(values.GetOneByteString("ER_writePropIdx"));
+  ER_preIncProp_ =
+    globals.DeclareDynamicGlobal(values.GetOneByteString("ER_preIncProp"));
+  ER_preDecProp_ =
+    globals.DeclareDynamicGlobal(values.GetOneByteString("ER_preDecProp"));
+  ER_postIncProp_ =
+    globals.DeclareDynamicGlobal(values.GetOneByteString("ER_postIncProp"));
+  ER_postDecProp_ =
+    globals.DeclareDynamicGlobal(values.GetOneByteString("ER_postDecProp"));
   o_string_ = values.GetOneByteString("$obj");
   k_string_ = values.GetOneByteString("$key");
   v_string_ = values.GetOneByteString("$value");
@@ -69,10 +77,33 @@ VariableProxy *EventRacerRewriter::ER_writePropIdx_proxy(Scope *scope) {
   return vp;
 }
 
-Scope *EventRacerRewriter::NewScope(Scope* outer, ScopeType type) {
-  Scope* s = new (zone()) Scope(outer ? outer : info_->global_scope(),
-                                type, info_->ast_value_factory(),
-                                zone());
+VariableProxy *EventRacerRewriter::ER_preIncProp_proxy(Scope *scope) {
+  VariableProxy *vp = factory_.NewVariableProxy(ER_preIncProp_);
+  vp->set_do_not_instrument();
+  return vp;
+}
+
+VariableProxy *EventRacerRewriter::ER_preDecProp_proxy(Scope *scope) {
+  VariableProxy *vp = factory_.NewVariableProxy(ER_preDecProp_);
+  vp->set_do_not_instrument();
+  return vp;
+}
+
+VariableProxy *EventRacerRewriter::ER_postIncProp_proxy(Scope *scope) {
+  VariableProxy *vp = factory_.NewVariableProxy(ER_postIncProp_);
+  vp->set_do_not_instrument();
+  return vp;
+}
+
+VariableProxy *EventRacerRewriter::ER_postDecProp_proxy(Scope *scope) {
+  VariableProxy *vp = factory_.NewVariableProxy(ER_postDecProp_);
+  vp->set_do_not_instrument();
+  return vp;
+}
+
+EventRacerRewriter::ScopeHack *EventRacerRewriter::NewScope(Scope* outer) {
+  ScopeHack* s = new (zone()) ScopeHack(outer ? outer : info_->global_scope(),
+                                        info_->ast_value_factory(), zone());
   s->Initialize();
   s->ForceEagerCompilation();
   return s;
@@ -295,13 +326,13 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
   Expression *obj = p->obj(), *key = p->key();
 
   if (is_literal_key(key)) {
-      Scope *scope;
+      ScopeHack *scope;
       ZoneList<Statement*> *body;
       int fn_ast_node_id;
       {
         AstNodeIdAllocationScope _(this);
 
-        scope = NewScope(context()->scope, FUNCTION_SCOPE);
+        scope = NewScope(context()->scope);
         scope->set_start_position(p->position());
         scope->set_end_position(p->position() + 1);
 
@@ -394,7 +425,7 @@ Call* EventRacerRewriter::doVisit(Call *c) {
   // instrumented expression, which also contains an analoguos property
   // call.
 
-  Scope *scope;
+  ScopeHack *scope;
   ZoneList<Expression*> *args;
   ZoneList<Statement*> *body;
   int fn_ast_node_id;
@@ -404,7 +435,7 @@ Call* EventRacerRewriter::doVisit(Call *c) {
   {
     AstNodeIdAllocationScope _(this);
 
-    scope = NewScope(context()->scope, FUNCTION_SCOPE);
+    scope = NewScope(context()->scope);
     scope->set_start_position(c->position());
     scope->set_end_position(c->position() + 1);
 
@@ -519,9 +550,353 @@ BinaryOperation* EventRacerRewriter::doVisit(BinaryOperation *op) {
   return op;
 }
 
-CountOperation* EventRacerRewriter::doVisit(CountOperation *op) {
-  // TODO: rewrite(this, op->expression_);
-  return op;
+Expression* EventRacerRewriter::doVisit(CountOperation *op) {
+  DCHECK(op->expression_->IsVariableProxy() || op->expression_->IsProperty());
+
+  VariableProxy *vp = op->expression_->AsVariableProxy();
+  if (!post_scope_analysis_ || (vp != NULL && !is_potentially_shared(vp))) {
+    // Increment expressions are rewritten post scope analysis.
+    return op;
+  }
+
+  ZoneList<Expression*> *args;
+  ScopeHack *scope;
+  ZoneList<Statement*> *body;
+  int fn_ast_node_id;
+  if (op->is_prefix()) {
+    if (vp != NULL) {
+      // Pre-increment of a variable is instrumented like:
+      //
+      // |++v|
+      // =>
+      // |v = ER_write("v", v + 1)|
+      args = new (zone()) ZoneList<Expression*>(2, zone());
+      args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()),
+                zone());
+      args->Add(factory_.NewBinaryOperation(
+                  op->binary_op(),
+                  factory_.NewVariableProxy(vp->var(), vp->position()),
+                  factory_.NewSmiLiteral(1, op->position()),
+                  op->position()),
+                zone());
+      return factory_.NewAssignment(
+        Token::ASSIGN, vp, factory_.NewCall(ER_write_proxy(context()->scope),
+                                            args, op->position()),
+        op->position());
+    } else /* vp == NULL */ {
+      // Pre-increment of a property is instrumented like:
+      //
+      // |++obj.key|
+      // =>
+      // |(function($obj) {                                            |
+      //     return $obj.key = ER_writeProp($obj, "key", $obj.key + 1);|
+      // |})(obj)                                                      |
+      //
+      // or, if the property name is a general expression, is converted into a
+      // call to one of the helper functions |ER_preIncProp| or |ER_preDecProp|
+      //
+      // |++obj[key]|
+      // =>
+      // |ER_preIncProp(obj, key)|
+      Property *p = op->expression_->AsProperty();
+      Expression *obj = p->obj_, *key = p->key_;
+      if (is_literal_key(key)) {
+        {
+          AstNodeIdAllocationScope _(this);
+
+          scope = NewScope(context()->scope);
+          scope->set_start_position(op->position());
+          scope->set_end_position(op->position() + 1);
+
+          // Declare the parameters of the new function.
+          Variable *o_parm;
+          o_parm = scope->DeclareParameter(o_string_, VAR);
+          o_parm->AllocateTo(Variable::PARAMETER, 0);
+
+          // The |$obj| parameter is referenced in three places, so is
+          // the property name. Create separate AST nodes for each
+          // reference.
+          Expression *o[3], *k[3];
+          for (int i = 0; i < 3; ++i) {
+            o[i] = factory_.NewVariableProxy(o_parm);
+            k[i] = duplicate_key(key->AsLiteral());
+          }
+
+          // Setup arguments of the call to |ER_writeProp|.
+          args = new (zone()) ZoneList<Expression*>(3, zone());
+          args->Add(o[0], zone());
+          args->Add(k[0], zone());
+          args->Add(factory_.NewBinaryOperation(
+                      op->binary_op(),
+                      factory_.NewProperty(o[1], k[1], p->position()),
+                      factory_.NewSmiLiteral(1, op->position()),
+                      op->position()),
+                  zone());
+
+          // Create the return statement.
+          body = new (zone()) ZoneList<Statement*>(1, zone());
+          body->Add(factory_.NewReturnStatement(
+                      factory_.NewAssignment(
+                        Token::ASSIGN,
+                        factory_.NewProperty(o[2], k[2], p->position()),
+                        factory_.NewCall(ER_writeProp_proxy(scope), args,
+                                         op->position()),
+                        op->position()),
+                      op->position()),
+                    zone());
+
+          fn_ast_node_id = ast_node_id();
+        } // end allocation scope
+
+        // Define the new function.
+        FunctionLiteral *fn = factory_.NewFunctionLiteral(
+          info_->ast_value_factory()->empty_string(),
+          info_->ast_value_factory(),
+          scope,
+          body,
+          /* materialized_literal_count */ 0,
+          /* expected_property_count */ 0,
+          /* handler_count */ 0,
+          /* num_parameters */ 1,
+          FunctionLiteral::kNoDuplicateParameters,
+          FunctionLiteral::ANONYMOUS_EXPRESSION,
+          FunctionLiteral::kIsFunction,
+          FunctionLiteral::kIsParenthesized,
+          FunctionLiteral::kNormalFunction,
+          op->position());
+        fn->set_next_ast_node_id(fn_ast_node_id);
+
+        // Build the call to the new function.
+        args = new (zone()) ZoneList<Expression*>(1, zone());
+        args->Add(obj, zone());
+        return factory_.NewCall(fn, args, op->position());
+      } else { // not a literal key
+        args = new (zone()) ZoneList<Expression*>(2, zone());
+        args->Add(obj, zone());
+        args->Add(key, zone());
+        return factory_.NewCall((op->op() == Token::INC
+                                 ? ER_preIncProp_proxy(context()->scope)
+                                 : ER_preDecProp_proxy(context()->scope)),
+                                args,
+                                op->position());
+      }
+    }
+  } else /* op->is_postfix() */ {
+    if (vp != NULL) {
+      // Post-increment of a variable is instrumented like:
+      //
+      // |x++|
+      // =>
+      // (function() { let $v = x; x = ER_write("x", $v + 1); return $v; })();
+      {
+        AstNodeIdAllocationScope _(this);
+
+        scope = NewScope(context()->scope);
+        scope->set_start_position(op->position());
+        scope->set_end_position(op->position() + 1);
+
+        // Declare the local variable.
+        Variable *value = scope->DeclareLocal(v_string_, VariableMode::LET,
+                                              kCreatedInitialized,
+                                              kNotAssigned);
+        scope->AllocateStackSlot(value);
+
+        // Initialize the local variable.
+        Block *blk = factory_.NewBlock(NULL, 1, true, op->position());
+        blk->AddStatement(factory_.NewExpressionStatement(
+                            factory_.NewAssignment(
+                              Token::INIT_LET,
+                              factory_.NewVariableProxy(value),
+                              factory_.NewVariableProxy(vp->var()),
+                              op->position()),
+                            op->position()),
+                          zone());
+
+        body = new (zone()) ZoneList<Statement*>(2, zone());
+        body->Add(blk, zone());
+
+        // Setup arguments of the call to |ER_write|.
+        args = new (zone()) ZoneList<Expression*>(2, zone());
+        args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()),
+                  zone());
+        args->Add(factory_.NewBinaryOperation(
+                    op->binary_op(),
+                    factory_.NewVariableProxy(value),
+                    factory_.NewSmiLiteral(1, op->position()),
+                    op->position()),
+                  zone());
+
+        // Perform the assignment.
+        body->Add(factory_.NewExpressionStatement(
+                    factory_.NewAssignment(
+                      Token::ASSIGN,
+                      factory_.NewVariableProxy(vp->var()),
+                      factory_.NewCall(ER_write_proxy(scope), args,
+                                       op->position()),
+                      op->position()),
+                    op->position()),
+                  zone());
+
+        // Create the return statement.
+        body->Add(factory_.NewReturnStatement(
+                    factory_.NewVariableProxy(value),
+                    op->position()),
+                  zone());
+        fn_ast_node_id = ast_node_id();
+      } // end allocation scope
+
+        // Define the new function.
+      FunctionLiteral *fn = factory_.NewFunctionLiteral(
+        info_->ast_value_factory()->empty_string(),
+        info_->ast_value_factory(),
+        scope,
+        body,
+        /* materialized_literal_count */ 0,
+        /* expected_property_count */ 0,
+        /* handler_count */ 0,
+        /* num_parameters */ 0,
+        FunctionLiteral::kNoDuplicateParameters,
+        FunctionLiteral::ANONYMOUS_EXPRESSION,
+        FunctionLiteral::kIsFunction,
+        FunctionLiteral::kIsParenthesized,
+        FunctionLiteral::kNormalFunction,
+        op->position());
+      fn->set_next_ast_node_id(fn_ast_node_id);
+
+      // Build the call to the new function.
+      args = new (zone()) ZoneList<Expression*>(0, zone());
+      return factory_.NewCall(fn, args, op->position());
+    } else /* vp == NULL */ {
+      // Post-increment of a property is instrumented like:
+      //
+      // |obj.key++|
+      // =>
+      // |(function($obj) {                               |
+      // |   let $t = $obj.key;                           |
+      // |   $obj.key = ER_writeProp($obj, "key", $t + 1);|
+      // |   return $t;                                   |
+      // |})(e)                                           |
+      //
+      // or, if the key is a general expression, it converted into a call
+      // to the helper functions |ER_postIncProp| or |ER_postDecProp|:
+      //
+      // |obj[key]++|
+      // =>
+      // | ER_postIncProp(obj, key)|
+      // |(function($obj, $key) {|
+      //     let $t = $obj[$key];|
+      // |   $obj[$key] = ER_writeProp($obj, $key, $t + 1);|
+      // |    return $t;|
+      // })(e, idx);
+      Property *p = op->expression_->AsProperty();
+      Expression *obj = p->obj_, *key = p->key_;
+      if (is_literal_key(key)) {
+        {
+          AstNodeIdAllocationScope _(this);
+
+          scope = NewScope(context()->scope);
+          scope->set_start_position(op->position());
+          scope->set_end_position(op->position() + 1);
+
+          // Declare the parameter.
+          Variable *o_parm = scope->DeclareParameter(o_string_, VAR);
+          o_parm->AllocateTo(Variable::PARAMETER, 0);
+
+          // Declare the local variable.
+          Variable *value = scope->DeclareLocal(v_string_, VariableMode::LET,
+                                                kCreatedInitialized,
+                                                kNotAssigned);
+          scope->AllocateStackSlot(value);
+
+          // The |$obj| parameter is referenced in three places, so is
+          // the property name. The |$v| parameter is referenced
+          // once. Create separate AST nodes for each reference.
+          Expression *o[3], *k[3];
+          for(int i = 0; i < 3; ++i) {
+            o[i] = factory_.NewVariableProxy(o_parm);
+            k[i] = duplicate_key(key->AsLiteral());
+          }
+
+          // Initialize the local variable.
+          Block *blk = factory_.NewBlock(NULL, 1, true, op->position());
+          blk->AddStatement(factory_.NewExpressionStatement(
+                              factory_.NewAssignment(
+                                Token::INIT_LET,
+                                factory_.NewVariableProxy(value),
+                                factory_.NewProperty(o[0], k[0], p->position()),
+                                p->position()),
+                              op->position()),
+                            zone());
+
+          body = new (zone()) ZoneList<Statement*>(2, zone());  \
+          body->Add(blk, zone());
+
+
+          // Setup arguments of the call to |ER_writeProp|.
+          args = new (zone()) ZoneList<Expression*>(2, zone());
+          args->Add(o[1], zone());
+          args->Add(k[1], zone());
+          args->Add(factory_.NewBinaryOperation(
+                      op->binary_op(),
+                      factory_.NewVariableProxy(value),
+                      factory_.NewSmiLiteral(1, op->position()),
+                      op->position()),
+                    zone());
+
+          // Perform the assignment.
+          body->Add(factory_.NewExpressionStatement(
+                      factory_.NewAssignment(
+                        Token::ASSIGN,
+                        factory_.NewProperty(o[2], k[2], p->position()),
+                        factory_.NewCall(ER_writeProp_proxy(scope), args,
+                                         op->position()),
+                        op->position()),
+                      op->position()),
+                    zone());
+
+          // Create the return statement.
+          body->Add(factory_.NewReturnStatement(
+                      factory_.NewVariableProxy(value),
+                      op->position()),
+                    zone());
+          fn_ast_node_id = ast_node_id();
+        } // end allocation scope
+
+        // Define the new function.
+        FunctionLiteral *fn = factory_.NewFunctionLiteral(
+          info_->ast_value_factory()->empty_string(),
+          info_->ast_value_factory(),
+          scope,
+          body,
+          /* materialized_literal_count */ 0,
+          /* expected_property_count */ 0,
+          /* handler_count */ 0,
+          /* num_parameters */ 1,
+          FunctionLiteral::kNoDuplicateParameters,
+          FunctionLiteral::ANONYMOUS_EXPRESSION,
+          FunctionLiteral::kIsFunction,
+          FunctionLiteral::kIsParenthesized,
+          FunctionLiteral::kNormalFunction,
+          op->position());
+        fn->set_next_ast_node_id(fn_ast_node_id);
+
+        // Build the call to the new function.
+        args = new (zone()) ZoneList<Expression*>(0, zone());
+        args->Add(obj, zone());
+        return factory_.NewCall(fn, args, op->position());
+      } else { // not a literal key
+        args = new (zone()) ZoneList<Expression*>(2, zone());
+        args->Add(obj, zone());
+        args->Add(key, zone());
+        return factory_.NewCall((op->op() == Token::INC
+                                 ? ER_postIncProp_proxy(context()->scope)
+                                 : ER_postDecProp_proxy(context()->scope)),
+                                args,
+                                op->position());
+        return op;
+      }
+    }
+  }
 }
 
 CompareOperation* EventRacerRewriter::doVisit(CompareOperation *op) {
@@ -610,13 +985,13 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
       // |  return $obj.key = ER_writeProp($obj, "key", $obj.key + $v);|
       // |}                                                            |
 
-      Scope *scope;
+      ScopeHack *scope;
       ZoneList<Statement*> *body;
       int fn_ast_node_id;
       {
         AstNodeIdAllocationScope _(this);
 
-        scope = NewScope(context()->scope, FUNCTION_SCOPE);
+        scope = NewScope(context()->scope);
         scope->set_start_position(op->position());
         scope->set_end_position(op->position() + 1);
 
@@ -714,13 +1089,13 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
       //     return $obj[$key] = ER_writeProp($obj, $key, $obj[$key] + $v);|
       // })(arr, idx, e);                                                  |
       if (op->is_compound()) {
-        Scope *scope;
+        ScopeHack *scope;
         ZoneList<Statement*> *body;
         int fn_ast_node_id;
         {
           AstNodeIdAllocationScope _(this);
 
-          scope = NewScope(context()->scope, FUNCTION_SCOPE);
+          scope = NewScope(context()->scope);
           scope->set_start_position(op->position());
           scope->set_end_position(op->position() + 1);
 
