@@ -56,6 +56,17 @@ namespace internal {
   V(NativeFunctionLiteral)                      \
   V(ThisFunction)
 
+#define INSTRUMENTATION_FUNCTION_LIST(V)        \
+  V(ER_read)                                    \
+  V(ER_write)                                   \
+  V(ER_readProp)                                \
+  V(ER_writeProp)                               \
+  V(ER_readPropIdx)                             \
+  V(ER_writePropIdx)                            \
+  V(ER_preIncProp)                              \
+  V(ER_preDecProp)                              \
+  V(ER_postIncProp)                             \
+  V(ER_postDecProp)
 
 struct EventRacerRewriterTag {};
 
@@ -160,28 +171,18 @@ private:
   AstNodeIdAllocationScope *id_alloc_scope_;
 
   AstNodeFactory<AstNullVisitor> factory_;
-  Variable *ER_read_;
-  Variable *ER_write_;
-  Variable *ER_readProp_;
-  Variable *ER_writeProp_;
-  Variable *ER_readPropIdx_;
-  Variable *ER_writePropIdx_;
-  Variable *ER_preIncProp_;
-  Variable *ER_preDecProp_;
-  Variable *ER_postIncProp_;
-  Variable *ER_postDecProp_;
   const AstRawString *o_string_, *k_string_, *v_string_;
   ZoneList<const AstRawString *> *arg_names_;
-  VariableProxy *ER_read_proxy(Scope *);
-  VariableProxy *ER_write_proxy(Scope *);
-  VariableProxy *ER_readProp_proxy(Scope *);
-  VariableProxy *ER_writeProp_proxy(Scope *);
-  VariableProxy *ER_readPropIdx_proxy(Scope *);
-  VariableProxy *ER_writePropIdx_proxy(Scope *);
-  VariableProxy *ER_preIncProp_proxy(Scope *);
-  VariableProxy *ER_preDecProp_proxy(Scope *);
-  VariableProxy *ER_postIncProp_proxy(Scope *);
-  VariableProxy *ER_postDecProp_proxy(Scope *);
+
+#define FN(x) x,
+  enum InstrumentationFunction {
+    INSTRUMENTATION_FUNCTION_LIST(FN)
+    FN_MAX
+  };
+#undef FN
+  Variable *instr_fn_[FN_MAX];
+  VariableProxy *fn_proxy(enum InstrumentationFunction);
+
   ScopeHack *NewScope(Scope* outer);
   VariableProxy *NewProxy(Scope *, const AstRawString *, int);
   void ensure_arg_names(int n);

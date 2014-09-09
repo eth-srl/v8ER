@@ -18,85 +18,18 @@ EventRacerRewriter::AstRewriterImpl(CompilationInfo *info)
   Scope &globals = *info->global_scope();
   AstValueFactory &values = *info->ast_value_factory();
 
-  ER_read_ = globals.DeclareDynamicGlobal(values.GetOneByteString("ER_read"));
-  ER_readProp_ =
-    globals.DeclareDynamicGlobal(values.GetOneByteString("ER_readProp"));
-  ER_write_ = globals.DeclareDynamicGlobal(values.GetOneByteString("ER_write"));
-  ER_writeProp_ =
-    globals.DeclareDynamicGlobal(values.GetOneByteString("ER_writeProp"));
-  ER_readPropIdx_ =
-    globals.DeclareDynamicGlobal(values.GetOneByteString("ER_readPropIdx"));
-  ER_writePropIdx_ =
-    globals.DeclareDynamicGlobal(values.GetOneByteString("ER_writePropIdx"));
-  ER_preIncProp_ =
-    globals.DeclareDynamicGlobal(values.GetOneByteString("ER_preIncProp"));
-  ER_preDecProp_ =
-    globals.DeclareDynamicGlobal(values.GetOneByteString("ER_preDecProp"));
-  ER_postIncProp_ =
-    globals.DeclareDynamicGlobal(values.GetOneByteString("ER_postIncProp"));
-  ER_postDecProp_ =
-    globals.DeclareDynamicGlobal(values.GetOneByteString("ER_postDecProp"));
+#define FN(fn)  \
+  instr_fn_[fn] = globals.DeclareDynamicGlobal(values.GetOneByteString(#fn));
+  INSTRUMENTATION_FUNCTION_LIST(FN)
+#undef FN
   o_string_ = values.GetOneByteString("$obj");
   k_string_ = values.GetOneByteString("$key");
   v_string_ = values.GetOneByteString("$value");
 }
 
-VariableProxy *EventRacerRewriter::ER_read_proxy(Scope *scope) {
-  VariableProxy *vp = factory_.NewVariableProxy(ER_read_);
-  vp->set_do_not_instrument();
-  return vp;
-}
-
-VariableProxy *EventRacerRewriter::ER_readProp_proxy(Scope *scope) {
-  VariableProxy *vp = factory_.NewVariableProxy(ER_readProp_);
-  vp->set_do_not_instrument();
-  return vp;
-}
-
-VariableProxy *EventRacerRewriter::ER_write_proxy(Scope *scope) {
-  VariableProxy *vp = factory_.NewVariableProxy(ER_write_);
-  vp->set_do_not_instrument();
-  return vp;
-}
-
-VariableProxy *EventRacerRewriter::ER_writeProp_proxy(Scope *scope) {
-  VariableProxy *vp = factory_.NewVariableProxy(ER_writeProp_);
-  vp->set_do_not_instrument();
-  return vp;
-}
-
-VariableProxy *EventRacerRewriter::ER_readPropIdx_proxy(Scope *scope) {
-  VariableProxy *vp = factory_.NewVariableProxy(ER_readPropIdx_);
-  vp->set_do_not_instrument();
-  return vp;
-}
-
-VariableProxy *EventRacerRewriter::ER_writePropIdx_proxy(Scope *scope) {
-  VariableProxy *vp = factory_.NewVariableProxy(ER_writePropIdx_);
-  vp->set_do_not_instrument();
-  return vp;
-}
-
-VariableProxy *EventRacerRewriter::ER_preIncProp_proxy(Scope *scope) {
-  VariableProxy *vp = factory_.NewVariableProxy(ER_preIncProp_);
-  vp->set_do_not_instrument();
-  return vp;
-}
-
-VariableProxy *EventRacerRewriter::ER_preDecProp_proxy(Scope *scope) {
-  VariableProxy *vp = factory_.NewVariableProxy(ER_preDecProp_);
-  vp->set_do_not_instrument();
-  return vp;
-}
-
-VariableProxy *EventRacerRewriter::ER_postIncProp_proxy(Scope *scope) {
-  VariableProxy *vp = factory_.NewVariableProxy(ER_postIncProp_);
-  vp->set_do_not_instrument();
-  return vp;
-}
-
-VariableProxy *EventRacerRewriter::ER_postDecProp_proxy(Scope *scope) {
-  VariableProxy *vp = factory_.NewVariableProxy(ER_postDecProp_);
+VariableProxy *EventRacerRewriter::fn_proxy(enum InstrumentationFunction fn) {
+  DCHECK(fn < FN_MAX);
+  VariableProxy *vp = factory_.NewVariableProxy(instr_fn_[fn]);
   vp->set_do_not_instrument();
   return vp;
 }
@@ -291,7 +224,7 @@ Expression* EventRacerRewriter::doVisit(VariableProxy *vp) {
   ZoneList<Expression*> *args = new (zone()) ZoneList<Expression*>(2, zone());
   args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()), zone());
   args->Add(vp, zone());
-  return factory_.NewCall(ER_read_proxy(context()->scope), args, vp->position());
+  return factory_.NewCall(fn_proxy(ER_read), args, vp->position());
 }
 
 Expression* EventRacerRewriter::doVisit(Property *p) {
@@ -362,7 +295,7 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
         // Create the return statement.
         body = new (zone()) ZoneList<Statement*>(1, zone());
         body->Add(factory_.NewReturnStatement(
-                    factory_.NewCall(ER_readProp_proxy(scope), args,
+                    factory_.NewCall(fn_proxy(ER_readProp), args,
                                      p->position()),
                     p->position()),
                   zone());
@@ -396,8 +329,7 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
       args = new (zone()) ZoneList<Expression*>(2, zone());
       args->Add(obj, zone());
       args->Add(key, zone());
-      return factory_.NewCall(ER_readPropIdx_proxy(context()->scope), args,
-                              p->position());
+      return factory_.NewCall(fn_proxy(ER_readPropIdx), args, p->position());
     }
 }
 
@@ -479,7 +411,7 @@ Call* EventRacerRewriter::doVisit(Call *c) {
 
     body = new (zone()) ZoneList<Statement*>(1, zone());
     body->Add(factory_.NewExpressionStatement(
-                factory_.NewCall(ER_readProp_proxy(scope), args, c->position()),
+                factory_.NewCall(fn_proxy(ER_readProp), args, c->position()),
                 c->position()),
               zone());
 
@@ -580,8 +512,8 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
                   op->position()),
                 zone());
       return factory_.NewAssignment(
-        Token::ASSIGN, vp, factory_.NewCall(ER_write_proxy(context()->scope),
-                                            args, op->position()),
+        Token::ASSIGN, vp, factory_.NewCall(fn_proxy(ER_write), args,
+                                            op->position()),
         op->position());
     } else /* vp == NULL */ {
       // Pre-increment of a property is instrumented like:
@@ -639,7 +571,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
                       factory_.NewAssignment(
                         Token::ASSIGN,
                         factory_.NewProperty(o[2], k[2], p->position()),
-                        factory_.NewCall(ER_writeProp_proxy(scope), args,
+                        factory_.NewCall(fn_proxy(ER_writeProp), args,
                                          op->position()),
                         op->position()),
                       op->position()),
@@ -674,9 +606,8 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
         args = new (zone()) ZoneList<Expression*>(2, zone());
         args->Add(obj, zone());
         args->Add(key, zone());
-        return factory_.NewCall((op->op() == Token::INC
-                                 ? ER_preIncProp_proxy(context()->scope)
-                                 : ER_preDecProp_proxy(context()->scope)),
+        return factory_.NewCall(fn_proxy(op->op() == Token::INC
+                                         ? ER_preIncProp : ER_preDecProp),
                                 args,
                                 op->position());
       }
@@ -731,7 +662,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
                     factory_.NewAssignment(
                       Token::ASSIGN,
                       factory_.NewVariableProxy(vp->var()),
-                      factory_.NewCall(ER_write_proxy(scope), args,
+                      factory_.NewCall(fn_proxy(ER_write), args,
                                        op->position()),
                       op->position()),
                     op->position()),
@@ -848,7 +779,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
                       factory_.NewAssignment(
                         Token::ASSIGN,
                         factory_.NewProperty(o[2], k[2], p->position()),
-                        factory_.NewCall(ER_writeProp_proxy(scope), args,
+                        factory_.NewCall(fn_proxy(ER_writeProp), args,
                                          op->position()),
                         op->position()),
                       op->position()),
@@ -888,9 +819,9 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
         args = new (zone()) ZoneList<Expression*>(2, zone());
         args->Add(obj, zone());
         args->Add(key, zone());
-        return factory_.NewCall((op->op() == Token::INC
-                                 ? ER_postIncProp_proxy(context()->scope)
-                                 : ER_postDecProp_proxy(context()->scope)),
+        return factory_.NewCall(fn_proxy(op->op() == Token::INC
+                                         ? ER_postIncProp
+                                         : ER_postDecProp),
                                 args,
                                 op->position());
         return op;
@@ -960,8 +891,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
     } else {
       args->Add(op->value_, zone());
     }
-    op->value_ = factory_.NewCall(ER_write_proxy(context()->scope), args,
-                                  op->position());
+    op->value_ = factory_.NewCall(fn_proxy(ER_write), args, op->position());
     return op;
   } else {
     DCHECK(op->target_->IsProperty());
@@ -1042,7 +972,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
                     factory_.NewAssignment(
                       Token::ASSIGN,
                       factory_.NewProperty(o[1], k[1], p->position()),
-                      factory_.NewCall(ER_writeProp_proxy(scope), args,
+                      factory_.NewCall(fn_proxy(ER_writeProp), args,
                                        op->position()),
                       op->position()),
                     op->position()),
@@ -1139,7 +1069,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
                       factory_.NewAssignment(
                         Token::ASSIGN,
                         factory_.NewProperty(o[1], k[1], p->position()),
-                        factory_.NewCall(ER_writeProp_proxy(scope), args,
+                        factory_.NewCall(fn_proxy(ER_writeProp), args,
                                          op->position()),
                         op->position()),
                       op->position()),
@@ -1176,7 +1106,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
         args->Add(obj, zone());
         args->Add(key, zone());
         args->Add(op->value_, zone());
-        return factory_.NewCall(ER_writePropIdx_proxy(context()->scope), args,
+        return factory_.NewCall(fn_proxy(ER_writePropIdx), args,
                                 op->position());
       }
     }
