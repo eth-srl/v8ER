@@ -28,7 +28,6 @@ namespace internal {
   V(Call)                                       \
   V(CallNew)                                    \
   V(CallRuntime)                                \
-  V(UnaryOperation)                             \
   V(BinaryOperation)                            \
   V(CompareOperation)                           \
   V(Conditional)                                \
@@ -66,7 +65,8 @@ namespace internal {
   V(ER_preIncProp)                              \
   V(ER_preDecProp)                              \
   V(ER_postIncProp)                             \
-  V(ER_postDecProp)
+  V(ER_postDecProp)                             \
+  V(ER_deleteKey)
 
 struct EventRacerRewriterTag {};
 
@@ -88,6 +88,7 @@ public:
   virtual Expression* doVisit(VariableProxy *) V8_FINAL V8_OVERRIDE;
   virtual Expression* doVisit(Property *) V8_FINAL V8_OVERRIDE;
   virtual Expression* doVisit(CountOperation *) V8_FINAL V8_OVERRIDE;
+  virtual Expression* doVisit(UnaryOperation *) V8_FINAL V8_OVERRIDE;
   virtual Expression* doVisit(Assignment *) V8_FINAL V8_OVERRIDE;
 
 private:

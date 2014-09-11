@@ -142,7 +142,6 @@ namespace internal {
   V(Call)                                       \
   V(CallNew)                                    \
   V(CallRuntime)                                \
-  V(UnaryOperation)                             \
   V(BinaryOperation)                            \
   V(CompareOperation)                           \
   V(Conditional)                                \
@@ -2082,7 +2081,8 @@ class CallRuntime V8_FINAL : public Expression, public FeedbackSlotInterface {
 class UnaryOperation V8_FINAL : public Expression {
  public:
   DECLARE_NODE_TYPE(UnaryOperation)
-  DECLARE_FIXED_REWRITE_NODE(UnaryOperation)
+  virtual Expression *Accept(AstRewriter *);
+  template<class> friend class AstRewriterImpl;
 
   Token::Value op() const { return op_; }
   Expression* expression() const { return expression_; }
@@ -3205,6 +3205,15 @@ class AstRewriter BASE_EMBEDDED {
   }
 
   virtual Expression* doVisit(Property *) = 0;
+
+  Expression *Visit(UnaryOperation *node) {
+    if (!CheckStackOverflow())
+      return doVisit(node);
+    else
+      return node;
+  }
+
+  virtual Expression* doVisit(UnaryOperation *) = 0;
 
   Expression *Visit(CountOperation *node) {
     if (!CheckStackOverflow())

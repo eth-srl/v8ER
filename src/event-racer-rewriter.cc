@@ -444,12 +444,96 @@ CallRuntime* EventRacerRewriter::doVisit(CallRuntime *c) {
   return c;
 }
 
-UnaryOperation* EventRacerRewriter::doVisit(UnaryOperation *op) {
-  if (op->op() == Token::DELETE && op->expression()->IsProperty())
-    return op;
+Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
+  if (op->op() == Token::DELETE && op->expression()->IsProperty()) {
+    // Rewrite the subtrees.
+    Property *p = op->expression_->AsProperty();
+    rewrite(this, p->obj_);
+    rewrite(this, p->key_);
 
-  rewrite(this, op->expression_);
-  return op;
+    // Deletion of a propery is instrumented as a write of |undefined|,
+    // like:
+    //
+    // |delete obj.key|
+    // =>
+    // |(function($obj) {|
+    // |   ER_writeProp(obj, "key", undefined);|
+    // |   return delete $obj.key;         |
+    // |})(obj)                            |
+    //
+    // or, if the key is a general expression, with a call to the
+    // runtime functon |ER_deleteKey|:
+    //
+    // |delete arr[idx]|
+    // =>
+    // |ER_deleteKey(arr, idx)|
+    ZoneList<Expression*> *args;
+    Expression *obj = p->obj_, *key = p->key_;
+    if (is_literal_key(key)) {
+      ScopeHack *scope;
+      ZoneList<Statement*> *body;
+      int fn_ast_node_id;
+      {
+        AstNodeIdAllocationScope _(this);
+
+        scope = NewScope(context()->scope);
+        scope->set_start_position(op->position());
+        scope->set_end_position(op->position() + 1);
+
+        // Declare parameters of the new function.
+        Variable *o_parm = scope->DeclareParameter(o_string_, VAR);
+        o_parm->AllocateTo(Variable::PARAMETER, 0);
+
+        // The |$obj| parameter is referenced in two places, so is the
+        // |$key| parameter. Create separate AST nodes for each
+        // reference.
+        Expression *o[2], *k[2];
+        for (int i = 0; i < 2; ++i) {
+          o[i] = factory_.NewVariableProxy(o_parm);
+          k[i] = duplicate_key(key->AsLiteral());
+        }
+
+        // Setup arguments of the call to |ER_writeProp|.
+        args = new (zone()) ZoneList<Expression*>(3, zone());
+        args->Add(o[0], zone());
+        args->Add(k[0], zone());
+        args->Add(factory_.NewUndefinedLiteral(p->position()), zone());
+
+        body = new (zone()) ZoneList<Statement*>(2, zone());
+        body->Add(factory_.NewExpressionStatement(
+                    factory_.NewCall(fn_proxy(ER_writeProp), args,
+                                     op->position()),
+                    op->position()),
+                  zone());
+
+        // Build the inner delete expression.
+        body->Add(factory_.NewReturnStatement(
+                    factory_.NewUnaryOperation(
+                      Token::DELETE,
+                      factory_.NewProperty(o[1], k[1], p->position()),
+                      op->position()),
+                    op->position()),
+                  zone());
+
+        fn_ast_node_id = ast_node_id();
+      }
+
+      // Define the new function and build the call.
+      FunctionLiteral *fn = make_fn(scope, body, 1, fn_ast_node_id,
+                                    op->position());
+      args = new (zone()) ZoneList<Expression*>(1, zone());
+      args->Add(obj, zone());
+      return factory_.NewCall(fn, args, p->position());
+    } else {
+      args = new (zone()) ZoneList<Expression*>(2, zone());
+      args->Add(obj, zone());
+      args->Add(key, zone());
+      return factory_.NewCall(fn_proxy(ER_deleteKey), args, op->position());
+    }
+  } else {
+    rewrite(this, op->expression_);
+    return op;
+  }
 }
 
 BinaryOperation* EventRacerRewriter::doVisit(BinaryOperation *op) {
