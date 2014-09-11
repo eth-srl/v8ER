@@ -184,7 +184,6 @@ private:
   VariableProxy *fn_proxy(enum InstrumentationFunction);
 
   ScopeHack *NewScope(Scope* outer);
-  VariableProxy *NewProxy(Scope *, const AstRawString *, int);
   void ensure_arg_names(int n);
   int ast_node_id() const;
   void set_ast_node_id(int);

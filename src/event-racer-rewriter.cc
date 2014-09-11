@@ -66,12 +66,6 @@ EventRacerRewriter::ScopeHack *EventRacerRewriter::NewScope(Scope* outer) {
   return s;
 }
 
-VariableProxy *EventRacerRewriter::NewProxy(Scope *scope,
-                                            const AstRawString *name,
-                                            int pos) {
-  return scope->NewUnresolved(&factory_, name, Interface::NewValue(), pos);
-}
-
 void EventRacerRewriter::ensure_arg_names(int n) {
   if (arg_names_ == NULL)
     arg_names_ = new (zone()) ZoneList<const AstRawString *>(n, zone());
@@ -294,13 +288,14 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
         scope->set_end_position(p->position() + 1);
 
         // Declare the parameter of the new function.
-        scope->DeclareParameter(o_string_, VAR);
+        Variable *o_parm = scope->DeclareParameter(o_string_, VAR);
+        o_parm->AllocateTo(Variable::PARAMETER, 0);
 
         // The |$obj| parameter is referenced in two places, so is the
         // |key| parameter. Create separate AST nodes for each reference.
         Expression *o[2], *k[2];
-        o[0] = NewProxy(scope, o_string_, p->position());
-        o[1] = NewProxy(scope, o_string_, p->position());
+        o[0] = factory_.NewVariableProxy(o_parm);
+        o[1] = factory_.NewVariableProxy(o_parm);
         k[0] = duplicate_key(key->AsLiteral());
         k[1] = duplicate_key(key->AsLiteral());
 
