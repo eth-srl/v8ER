@@ -11956,7 +11956,6 @@ class ScopeIterator {
 
       // Check whether we are in global, eval or function code.
       Handle<ScopeInfo> scope_info(shared_info->scope_info());
-      bool ok = false;
       if (scope_info->scope_type() != FUNCTION_SCOPE) {
         // Global or eval code.
         CompilationInfoWithZone info(script);
@@ -11967,24 +11966,14 @@ class ScopeIterator {
           info.MarkAsEval();
           info.SetContext(Handle<Context>(function_->context()));
         }
-        if (info.is_native() || !FLAG_instrument) {
-          ok = Parser::Parse(&info) && Scope::Analyze(&info);
-        } else {
-          if (Parser::Parse(&info)) {
+        if (Parser::Parse(&info) && Scope::Analyze(&info)) {
+          if (!info.is_native() && FLAG_instrument) {
             EventRacerRewriter rw(&info);
             info.function()->Accept(&rw);
 
-            if (Scope::Analyze(&info)) {
-              rw.scope_analysis_complete();
-              info.function()->Accept(&rw);
-
-              AstSlotCounter cnt;
-              info.function()->Accept(&cnt);
-              ok = true;
-            }
+            AstSlotCounter cnt;
+            info.function()->Accept(&cnt);
           }
-        }
-        if (ok) {
           scope = info.function()->scope();
           info.PrepareForCompilation(scope);
         }
@@ -11992,24 +11981,14 @@ class ScopeIterator {
       } else {
         // Function code
         CompilationInfoWithZone info(shared_info);
-        if (info.is_native() || !FLAG_instrument) {
-          ok = Parser::Parse(&info) && Scope::Analyze(&info);
-        } else {
-          if (Parser::Parse(&info)) {
+        if (Parser::Parse(&info) && Scope::Analyze(&info)) {
+          if (!info.is_native() && FLAG_instrument) {
             EventRacerRewriter rw(&info);
             info.function()->Accept(&rw);
 
-            if (Scope::Analyze(&info)) {
-              rw.scope_analysis_complete();
-              info.function()->Accept(&rw);
-
-              AstSlotCounter cnt;
-              info.function()->Accept(&cnt);
-              ok = true;
-            }
+            AstSlotCounter cnt;
+            info.function()->Accept(&cnt);
           }
-        }
-        if (ok) {
           scope = info.function()->scope();
           info.PrepareForCompilation(scope);
         }

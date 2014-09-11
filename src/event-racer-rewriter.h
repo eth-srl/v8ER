@@ -90,8 +90,6 @@ public:
   virtual Expression* doVisit(CountOperation *) V8_FINAL V8_OVERRIDE;
   virtual Expression* doVisit(Assignment *) V8_FINAL V8_OVERRIDE;
 
-  void scope_analysis_complete() { post_scope_analysis_ = true; }
-
 private:
   struct ContextScope {
     ContextScope(AstRewriterImpl<EventRacerRewriterTag> *w,
@@ -156,9 +154,6 @@ private:
   };
 
   bool is_potentially_shared(const VariableProxy *vp) const {
-    DCHECK(post_scope_analysis_);
-    if (vp->do_not_instrument())
-      return false;
     Variable *var = vp->var();
     return var == NULL || !var->IsStackAllocated();
   }
@@ -166,7 +161,6 @@ private:
   ContextScope *context() const { return current_context_; }
 
   CompilationInfo *info_;
-  bool post_scope_analysis_;
   ContextScope *current_context_;
   AstNodeIdAllocationScope *id_alloc_scope_;
 

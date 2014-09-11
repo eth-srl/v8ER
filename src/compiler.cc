@@ -670,18 +670,10 @@ static bool CompileUnoptimizedCode(CompilationInfo* info) {
   DCHECK(AllowCompilation::IsAllowed(info->isolate()));
   DCHECK(info->function() != NULL);
   if (!Rewriter::Rewrite(info)) return false;
+  if (!Scope::Analyze(info)) return false;
 
-  if (info->is_native() || !FLAG_instrument) {
-    if (!Scope::Analyze(info))
-      return false;
-  } else {
+  if (!info->is_native() && FLAG_instrument) {
     EventRacerRewriter rw(info);
-    info->function()->Accept(&rw);
-
-    if (!Scope::Analyze(info))
-      return false;
-
-    rw.scope_analysis_complete();
     info->function()->Accept(&rw);
 
     AstSlotCounter cnt;
@@ -1189,18 +1181,10 @@ static bool CompileOptimizedPrologue(CompilationInfo* info) {
   info->SetStrictMode(info->function()->strict_mode());
 
   if (!Rewriter::Rewrite(info)) return false;
+  if (!Scope::Analyze(info)) return false;
 
-  if (info->is_native() || !FLAG_instrument) {
-    if (!Scope::Analyze(info))
-      return false;
-  } else {
+  if (!info->is_native() && FLAG_instrument) {
     EventRacerRewriter rw(info);
-    info->function()->Accept(&rw);
-
-    if (!Scope::Analyze(info))
-      return false;
-
-    rw.scope_analysis_complete();
     info->function()->Accept(&rw);
 
     AstSlotCounter cnt;

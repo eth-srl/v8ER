@@ -7,7 +7,7 @@ namespace v8 {
 namespace internal {
 
 EventRacerRewriter::AstRewriterImpl(CompilationInfo *info)
-  : info_(info), post_scope_analysis_(false),
+  : info_(info),
     current_context_(NULL),
     id_alloc_scope_(NULL),
     factory_(info_->zone(), info_->ast_value_factory()),
@@ -226,11 +226,6 @@ ArrayLiteral* EventRacerRewriter::doVisit(ArrayLiteral *lit) {
 }
 
 Expression* EventRacerRewriter::doVisit(VariableProxy *vp) {
-  // Postpone the rewriting of variable proxies for after the scope
-  // analysis and variable resolution have ran.
-  if (!post_scope_analysis_)
-    return vp;
-
   // Instrument only access to potentially shared variables, namely
   // those declared by the user (as opposed to being introduced by the
   // compiler), which aren't stack allocated.
@@ -246,10 +241,8 @@ Expression* EventRacerRewriter::doVisit(VariableProxy *vp) {
 }
 
 Expression* EventRacerRewriter::doVisit(Property *p) {
-
-  // Property read is rewritten pre scope analysis.
-  if (post_scope_analysis_)
-    return p;
+  rewrite(this, p->obj_);
+  rewrite(this, p->key_);
 
   // Read of a property of an object is rewritten into a call to
   // ER_readProp.
@@ -277,63 +270,62 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
   Expression *obj = p->obj(), *key = p->key();
 
   if (is_literal_key(key)) {
-      ScopeHack *scope;
-      ZoneList<Statement*> *body;
-      int fn_ast_node_id;
-      {
-        AstNodeIdAllocationScope _(this);
+    ScopeHack *scope;
+    ZoneList<Statement*> *body;
+    int fn_ast_node_id;
+    {
+      AstNodeIdAllocationScope _(this);
 
-        scope = NewScope(context()->scope);
-        scope->set_start_position(p->position());
-        scope->set_end_position(p->position() + 1);
+      scope = NewScope(context()->scope);
+      scope->set_start_position(p->position());
+      scope->set_end_position(p->position() + 1);
 
-        // Declare the parameter of the new function.
-        Variable *o_parm = scope->DeclareParameter(o_string_, VAR);
-        o_parm->AllocateTo(Variable::PARAMETER, 0);
+      // Declare the parameter of the new function.
+      Variable *o_parm = scope->DeclareParameter(o_string_, VAR);
+      o_parm->AllocateTo(Variable::PARAMETER, 0);
 
-        // The |$obj| parameter is referenced in two places, so is the
-        // |key| parameter. Create separate AST nodes for each reference.
-        Expression *o[2], *k[2];
-        o[0] = factory_.NewVariableProxy(o_parm);
-        o[1] = factory_.NewVariableProxy(o_parm);
-        k[0] = duplicate_key(key->AsLiteral());
-        k[1] = duplicate_key(key->AsLiteral());
+      // The |$obj| parameter is referenced in two places, so is the
+      // |key| parameter. Create separate AST nodes for each reference.
+      Expression *o[2], *k[2];
+      o[0] = factory_.NewVariableProxy(o_parm);
+      o[1] = factory_.NewVariableProxy(o_parm);
+      k[0] = duplicate_key(key->AsLiteral());
+      k[1] = duplicate_key(key->AsLiteral());
 
-        // Setup arguments of the call to |ER_readProp|.
-        args = new (zone()) ZoneList<Expression*>(3, zone());
-        args->Add(o[0], zone());
-        args->Add(k[0], zone());
-        args->Add(factory_.NewProperty(o[1], k[1], p->position()), zone());
+      // Setup arguments of the call to |ER_readProp|.
+      args = new (zone()) ZoneList<Expression*>(3, zone());
+      args->Add(o[0], zone());
+      args->Add(k[0], zone());
+      args->Add(factory_.NewProperty(o[1], k[1], p->position()), zone());
 
-        // Create the return statement.
-        body = new (zone()) ZoneList<Statement*>(1, zone());
-        body->Add(factory_.NewReturnStatement(
-                    factory_.NewCall(fn_proxy(ER_readProp), args,
-                                     p->position()),
-                    p->position()),
-                  zone());
-        fn_ast_node_id = ast_node_id();
-      } // end allocation scope
+      // Create the return statement.
+      body = new (zone()) ZoneList<Statement*>(1, zone());
+      body->Add(factory_.NewReturnStatement(
+                  factory_.NewCall(fn_proxy(ER_readProp), args,
+                                   p->position()),
+                  p->position()),
+                zone());
+      fn_ast_node_id = ast_node_id();
+    } // end allocation scope
 
       // Define the new function and build the call.
-      FunctionLiteral *fn = make_fn(scope, body, 1 + !is_literal_key(key),
-                                    fn_ast_node_id, p->position());
-      args = new (zone()) ZoneList<Expression*>(1, zone());
-      args->Add(obj, zone());
-      return factory_.NewCall(fn, args, p->position());
-    } else {
-      // Build a call to |ER_readPropIdx|
-      args = new (zone()) ZoneList<Expression*>(2, zone());
-      args->Add(obj, zone());
-      args->Add(key, zone());
-      return factory_.NewCall(fn_proxy(ER_readPropIdx), args, p->position());
-    }
+    FunctionLiteral *fn = make_fn(scope, body, 1 + !is_literal_key(key),
+                                  fn_ast_node_id, p->position());
+    args = new (zone()) ZoneList<Expression*>(1, zone());
+    args->Add(obj, zone());
+    return factory_.NewCall(fn, args, p->position());
+  } else {
+    // Build a call to |ER_readPropIdx|
+    args = new (zone()) ZoneList<Expression*>(2, zone());
+    args->Add(obj, zone());
+    args->Add(key, zone());
+    return factory_.NewCall(fn_proxy(ER_readPropIdx), args, p->position());
+  }
 }
 
 Call* EventRacerRewriter::doVisit(Call *c) {
-  // Calls are rewritten pre scope analysis and non-property-calls
-  // aren't treated specially.
-  if (post_scope_analysis_ || !c->expression_->IsProperty()) {
+  // Non-property calls aren't treated specially.
+  if (!c->expression_->IsProperty()) {
     // Do not instrument direct |eval| calls, as the instrumentation
     // changes them into indirect calls and the semantics differ.
     if (c->GetCallType(zone()->isolate()) != Call::POSSIBLY_EVAL_CALL)
@@ -355,12 +347,14 @@ Call* EventRacerRewriter::doVisit(Call *c) {
   // the callee gets a receiver object - hence we should end up with an
   // instrumented expression, which also contains an analoguos property
   // call.
+  Property *p = c->expression()->AsProperty();
+  rewrite(this, p->obj_);
+  rewrite(this, p->key_);
 
   ScopeHack *scope;
   ZoneList<Expression*> *args;
   ZoneList<Statement*> *body;
   int fn_ast_node_id;
-  Property *p = c->expression()->AsProperty();
   Expression *obj = p->obj(), *key = p->key();
   const int n = c->arguments()->length();
   {
@@ -417,8 +411,9 @@ Call* EventRacerRewriter::doVisit(Call *c) {
                 zone());
     }
     body->Add(factory_.NewReturnStatement(
-                factory_.NewCall(factory_.NewProperty(o[2], k[2], p->position()),
-                                 args, c->position()),
+                factory_.NewCall(
+                  factory_.NewProperty(o[2], k[2], p->position()),
+                  args, c->position()),
                 c->position()),
               zone());
 
@@ -466,10 +461,16 @@ BinaryOperation* EventRacerRewriter::doVisit(BinaryOperation *op) {
 Expression* EventRacerRewriter::doVisit(CountOperation *op) {
   DCHECK(op->expression_->IsVariableProxy() || op->expression_->IsProperty());
 
+  // Rewrite subexpressions and check if a we have a potentially shared
+  // variable proxy.
   VariableProxy *vp = op->expression_->AsVariableProxy();
-  if (!post_scope_analysis_ || (vp != NULL && !is_potentially_shared(vp))) {
-    // Increment expressions are rewritten post scope analysis.
-    return op;
+  if (vp != NULL) {
+    if (!is_potentially_shared(vp))
+      return op;
+  } else {
+    Property *p = op->expression_->AsProperty();
+    rewrite(this, p->obj_);
+    rewrite(this, p->key_);
   }
 
   ZoneList<Expression*> *args;
@@ -776,6 +777,8 @@ Conditional* EventRacerRewriter::doVisit(Conditional *op) {
 }
 
 Expression* EventRacerRewriter::doVisit(Assignment *op) {
+  DCHECK(op->target_->IsVariableProxy() || op->target_->IsProperty());
+
   rewrite(this, op->value_);
   if (op->is_compound())
     op->binary_operation_->right_ = op->value_;
@@ -787,17 +790,12 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
     rewrite(this, p->key_);
   }
 
-  DCHECK(op->target_->IsVariableProxy() || op->target_->IsProperty());
-  VariableProxy *vp = op->target_->AsVariableProxy();
-  if (!post_scope_analysis_ || (vp != NULL && !is_potentially_shared(vp))) {
-    // Assignment expressions are rewritten post scope analysis. Pre
-    // scope analysis just descend into the AST.
-    return op;
-  }
-
   ZoneList<Expression*> *args;
-
+  VariableProxy *vp = op->target_->AsVariableProxy();
   if (vp != NULL) {
+    if (!is_potentially_shared(vp))
+      return op;
+
     // If the LHS is a simple variable, the assignment is rewritten
     // like:
     //
