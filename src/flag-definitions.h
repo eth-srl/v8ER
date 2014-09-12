@@ -693,6 +693,8 @@ DEFINE_BOOL(stress_compaction, false,
             "stress the GC compactor to flush out bugs (implies "
             "--force_marking_deque_overflows)")
 
+DEFINE_BOOL(instrument, true, "enable ER instrumentation")
+
 //
 // Debug only flags
 //
@@ -721,7 +723,6 @@ DEFINE_BOOL(trap_on_abort, false, "replace aborts by breakpoints")
 // compiler.cc
 DEFINE_BOOL(print_builtin_scopes, false, "print scopes for builtins")
 DEFINE_BOOL(print_scopes, false, "print scopes")
-DEFINE_BOOL(instrument, true, "enable ER instrumentation")
 
 // contexts.cc
 DEFINE_BOOL(trace_contexts, false, "trace contexts operations")
