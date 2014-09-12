@@ -677,7 +677,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
         scope->set_end_position(op->position() + 1);
 
         // Declare the local variable.
-        Variable *value = scope->DeclareLocal(v_string_, VariableMode::LET,
+        Variable *value = scope->DeclareLocal(v_string_, LET,
                                               kCreatedInitialized,
                                               kNotAssigned);
         scope->AllocateStackSlot(value);
@@ -768,7 +768,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
           o_parm->AllocateTo(Variable::PARAMETER, 0);
 
           // Declare the local variable.
-          Variable *value = scope->DeclareLocal(v_string_, VariableMode::LET,
+          Variable *value = scope->DeclareLocal(v_string_, LET,
                                                 kCreatedInitialized,
                                                 kNotAssigned);
           scope->AllocateStackSlot(value);
