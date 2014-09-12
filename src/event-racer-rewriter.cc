@@ -530,10 +530,25 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
       args->Add(key, zone());
       return factory_.NewCall(fn_proxy(ER_deleteKey), args, op->position());
     }
-  } else {
-    rewrite(this, op->expression_);
-    return op;
+  } 
+
+  if (op->op() == Token::TYPEOF && op->expression_->IsVariableProxy()) {
+    // The |typeof| operator needs special handling since
+    // |typeof <some-unknown-identifier>| evaluates to |undefined| instead
+    // of throwing an error.
+    VariableProxy *vp = op->expression_->AsVariableProxy();
+    if (is_potentially_shared(vp)) {
+      ZoneList<Expression*> *args;
+      args = new (zone()) ZoneList<Expression*>(3, zone());
+      args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()),
+                zone());
+      args->Add(op, zone());
+      return factory_.NewCall(fn_proxy(ER_read), args, op->position());
+    }
   }
+
+  rewrite(this, op->expression_);
+  return op;
 }
 
 BinaryOperation* EventRacerRewriter::doVisit(BinaryOperation *op) {
