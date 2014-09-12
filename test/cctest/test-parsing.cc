@@ -3141,6 +3141,7 @@ TEST(InnerAssignment) {
           CHECK(parser.Parse());
           CHECK(i::Rewriter::Rewrite(&info));
           CHECK(i::Scope::Analyze(&info));
+          info.PrepareForCompilation(info.function()->scope());
           CHECK(info.function() != NULL);
 
           i::Scope* scope = info.function()->scope();

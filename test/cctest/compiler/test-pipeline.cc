@@ -27,6 +27,7 @@ TEST(PipelineAdd) {
   info.SetStrictMode(strict_mode);
   CHECK(Rewriter::Rewrite(&info));
   CHECK(Scope::Analyze(&info));
+  info.PrepareForCompilation(info.function()->scope());
   CHECK_NE(NULL, info.scope());
 
   Pipeline pipeline(&info);

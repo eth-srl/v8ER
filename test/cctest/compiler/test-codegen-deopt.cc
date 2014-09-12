@@ -49,6 +49,7 @@ class DeoptCodegenTester {
     info.SetOptimizing(BailoutId::None(), Handle<Code>(function->code()));
     CHECK(Rewriter::Rewrite(&info));
     CHECK(Scope::Analyze(&info));
+    info.PrepareForCompilation(info.function()->scope());
     CHECK_NE(NULL, info.scope());
 
     FunctionTester::EnsureDeoptimizationSupport(&info);
