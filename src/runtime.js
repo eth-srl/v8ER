@@ -656,14 +656,26 @@ function ToPositiveInteger(x, rangeErrorName) {
 %FunctionSetPrototype($Array, new $Array(0));
 
 // Stubs for EventRacer calls, for use with D8.
+
+// Core functions
 global.ER_read = function(name, value) { return value; }
 global.ER_write = function(name, value) { return value; }
 global.ER_readProp = function(obj, name, value) { return value; }
 global.ER_writeProp = function(obj, name, value) { return value; }
+global.ER_delete = function(name) {}
+global.ER_deleteProp = function(obj, idx) {}
+
+// Helper functions
 global.ER_readPropIdx = function(arr, idx) {
     return global.ER_readProp(arr, idx, arr[idx]);
 }
+
 global.ER_writePropIdx = function(obj, idx, value) {
+    return obj[idx] = global.ER_writeProp(obj, idx, value);
+}
+
+global.ER_writePropIdxStrict = function(obj, idx, value) {
+    "use strict";
     return obj[idx] = global.ER_writeProp(obj, idx, value);
 }
 
@@ -671,11 +683,28 @@ global.ER_preIncProp = function(obj, idx) {
     return obj[idx] = global.ER_writeProp(obj, idx, obj[idx] + 1);
 }
 
+global.ER_preIncPropStrict = function(obj, idx) {
+    "use strict";
+    return obj[idx] = global.ER_writeProp(obj, idx, obj[idx] + 1);
+}
+
 global.ER_preDecProp = function(obj, idx) {
     return obj[idx] = global.ER_writeProp(obj, idx, obj[idx] - 1);
 }
 
+global.ER_preDecPropStrict = function(obj, idx) {
+    "use strict";
+    return obj[idx] = global.ER_writeProp(obj, idx, obj[idx] - 1);
+}
+
 global.ER_postIncProp = function(obj, idx) {
+    var tmp = obj[idx];
+    obj[idx] = global.ER_writeProp(obj, idx, tmp + 1);
+    return tmp;
+}
+
+global.ER_postIncPropStrict = function(obj, idx) {
+    "use strict";
     var tmp = obj[idx];
     obj[idx] = global.ER_writeProp(obj, idx, tmp + 1);
     return tmp;
@@ -687,13 +716,20 @@ global.ER_postDecProp = function(obj, idx) {
     return tmp;
 }
 
-global.ER_delete = function(name) {
-}
-
-global.ER_deleteProp = function(obj, idx) {
+global.ER_postDecPropStrict = function(obj, idx) {
+    "use strict";
+    var tmp = obj[idx];
+    obj[idx] = global.ER_writeProp(obj, idx, tmp - 1);
+    return tmp;
 }
 
 global.ER_deletePropIdx = function(obj, idx) {
+    global.ER_deleteProp(obj, idx);
+    return delete obj[idx];
+}
+
+global.ER_deletePropIdxStrict = function(obj, idx) {
+    "use strict";
     global.ER_deleteProp(obj, idx);
     return delete obj[idx];
 }

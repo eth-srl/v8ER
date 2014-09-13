@@ -523,8 +523,12 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
         args = new (zone()) ZoneList<Expression*>(2, zone());
         args->Add(obj, zone());
         args->Add(key, zone());
-        return factory_.NewCall(fn_proxy(ER_deletePropIdx), args,
-                                op->position());
+        return factory_.NewCall(
+          fn_proxy(context()->scope->strict_mode() == SLOPPY
+                   ? ER_deletePropIdx
+                   : ER_deletePropIdxStrict),
+          args,
+          op->position());
       }
     } else if (op->expression_->IsVariableProxy()) {
       VariableProxy *vp = op->expression_->AsVariableProxy();
@@ -718,10 +722,17 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
         args = new (zone()) ZoneList<Expression*>(2, zone());
         args->Add(obj, zone());
         args->Add(key, zone());
-        return factory_.NewCall(fn_proxy(op->op() == Token::INC
-                                         ? ER_preIncProp : ER_preDecProp),
-                                args,
-                                op->position());
+        InstrumentationFunction fn;
+        if (op->op() == Token::INC) {
+          fn = (context()->scope->strict_mode() == SLOPPY
+                ? ER_preIncProp
+                : ER_preIncPropStrict);
+        } else {
+          fn = (context()->scope->strict_mode() == SLOPPY
+                ? ER_preDecProp
+                : ER_preDecPropStrict);
+        }
+        return factory_.NewCall(fn_proxy(fn), args, op->position());
       }
     }
   } else /* op->is_postfix() */ {
@@ -898,12 +909,17 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
         args = new (zone()) ZoneList<Expression*>(2, zone());
         args->Add(obj, zone());
         args->Add(key, zone());
-        return factory_.NewCall(fn_proxy(op->op() == Token::INC
-                                         ? ER_postIncProp
-                                         : ER_postDecProp),
-                                args,
-                                op->position());
-        return op;
+        InstrumentationFunction fn;
+        if (op->op() == Token::INC) {
+          fn = (context()->scope->strict_mode() == SLOPPY
+                ? ER_postIncProp
+                : ER_postIncPropStrict);
+        } else {
+          fn = (context()->scope->strict_mode() == SLOPPY
+                ? ER_postDecProp
+                : ER_postDecPropStrict);
+        }
+        return factory_.NewCall(fn_proxy(fn), args, op->position());
       }
     }
   }
@@ -1138,8 +1154,12 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
         args->Add(obj, zone());
         args->Add(key, zone());
         args->Add(op->value_, zone());
-        return factory_.NewCall(fn_proxy(ER_writePropIdx), args,
-                                op->position());
+        return factory_.NewCall(
+          fn_proxy(context()->scope->strict_mode() == SLOPPY
+                   ? ER_writePropIdx
+                   : ER_writePropIdxStrict),
+          args,
+          op->position());
       }
     }
   }
