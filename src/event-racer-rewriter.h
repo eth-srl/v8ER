@@ -66,7 +66,9 @@ namespace internal {
   V(ER_preDecProp)                              \
   V(ER_postIncProp)                             \
   V(ER_postDecProp)                             \
-  V(ER_deleteKey)
+  V(ER_delete)                                  \
+  V(ER_deleteProp)                              \
+  V(ER_deletePropIdx)
 
 struct EventRacerRewriterTag {};
 

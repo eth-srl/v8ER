@@ -687,7 +687,13 @@ global.ER_postDecProp = function(obj, idx) {
     return tmp;
 }
 
-global.ER_deleteKey = function(obj, idx) {
-    global.ER_writeProp(obj, idx, undefined);
+global.ER_delete = function(name) {
+}
+
+global.ER_deleteProp = function(obj, idx) {
+}
+
+global.ER_deletePropIdx = function(obj, idx) {
+    global.ER_deleteProp(obj, idx);
     return delete obj[idx];
 }
