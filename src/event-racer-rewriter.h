@@ -153,9 +153,14 @@ private:
   class ScopeHack : public Scope {
   public:
     ScopeHack(Scope* outer_scope, AstValueFactory* value_factory, Zone* zone)
-      : Scope(outer_scope, FUNCTION_SCOPE, value_factory, zone)
-      {
-      }
+      : Scope(outer_scope, FUNCTION_SCOPE, value_factory, zone) {
+
+      Initialize();
+      ForceEagerCompilation();
+      outer_scope_calls_sloppy_eval_ =
+        (outer_scope_->calls_sloppy_eval()
+         || outer_scope_->outer_scope_calls_sloppy_eval());
+    }
 
     void AllocateStackSlot(Variable* var) {
       Scope::AllocateStackSlot(var);

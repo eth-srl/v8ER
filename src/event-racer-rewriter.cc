@@ -57,13 +57,9 @@ FunctionLiteral *EventRacerRewriter::make_fn(Scope *scope,
   return fn;
 }
 
-
 EventRacerRewriter::ScopeHack *EventRacerRewriter::NewScope(Scope* outer) {
-  ScopeHack* s = new (zone()) ScopeHack(outer ? outer : info_->global_scope(),
-                                        info_->ast_value_factory(), zone());
-  s->Initialize();
-  s->ForceEagerCompilation();
-  return s;
+  return new (zone()) ScopeHack(outer ? outer : info_->global_scope(),
+                                info_->ast_value_factory(), zone());
 }
 
 void EventRacerRewriter::ensure_arg_names(int n) {
