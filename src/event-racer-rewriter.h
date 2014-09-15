@@ -9,6 +9,7 @@ namespace internal {
 
 // Only concrete AST classes
 #define INSTRUMENTED_AST_NODE_LIST(V)           \
+  V(FunctionDeclaration)                        \
   V(Block)                                      \
   V(ExpressionStatement)                        \
   V(DoWhileStatement)                           \
@@ -37,7 +38,6 @@ namespace internal {
 
 #define UNMODIFIED_AST_NODE_LIST(V)             \
   V(VariableDeclaration)                        \
-  V(FunctionDeclaration)                        \
   V(ModuleDeclaration)                          \
   V(ImportDeclaration)                          \
   V(ExportDeclaration)                          \

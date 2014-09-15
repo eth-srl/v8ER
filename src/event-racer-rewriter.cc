@@ -114,8 +114,15 @@ template<typename T> void rewrite(AstRewriter *w, ZoneList<T *> *lst) {
   }
 }
 
+FunctionDeclaration *EventRacerRewriter::doVisit(FunctionDeclaration *fn) {
+  rewrite(this, fn->fun_);
+  return fn;
+}
+
 Block* EventRacerRewriter::doVisit(Block *blk) {
   ContextScope _(this, blk->scope());
+  if (blk->scope())
+    rewrite(this, blk->scope()->declarations());
   rewrite(this, blk->statements());
   return blk;
 }
@@ -1178,6 +1185,7 @@ Throw* EventRacerRewriter::doVisit(Throw *op) {
 FunctionLiteral* EventRacerRewriter::doVisit(FunctionLiteral *lit) {
   ContextScope _(this, lit->scope());
   AstNodeIdAllocationScope __(this, lit);
+  rewrite(this, lit->scope()->declarations());
   rewrite(this, lit->body());
   lit->set_next_ast_node_id(ast_node_id());
   return lit;
@@ -1282,6 +1290,8 @@ void AstSlotCounter::VisitModuleStatement(ModuleStatement *st) {
 
 void AstSlotCounter::VisitBlock(Block *blk) {
   add_node();
+  if (blk->scope())
+    traverse(this, blk->scope()->declarations());
   traverse(this, blk->statements());
 }
 
