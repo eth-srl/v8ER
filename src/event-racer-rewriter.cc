@@ -1031,6 +1031,9 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
         if (op->is_compound()) {
           o[2] = factory_.NewVariableProxy(o_parm);
           k[2] = duplicate_key(key->AsLiteral());
+        } else {
+          o[2] = NULL;
+          k[2] = NULL;
         }
 
         // Setup arguments of the call to |ER_writeProp|.
