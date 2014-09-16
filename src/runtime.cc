@@ -11938,6 +11938,14 @@ class ScopeIterator {
       ignore_nested_scopes = break_location_iterator.IsExit();
     }
 
+    // Scopes, introduced by the ER instrumentation, do not have a
+    // meaningfull source positions. They do not have nested scopes
+    // either, so don't try to parse, as it will fail anyway.
+    if (!ignore_nested_scopes) {
+      ignore_nested_scopes = 
+        shared_info->start_position() + 1 >= shared_info->end_position();
+    }
+
     if (ignore_nested_scopes) {
       if (scope_info->HasContext()) {
         context_ = Handle<Context>(context_->declaration_context(), isolate_);
