@@ -10,6 +10,7 @@
 
 #include "src/compiler.h"
 #include "src/compiler/pipeline.h"
+#include "src/event-racer-rewriter.h"
 #include "src/execution.h"
 #include "src/full-codegen.h"
 #include "src/handles.h"
@@ -45,6 +46,13 @@ class FunctionTester : public InitializedHandleScope {
     info.SetOptimizing(BailoutId::None(), Handle<Code>(function->code()));
     CHECK(Rewriter::Rewrite(&info));
     CHECK(Scope::Analyze(&info));
+    {
+      EventRacerRewriter rw(&info);
+      info.function()->Accept(&rw);
+
+      AstSlotCounter cnt;
+      info.function()->Accept(&cnt);
+    }
     info.PrepareForCompilation(info.function()->scope());
     CHECK_NE(NULL, info.scope());
 
