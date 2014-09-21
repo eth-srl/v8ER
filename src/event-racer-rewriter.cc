@@ -755,8 +755,8 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
 
         DCHECK(vp->position() < op->position());
         scope = NewScope(context()->scope);
-        scope->set_start_position(op->position());
-        scope->set_end_position(op->position() + 1);
+        scope->set_start_position(vp->position());
+        scope->set_end_position(vp->position() + 1);
 
         // Declare the local variable.
         Variable *value = scope->DeclareLocal(v_string_, LET,
@@ -813,7 +813,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
       FunctionLiteral *fn = make_fn(scope, body, 0, fn_ast_node_id,
                                     RelocInfo::kNoPosition);
       args = new (zone()) ZoneList<Expression*>(0, zone());
-      return factory_.NewCall(fn, args, op->position() + 1);
+      return factory_.NewCall(fn, args, op->position());
     } else /* vp == NULL */ {
       // Post-increment of a property is instrumented like:
       //
