@@ -153,20 +153,18 @@ ForStatement *EventRacerRewriter::doVisit(ForStatement *st) {
 }
 
 ForInStatement *EventRacerRewriter::doVisit(ForInStatement *st) {
-  // TODO rewrite(this, st->each_);
   rewrite(this, st->subject_);
   rewrite(this, st->body_);
   return st;
 }
 
 ForOfStatement *EventRacerRewriter::doVisit(ForOfStatement *st) {
-  // TODO rewrite(this, st->each_);
   rewrite(this, st->subject_);
   rewrite(this, st->body_);
-  rewrite(this, st->assign_iterator_);
-  rewrite(this, st->next_result_);
-  rewrite(this, st->result_done_);
-  rewrite(this, st->assign_each_);
+  // TODO(chill) rewrite(this, st->assign_iterator_);
+  // TODO(chill) rewrite(this, st->next_result_);
+  // TODO(chill) rewrite(this, st->result_done_);
+  // TODO(chill) rewrite(this, st->assign_each_);
   return st;
 }
 
