@@ -2462,6 +2462,7 @@ typename ParserBase<Traits>::ExpressionT ParserBase<
   int materialized_literal_count = -1;
   int expected_property_count = -1;
   int handler_count = 0;
+  int next_ast_node_id;
 
   {
     FunctionState function_state(&function_state_, &scope_, &scope, zone(),
@@ -2540,6 +2541,7 @@ typename ParserBase<Traits>::ExpressionT ParserBase<
 
     ast_properties = *factory()->visitor()->ast_properties();
     dont_optimize_reason = factory()->visitor()->dont_optimize_reason();
+    next_ast_node_id = Traits::next_ast_node_id(zone());
   }
 
   FunctionLiteralT function_literal = factory()->NewFunctionLiteral(
@@ -2553,7 +2555,7 @@ typename ParserBase<Traits>::ExpressionT ParserBase<
   function_literal->set_function_token_position(start_pos);
   function_literal->set_ast_properties(&ast_properties);
   function_literal->set_dont_optimize_reason(dont_optimize_reason);
-  function_literal->set_next_ast_node_id(Traits::next_ast_node_id(zone()));
+  function_literal->set_next_ast_node_id(next_ast_node_id);
 
   if (fni_ != NULL) this->InferFunctionName(fni_, function_literal);
 
