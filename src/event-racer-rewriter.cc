@@ -277,6 +277,7 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
     {
       AstNodeIdAllocationScope _(this);
 
+      DCHECK(obj->position() < p->position());
       scope = NewScope(context()->scope);
       scope->set_start_position(p->position());
       scope->set_end_position(p->position() + 1);
@@ -320,7 +321,7 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
     args = new (zone()) ZoneList<Expression*>(2, zone());
     args->Add(obj, zone());
     args->Add(key, zone());
-    return factory_.NewCall(fn_proxy(ER_readPropIdx), args, p->position());
+    return factory_.NewCall(fn_proxy(ER_readPropIdx), args, obj->position());
   }
 }
 
@@ -361,6 +362,8 @@ Call* EventRacerRewriter::doVisit(Call *c) {
   {
     AstNodeIdAllocationScope _(this);
 
+    DCHECK(obj->position() < p->position());
+    DCHECK(p->position() < c->position());
     scope = NewScope(context()->scope);
     scope->set_start_position(p->position());
     scope->set_end_position(p->position() + 1);
@@ -475,9 +478,10 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
         {
           AstNodeIdAllocationScope _(this);
 
+          DCHECK(op->position() < p->position());
           scope = NewScope(context()->scope);
-          scope->set_start_position(p->position());
-          scope->set_end_position(p->position() + 1);
+          scope->set_start_position(op->position());
+          scope->set_end_position(op->position() + 1);
 
           // Declare parameters of the new function.
           Variable *o_parm = scope->DeclareParameter(o_string_, VAR);
@@ -520,7 +524,7 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
                                       RelocInfo::kNoPosition);
         args = new (zone()) ZoneList<Expression*>(1, zone());
         args->Add(obj, zone());
-        return factory_.NewCall(fn, args, p->position() + 1);
+        return factory_.NewCall(fn, args, p->position());
       } else {
         args = new (zone()) ZoneList<Expression*>(2, zone());
         args->Add(obj, zone());
@@ -548,6 +552,7 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
         {
           AstNodeIdAllocationScope _(this);
 
+          DCHECK(op->position() < vp->position());
           scope = NewScope(context()->scope);
           scope->set_start_position(op->position());
           scope->set_end_position(op->position() + 1);
@@ -568,7 +573,7 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
           body->Add(factory_.NewReturnStatement(
                       factory_.NewUnaryOperation(
                         Token::DELETE,
-                        factory_.NewVariableProxy(var),
+                        factory_.NewVariableProxy(var, vp->position()),
                         RelocInfo::kNoPosition),
                       RelocInfo::kNoPosition),
                     zone());
@@ -641,9 +646,9 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
                 zone());
       args->Add(factory_.NewBinaryOperation(
                   op->binary_op(),
-                  factory_.NewVariableProxy(vp->var()),
+                  factory_.NewVariableProxy(vp->var(), vp->position()),
                   factory_.NewSmiLiteral(1, op->position()),
-                  RelocInfo::kNoPosition),
+                  op->position()),
                 zone());
       return factory_.NewAssignment(
         Token::ASSIGN, vp, factory_.NewCall(fn_proxy(ER_write), args,
@@ -670,6 +675,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
         {
           AstNodeIdAllocationScope _(this);
 
+          DCHECK(obj->position() < p->position());
           scope = NewScope(context()->scope);
           scope->set_start_position(p->position());
           scope->set_end_position(p->position() + 1);
@@ -696,7 +702,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
                       op->binary_op(),
                       factory_.NewProperty(o[1], k[1], RelocInfo::kNoPosition),
                       factory_.NewSmiLiteral(1, op->position()),
-                      RelocInfo::kNoPosition),
+                      op->position()),
                   zone());
 
           // Create the return statement.
@@ -719,7 +725,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
                                       RelocInfo::kNoPosition);
         args = new (zone()) ZoneList<Expression*>(1, zone());
         args->Add(obj, zone());
-        return factory_.NewCall(fn, args, p->position() + 1);
+        return factory_.NewCall(fn, args, p->position());
       } else { // not a literal key
         args = new (zone()) ZoneList<Expression*>(2, zone());
         args->Add(obj, zone());
@@ -747,6 +753,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
       {
         AstNodeIdAllocationScope _(this);
 
+        DCHECK(vp->position() < op->position());
         scope = NewScope(context()->scope);
         scope->set_start_position(op->position());
         scope->set_end_position(op->position() + 1);
@@ -759,14 +766,15 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
 
         // Initialize the local variable.
         Block *blk = factory_.NewBlock(NULL, 1, true, RelocInfo::kNoPosition);
-        blk->AddStatement(factory_.NewExpressionStatement(
-                            factory_.NewAssignment(
-                              Token::INIT_LET,
-                              factory_.NewVariableProxy(value),
-                              factory_.NewVariableProxy(vp->var()),
-                              RelocInfo::kNoPosition),
-                            RelocInfo::kNoPosition),
-                          zone());
+        blk->AddStatement(
+          factory_.NewExpressionStatement(
+            factory_.NewAssignment(
+              Token::INIT_LET,
+              factory_.NewVariableProxy(value),
+              factory_.NewVariableProxy(vp->var(), vp->position()),
+              RelocInfo::kNoPosition),
+            RelocInfo::kNoPosition),
+          zone());
 
         body = new (zone()) ZoneList<Statement*>(2, zone());
         body->Add(blk, zone());
@@ -779,14 +787,14 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
                     op->binary_op(),
                     factory_.NewVariableProxy(value),
                     factory_.NewSmiLiteral(1, op->position()),
-                    RelocInfo::kNoPosition),
+                    op->position()),
                   zone());
 
         // Perform the assignment.
         body->Add(factory_.NewExpressionStatement(
                     factory_.NewAssignment(
                       Token::ASSIGN,
-                      factory_.NewVariableProxy(vp->var()),
+                      factory_.NewVariableProxy(vp->var(), vp->position()),
                       factory_.NewCall(fn_proxy(ER_write), args,
                                        RelocInfo::kNoPosition),
                       RelocInfo::kNoPosition),
@@ -834,6 +842,8 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
         {
           AstNodeIdAllocationScope _(this);
 
+          DCHECK(obj->position() < p->position());
+          DCHECK(p->position() < op->position());
           scope = NewScope(context()->scope);
           scope->set_start_position(p->position());
           scope->set_end_position(p->position() + 1);
@@ -880,7 +890,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
                       op->binary_op(),
                       factory_.NewVariableProxy(value),
                       factory_.NewSmiLiteral(1, op->position()),
-                      RelocInfo::kNoPosition),
+                      op->position()),
                     zone());
 
           // Perform the assignment.
@@ -981,7 +991,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
       BinaryOperation *binop = op->binary_operation_;
       op->binary_operation_ = NULL;
       op->op_ = Token::ASSIGN;
-      op->target_ = factory_.NewVariableProxy(vp->var());
+      op->target_ = factory_.NewVariableProxy(vp->var(), vp->position());
       args->Add(binop, zone());
     } else {
       args->Add(op->value_, zone());
@@ -1016,6 +1026,8 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
       {
         AstNodeIdAllocationScope _(this);
 
+        DCHECK(obj->position() < p->position());
+        DCHECK(p->position() < op->position());
         scope = NewScope(context()->scope);
         scope->set_start_position(p->position());
         scope->set_end_position(p->position() + 1);
@@ -1051,7 +1063,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
           args->Add(factory_.NewBinaryOperation(
                       op->binary_op(),
                       factory_.NewProperty(o[2], k[2], RelocInfo::kNoPosition),
-                      v, RelocInfo::kNoPosition),
+                      v, op->position()),
                     zone());
           op->binary_operation_ = NULL;
         } else {
@@ -1101,6 +1113,8 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
         {
           AstNodeIdAllocationScope _(this);
 
+          DCHECK(obj->position() < p->position());
+          DCHECK(p->position() < op->position());
           scope = NewScope(context()->scope);
           scope->set_start_position(p->position());
           scope->set_end_position(p->position() + 1);
@@ -1130,7 +1144,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
           args->Add(factory_.NewBinaryOperation(
                       op->binary_op(),
                       factory_.NewProperty(o[2], k[2], RelocInfo::kNoPosition),
-                      v, RelocInfo::kNoPosition),
+                      v, op->position()),
                     zone());
 
           // Create the return statement.
