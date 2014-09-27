@@ -55,25 +55,25 @@ namespace internal {
   V(NativeFunctionLiteral)                      \
   V(ThisFunction)
 
-#define INSTRUMENTATION_FUNCTION_LIST(V)        \
-  V(ER_read)                                    \
-  V(ER_write)                                   \
-  V(ER_readProp)                                \
-  V(ER_writeProp)                               \
-  V(ER_readPropIdx)                             \
-  V(ER_writePropIdx)                            \
-  V(ER_writePropIdxStrict)                      \
-  V(ER_preIncProp)                              \
-  V(ER_preIncPropStrict)                        \
-  V(ER_preDecProp)                              \
-  V(ER_preDecPropStrict)                        \
-  V(ER_postIncProp)                             \
-  V(ER_postIncPropStrict)                       \
-  V(ER_postDecProp)                             \
-  V(ER_postDecPropStrict)                       \
-  V(ER_delete)                                  \
-  V(ER_deleteProp)                              \
-  V(ER_deletePropIdx)                           \
+#define INSTRUMENTATION_FUNCTION_LIST(V)         \
+  V(_ER_read)                                    \
+  V(_ER_write)                                   \
+  V(_ER_readProp)                                \
+  V(_ER_writeProp)                               \
+  V(_ER_delete)                                  \
+  V(_ER_deleteProp)                              \
+  V(ER_readPropIdx)                              \
+  V(ER_writePropIdx)                             \
+  V(ER_writePropIdxStrict)                       \
+  V(ER_preIncProp)                               \
+  V(ER_preIncPropStrict)                         \
+  V(ER_preDecProp)                               \
+  V(ER_preDecPropStrict)                         \
+  V(ER_postIncProp)                              \
+  V(ER_postIncPropStrict)                        \
+  V(ER_postDecProp)                              \
+  V(ER_postDecPropStrict)                        \
+  V(ER_deletePropIdx)                            \
   V(ER_deletePropIdxStrict)
 
 struct EventRacerRewriterTag {};

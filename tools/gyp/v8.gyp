@@ -1439,6 +1439,7 @@
           '../../src/symbol.js',
           '../../src/collection.js',
           '../../src/collection-iterator.js',
+          '../../src/eventracer.js',
           '../../src/macros.py',
         ],
         'experimental_library_files': [

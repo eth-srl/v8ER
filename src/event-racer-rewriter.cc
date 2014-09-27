@@ -238,7 +238,7 @@ Expression* EventRacerRewriter::doVisit(VariableProxy *vp) {
   ZoneList<Expression*> *args = new (zone()) ZoneList<Expression*>(2, zone());
   args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()), zone());
   args->Add(vp, zone());
-  return factory_.NewCall(fn_proxy(ER_read), args, vp->position());
+  return factory_.NewCall(fn_proxy(_ER_read), args, vp->position());
 }
 
 Expression* EventRacerRewriter::doVisit(Property *p) {
@@ -303,7 +303,7 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
       // Create the return statement.
       body = new (zone()) ZoneList<Statement*>(1, zone());
       body->Add(factory_.NewReturnStatement(
-                  factory_.NewCall(fn_proxy(ER_readProp), args,
+                  factory_.NewCall(fn_proxy(_ER_readProp), args,
                                    RelocInfo::kNoPosition),
                   RelocInfo::kNoPosition),
                 zone());
@@ -403,7 +403,7 @@ Call* EventRacerRewriter::doVisit(Call *c) {
 
     body = new (zone()) ZoneList<Statement*>(1, zone());
     body->Add(factory_.NewExpressionStatement(
-                factory_.NewCall(fn_proxy(ER_readProp), args,
+                factory_.NewCall(fn_proxy(_ER_readProp), args,
                                  RelocInfo::kNoPosition),
                 RelocInfo::kNoPosition),
               zone());
@@ -502,7 +502,7 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
 
           body = new (zone()) ZoneList<Statement*>(2, zone());
           body->Add(factory_.NewExpressionStatement(
-                      factory_.NewCall(fn_proxy(ER_deleteProp), args,
+                      factory_.NewCall(fn_proxy(_ER_deleteProp), args,
                                        RelocInfo::kNoPosition),
                       RelocInfo::kNoPosition),
                     zone());
@@ -564,7 +564,7 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
 
           body = new (zone()) ZoneList<Statement*>(2, zone());
           body->Add(factory_.NewExpressionStatement(
-                      factory_.NewCall(fn_proxy(ER_delete), args,
+                      factory_.NewCall(fn_proxy(_ER_delete), args,
                                        RelocInfo::kNoPosition),
                       RelocInfo::kNoPosition),
                     zone());
@@ -601,7 +601,7 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
       args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()),
                 zone());
       args->Add(op, zone());
-      return factory_.NewCall(fn_proxy(ER_read), args, op->position());
+      return factory_.NewCall(fn_proxy(_ER_read), args, op->position());
     }
   }
 
@@ -651,7 +651,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
                   op->position()),
                 zone());
       return factory_.NewAssignment(
-        Token::ASSIGN, vp, factory_.NewCall(fn_proxy(ER_write), args,
+        Token::ASSIGN, vp, factory_.NewCall(fn_proxy(_ER_write), args,
                                             RelocInfo::kNoPosition),
         op->position());
     } else /* vp == NULL */ {
@@ -711,7 +711,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
                       factory_.NewAssignment(
                         Token::ASSIGN,
                         factory_.NewProperty(o[2], k[2], RelocInfo::kNoPosition),
-                        factory_.NewCall(fn_proxy(ER_writeProp), args,
+                        factory_.NewCall(fn_proxy(_ER_writeProp), args,
                                          RelocInfo::kNoPosition),
                         RelocInfo::kNoPosition),
                       RelocInfo::kNoPosition),
@@ -795,7 +795,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
                     factory_.NewAssignment(
                       Token::ASSIGN,
                       factory_.NewVariableProxy(vp->var(), vp->position()),
-                      factory_.NewCall(fn_proxy(ER_write), args,
+                      factory_.NewCall(fn_proxy(_ER_write), args,
                                        RelocInfo::kNoPosition),
                       RelocInfo::kNoPosition),
                     RelocInfo::kNoPosition),
@@ -898,7 +898,7 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
                       factory_.NewAssignment(
                         Token::ASSIGN,
                         factory_.NewProperty(o[2], k[2], RelocInfo::kNoPosition),
-                        factory_.NewCall(fn_proxy(ER_writeProp), args,
+                        factory_.NewCall(fn_proxy(_ER_writeProp), args,
                                          RelocInfo::kNoPosition),
                         RelocInfo::kNoPosition),
                       RelocInfo::kNoPosition),
@@ -996,7 +996,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
     } else {
       args->Add(op->value_, zone());
     }
-    op->value_ = factory_.NewCall(fn_proxy(ER_write), args, op->position());
+    op->value_ = factory_.NewCall(fn_proxy(_ER_write), args, op->position());
     return op;
   } else {
     DCHECK(op->target_->IsProperty());
@@ -1076,7 +1076,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
                     factory_.NewAssignment(
                       Token::ASSIGN,
                       factory_.NewProperty(o[1], k[1], RelocInfo::kNoPosition),
-                      factory_.NewCall(fn_proxy(ER_writeProp), args,
+                      factory_.NewCall(fn_proxy(_ER_writeProp), args,
                                        RelocInfo::kNoPosition),
                       RelocInfo::kNoPosition),
                     RelocInfo::kNoPosition),
@@ -1153,7 +1153,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
                       factory_.NewAssignment(
                         Token::ASSIGN,
                         factory_.NewProperty(o[1], k[1], RelocInfo::kNoPosition),
-                        factory_.NewCall(fn_proxy(ER_writeProp), args,
+                        factory_.NewCall(fn_proxy(_ER_writeProp), args,
                                          RelocInfo::kNoPosition),
                         RelocInfo::kNoPosition),
                       RelocInfo::kNoPosition),
