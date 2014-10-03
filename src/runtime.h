@@ -481,6 +481,7 @@ namespace internal {
   F(LoadLookupSlot, 2, 2)                                            \
   F(LoadLookupSlotNoReferenceError, 2, 2)                            \
   F(StoreLookupSlot, 4, 1)                                           \
+  F(GetContextN, 1, 1)                                               \
                                                                      \
   /* Declarations and initialization */                              \
   F(DeclareGlobals, 3, 1)                                            \

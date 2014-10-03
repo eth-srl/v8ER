@@ -179,7 +179,7 @@ private:
   AstNodeIdAllocationScope *id_alloc_scope_;
 
   AstNodeFactory<AstNullVisitor> factory_;
-  const AstRawString *o_string_, *k_string_, *v_string_;
+  const AstRawString *o_string_, *k_string_, *v_string_, *getctx_string_;
   ZoneList<const AstRawString *> *arg_names_;
 
 #define FN(x) x,
@@ -201,6 +201,9 @@ private:
 
   FunctionLiteral *make_fn(Scope *scope, ZoneList<Statement *> *body,
                            int param_count, int ast_node_id, int pos);
+  Expression *log_vp(VariableProxy *, Expression *,
+                     enum InstrumentationFunction,
+                     enum InstrumentationFunction);
 };
 
 typedef AstRewriterImpl<EventRacerRewriterTag> EventRacerRewriter;

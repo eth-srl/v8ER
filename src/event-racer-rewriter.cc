@@ -25,6 +25,7 @@ EventRacerRewriter::AstRewriterImpl(CompilationInfo *info)
   o_string_ = values.GetOneByteString("$obj");
   k_string_ = values.GetOneByteString("$key");
   v_string_ = values.GetOneByteString("$value");
+  getctx_string_ = values.GetOneByteString("%GetContextN");
 }
 
 VariableProxy *EventRacerRewriter::fn_proxy(enum InstrumentationFunction fn) {
@@ -55,6 +56,48 @@ FunctionLiteral *EventRacerRewriter::make_fn(Scope *scope,
     pos);
   fn->set_next_ast_node_id(ast_node_id);
   return fn;
+}
+
+Expression *EventRacerRewriter::log_vp(VariableProxy *vp, Expression *value,
+                                       enum InstrumentationFunction plain_fn,
+                                       enum InstrumentationFunction prop_fn) {
+  ZoneList<Expression*> *args;
+  Variable *var = vp->var();
+  if (var == NULL || var->IsLookupSlot() || var->IsUnallocated()) {
+    // Read/Write of a property of the global object is rewritten into a
+    // call to ER_read/ER_write:
+    //
+    // |v| => |ER_read("v", v)|
+    //  or
+    // |v = ex| => |v = ER_write("v", ex)|
+    args = new (zone()) ZoneList<Expression*>(2, zone());
+    args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()), zone());
+    args->Add(value, zone());
+    return factory_.NewCall(fn_proxy(plain_fn), args, vp->position());
+  } else {
+    // Read/Write of a context allocated variable is rewritten into a call to
+    // ER_readProp/ER_writeProp:
+    //
+    // |v| => ER_readProp(ctx, "v", v)|
+    // or
+    // |v = ex| => |v = ER_writeProp(ctx, "v", ex)|
+    DCHECK(var->IsContextSlot());
+    args = new (zone()) ZoneList<Expression*>(1, zone());
+    args->Add(
+      factory_.NewSmiLiteral(context()->scope->ContextChainLength(var->scope()),
+                             RelocInfo::kNoPosition),
+      zone());
+    CallRuntime *rtcall =
+      factory_.NewCallRuntime(getctx_string_,
+                              Runtime::FunctionForId(Runtime::kGetContextN),
+                              args,
+                              vp->position());
+    args = new (zone()) ZoneList<Expression*>(3, zone());
+    args->Add(rtcall, zone());
+    args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()), zone());
+    args->Add(value, zone());
+    return factory_.NewCall(fn_proxy(prop_fn), args, vp->position());
+  }
 }
 
 EventRacerRewriter::ScopeHack *EventRacerRewriter::NewScope(Scope* outer) {
@@ -232,13 +275,7 @@ Expression* EventRacerRewriter::doVisit(VariableProxy *vp) {
   // compiler), which aren't stack allocated.
   if (!is_potentially_shared(vp))
     return vp;
-
-  // Read of a property of the global object is rewritten into a call to
-  // ER_read: |g => ER_read("g", g)|
-  ZoneList<Expression*> *args = new (zone()) ZoneList<Expression*>(2, zone());
-  args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()), zone());
-  args->Add(vp, zone());
-  return factory_.NewCall(fn_proxy(_ER_read), args, vp->position());
+  return log_vp(vp, vp, _ER_read, _ER_readProp);
 }
 
 Expression* EventRacerRewriter::doVisit(Property *p) {
@@ -595,14 +632,8 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
     // |typeof <some-unknown-identifier>| evaluates to |undefined| instead
     // of throwing an error.
     VariableProxy *vp = op->expression_->AsVariableProxy();
-    if (is_potentially_shared(vp)) {
-      ZoneList<Expression*> *args;
-      args = new (zone()) ZoneList<Expression*>(3, zone());
-      args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()),
-                zone());
-      args->Add(op, zone());
-      return factory_.NewCall(fn_proxy(_ER_read), args, op->position());
-    }
+    if (is_potentially_shared(vp))
+      return log_vp(vp, op, _ER_read, _ER_readProp);
   }
 
   rewrite(this, op->expression_);
@@ -641,18 +672,14 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
       // |++v|
       // =>
       // |v = ER_write("v", v + 1)|
-      args = new (zone()) ZoneList<Expression*>(2, zone());
-      args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()),
-                zone());
-      args->Add(factory_.NewBinaryOperation(
-                  op->binary_op(),
-                  factory_.NewVariableProxy(vp->var(), vp->position()),
-                  factory_.NewSmiLiteral(1, op->position()),
-                  op->position()),
-                zone());
+      Expression *value =
+        factory_.NewBinaryOperation(
+          op->binary_op(),
+          factory_.NewVariableProxy(vp->var(), vp->position()),
+          factory_.NewSmiLiteral(1, op->position()),
+          op->position());
       return factory_.NewAssignment(
-        Token::ASSIGN, vp, factory_.NewCall(fn_proxy(_ER_write), args,
-                                            RelocInfo::kNoPosition),
+        Token::ASSIGN, vp, log_vp(vp, value, _ER_write, _ER_writeProp),
         op->position());
     } else /* vp == NULL */ {
       // Pre-increment of a property is instrumented like:
@@ -779,24 +806,19 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
         body = new (zone()) ZoneList<Statement*>(2, zone());
         body->Add(blk, zone());
 
-        // Setup arguments of the call to |ER_write|.
-        args = new (zone()) ZoneList<Expression*>(2, zone());
-        args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()),
-                  zone());
-        args->Add(factory_.NewBinaryOperation(
-                    op->binary_op(),
-                    factory_.NewVariableProxy(value),
-                    factory_.NewSmiLiteral(1, op->position()),
-                    op->position()),
-                  zone());
+        // Evaluate the new value.
+        Expression *newval =
+          factory_.NewBinaryOperation(op->binary_op(),
+                                      factory_.NewVariableProxy(value),
+                                      factory_.NewSmiLiteral(1, op->position()),
+                                      op->position());
 
         // Perform the assignment.
         body->Add(factory_.NewExpressionStatement(
                     factory_.NewAssignment(
                       Token::ASSIGN,
                       factory_.NewVariableProxy(vp->var(), vp->position()),
-                      factory_.NewCall(fn_proxy(_ER_write), args,
-                                       RelocInfo::kNoPosition),
+                      log_vp(vp, newval, _ER_write, _ER_writeProp),
                       RelocInfo::kNoPosition),
                     RelocInfo::kNoPosition),
                   zone());
@@ -984,19 +1006,17 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
     // =>
     // |v = ER_write("v", v + e);|
 
-    args = new (zone()) ZoneList<Expression*>(2, zone());
-    args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()),
-              zone());
+    Expression *value;
     if (op->is_compound()) {
       BinaryOperation *binop = op->binary_operation_;
       op->binary_operation_ = NULL;
       op->op_ = Token::ASSIGN;
       op->target_ = factory_.NewVariableProxy(vp->var(), vp->position());
-      args->Add(binop, zone());
+      value = binop;
     } else {
-      args->Add(op->value_, zone());
+      value = op->value_;
     }
-    op->value_ = factory_.NewCall(fn_proxy(_ER_write), args, op->position());
+    op->value_ = log_vp(vp, value, _ER_write, _ER_writeProp);
     return op;
   } else {
     DCHECK(op->target_->IsProperty());

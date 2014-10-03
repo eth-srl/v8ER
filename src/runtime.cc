@@ -9394,6 +9394,16 @@ RUNTIME_FUNCTION(Runtime_StoreLookupSlot) {
   return *value;
 }
 
+RUNTIME_FUNCTION(Runtime_GetContextN) {
+  HandleScope scope(isolate);
+  DCHECK(args.length() == 1);
+  CONVERT_NUMBER_CHECKED(int, depth, Int32, args[0]);
+
+  Handle<Context> context(isolate->context());
+  while (depth --> 0)
+    context = Handle<Context>(context->previous(), isolate);
+  return *context;
+}
 
 RUNTIME_FUNCTION(Runtime_Throw) {
   HandleScope scope(isolate);

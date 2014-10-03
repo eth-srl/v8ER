@@ -23,6 +23,7 @@
 
   # Riddled with ASSERTs.
   "CompileForOnStackReplacement": [SKIP],
+  "GetContextN": [SKIP],
 
   # Too slow for fuzzing.
   "SetAllocationTimeout": [SKIP],
