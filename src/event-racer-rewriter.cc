@@ -483,6 +483,18 @@ CallNew* EventRacerRewriter::doVisit(CallNew *c) {
 
 CallRuntime* EventRacerRewriter::doVisit(CallRuntime *c) {
   rewrite(this, c->arguments());
+
+  // Global variable initialization is a write, but it's not represented
+  // with an assignment in the AST, but with a call to the runtime
+  // function |initializeVarGlobal|.
+  if (c->function()->function_id == Runtime::kInitializeVarGlobal) {
+    ZoneList<Expression *> *args = new(zone()) ZoneList<Expression*>(2, zone());
+    args->Add(duplicate_key(c->arguments()->at(0)->AsLiteral()), zone());
+    args->Add(c->arguments()->at(2), zone());
+    Call *call =
+      factory_.NewCall(fn_proxy(_ER_write), args, RelocInfo::kNoPosition);
+    (*c->arguments())[2] = call;
+  }
   return c;
 }
 
