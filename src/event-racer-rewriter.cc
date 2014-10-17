@@ -73,6 +73,15 @@ Expression *EventRacerRewriter::log_vp(VariableProxy *vp, Expression *value,
     args = new (zone()) ZoneList<Expression*>(2, zone());
     args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()), zone());
     args->Add(value, zone());
+    if (plain_fn == _ER_write && value->IsFunctionLiteral()) {
+      // Special case of function literal assignment - call
+      // |ER_writeFunc|, passing as a third argument the function
+      // literal identifier.
+      plain_fn = _ER_writeFunc;
+      args->Add(factory_.NewSmiLiteral(value->AsFunctionLiteral()->function_id(),
+                                       RelocInfo::kNoPosition),
+                zone());
+    }
     return factory_.NewCall(fn_proxy(plain_fn), args, vp->position());
   } else {
     // Read/Write of a context allocated variable is rewritten into a call to
@@ -490,9 +499,21 @@ CallRuntime* EventRacerRewriter::doVisit(CallRuntime *c) {
   if (c->function()->function_id == Runtime::kInitializeVarGlobal) {
     ZoneList<Expression *> *args = new(zone()) ZoneList<Expression*>(2, zone());
     args->Add(duplicate_key(c->arguments()->at(0)->AsLiteral()), zone());
-    args->Add(c->arguments()->at(2), zone());
-    Call *call =
-      factory_.NewCall(fn_proxy(_ER_write), args, RelocInfo::kNoPosition);
+    Expression *value = c->arguments()->at(2);
+    args->Add(value, zone());
+    enum InstrumentationFunction fn;
+    if (value->IsFunctionLiteral()) {
+      // Special case of function literal assignment - call
+      // |ER_writeFunc|, passing as a third argument the function
+      // literal identifier.
+      fn = _ER_writeFunc;
+      args->Add(factory_.NewSmiLiteral(value->AsFunctionLiteral()->function_id(),
+                                       RelocInfo::kNoPosition),
+                zone());
+    } else {
+      fn = _ER_write;
+    }
+    Call *call = factory_.NewCall(fn_proxy(fn), args, RelocInfo::kNoPosition);
     (*c->arguments())[2] = call;
   }
   return c;
@@ -1088,6 +1109,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
         }
 
         // Setup arguments of the call to |ER_writeProp|.
+        enum InstrumentationFunction fn = _ER_writeProp;
         args = new (zone()) ZoneList<Expression*>(3, zone());
         args->Add(o[0], zone());
         args->Add(k[0], zone());
@@ -1100,6 +1122,15 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
           op->binary_operation_ = NULL;
         } else {
           args->Add(v, zone());
+          if (op->value_->IsFunctionLiteral()) {
+            // Special case of function literal assignment - call
+            // |ER_writePropFunc|, passing as a third argument the
+            // function literal identifier.
+            fn = _ER_writePropFunc;
+            args->Add(factory_.NewSmiLiteral(op->value_->AsFunctionLiteral()->function_id(),
+                                             RelocInfo::kNoPosition),
+                      zone());
+          }
         }
 
         // Create the return statement.
@@ -1108,8 +1139,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
                     factory_.NewAssignment(
                       Token::ASSIGN,
                       factory_.NewProperty(o[1], k[1], RelocInfo::kNoPosition),
-                      factory_.NewCall(fn_proxy(_ER_writeProp), args,
-                                       RelocInfo::kNoPosition),
+                      factory_.NewCall(fn_proxy(fn), args, RelocInfo::kNoPosition),
                       RelocInfo::kNoPosition),
                     RelocInfo::kNoPosition),
                   zone());
@@ -1202,16 +1232,26 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
         args->Add(op->value_, zone());
         return factory_.NewCall(fn, args, op->position());
       } else {
+        enum InstrumentationFunction fn;
         args = new (zone()) ZoneList<Expression*>(3, zone());
         args->Add(obj, zone());
         args->Add(key, zone());
         args->Add(op->value_, zone());
-        return factory_.NewCall(
-          fn_proxy(context()->scope->strict_mode() == SLOPPY
-                   ? ER_writePropIdx
-                   : ER_writePropIdxStrict),
-          args,
-          op->position());
+        if (op->value_->IsFunctionLiteral()) {
+          args->Add(factory_.NewSmiLiteral(op->value_->AsFunctionLiteral()->function_id(),
+                                           RelocInfo::kNoPosition),
+                    zone());
+          if (context()->scope->strict_mode() == SLOPPY)
+            fn = ER_writePropIdxFunc;
+          else
+            fn = ER_writePropIdxFuncStrict;
+        } else {
+          if (context()->scope->strict_mode() == SLOPPY)
+            fn = ER_writePropIdx;
+          else
+            fn = ER_writePropIdxStrict;
+        }
+        return factory_.NewCall(fn_proxy(fn), args, op->position());
       }
     }
   }
@@ -1233,6 +1273,32 @@ FunctionLiteral* EventRacerRewriter::doVisit(FunctionLiteral *lit) {
   AstNodeIdAllocationScope __(this, lit);
   rewrite(this, lit->scope()->declarations());
   rewrite(this, lit->body());
+
+  // Emit write operations for each function declaration, if at global
+  // scope.
+  if (lit->scope()->is_global_scope()) {
+    ZoneList<Declaration*> &dcls = *lit->scope()->declarations();
+    for (int i = 0; i < dcls.length(); ++i) {
+      if (dcls[i]->IsFunctionDeclaration()) {
+        FunctionDeclaration *fndcl = dcls[i]->AsFunctionDeclaration();
+        ZoneList<Expression*> *args =
+          new (zone()) ZoneList<Expression*>(3, zone());
+        args->Add(factory_.NewStringLiteral(fndcl->proxy()->raw_name(),
+                                            fndcl->proxy()->position()),
+                  zone());
+        args->Add(factory_.NewNullLiteral(RelocInfo::kNoPosition), zone());
+        args->Add(factory_.NewSmiLiteral(fndcl->fun()->function_id(),
+                                         RelocInfo::kNoPosition),
+                  zone());
+        lit->body()->InsertAt(
+          0,
+          factory_.NewExpressionStatement(
+            factory_.NewCall(fn_proxy(_ER_writeFunc), args, lit->position()),
+            lit->position()),
+          zone());
+      }
+    }
+  }
   lit->set_next_ast_node_id(ast_node_id());
   return lit;
 }

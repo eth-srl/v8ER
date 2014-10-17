@@ -58,13 +58,17 @@ namespace internal {
 #define INSTRUMENTATION_FUNCTION_LIST(V)         \
   V(_ER_read)                                    \
   V(_ER_write)                                   \
+  V(_ER_writeFunc)                               \
   V(_ER_readProp)                                \
   V(_ER_writeProp)                               \
+  V(_ER_writePropFunc)                           \
   V(_ER_delete)                                  \
   V(_ER_deleteProp)                              \
   V(ER_readPropIdx)                              \
   V(ER_writePropIdx)                             \
+  V(ER_writePropIdxFunc)                         \
   V(ER_writePropIdxStrict)                       \
+  V(ER_writePropIdxFuncStrict)                   \
   V(ER_preIncProp)                               \
   V(ER_preIncPropStrict)                         \
   V(ER_preDecProp)                               \

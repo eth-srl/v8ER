@@ -291,6 +291,11 @@ class AstNode: public ZoneObject {
     return TypeFeedbackId(id.ToInt());
   }
 
+  static int GetNextFnId(Zone* zone) {
+    int tmp = zone->isolate()->function_id();
+    zone->isolate()->set_function_id(tmp + 1);
+    return tmp;
+  }
 
  private:
   // Hidden to prevent accidental usage. It would have to load the
@@ -2522,6 +2527,7 @@ class FunctionLiteral V8_FINAL : public Expression {
   int expected_property_count() { return expected_property_count_; }
   int handler_count() { return handler_count_; }
   int parameter_count() { return parameter_count_; }
+  int function_id() { return function_id_; }
 
   bool AllowsLazyCompilation();
   bool AllowsLazyCompilationWithoutContext();
@@ -2626,8 +2632,9 @@ class FunctionLiteral V8_FINAL : public Expression {
         expected_property_count_(expected_property_count),
         handler_count_(handler_count),
         parameter_count_(parameter_count),
+        function_token_position_(RelocInfo::kNoPosition),
         next_ast_node_id_(-1),
-        function_token_position_(RelocInfo::kNoPosition) {
+        function_id_(GetNextFnId(zone)) {
     bitfield_ = IsExpression::encode(function_type != DECLARATION) |
                 IsAnonymous::encode(function_type == ANONYMOUS_EXPRESSION) |
                 Pretenure::encode(false) |
@@ -2653,8 +2660,9 @@ class FunctionLiteral V8_FINAL : public Expression {
   int expected_property_count_;
   int handler_count_;
   int parameter_count_;
-  int next_ast_node_id_;
   int function_token_position_;
+  int next_ast_node_id_;
+  int function_id_;
 
   unsigned bitfield_;
   class IsExpression: public BitField<bool, 0, 1> {};

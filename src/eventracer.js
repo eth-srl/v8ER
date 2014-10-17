@@ -22,9 +22,23 @@ global._ER_write = function(name, value) {
         return value;
 }
 
+global._ER_writeFunc = function(name, value, id) {
+    if ("ER_writeFunc" in global)
+        return global.ER_writeFunc(name, value, id);
+    else
+        return value;
+}
+
 global._ER_writeProp = function(obj, name, value) {
     if ("ER_writeProp" in global)
         return global.ER_writeProp(obj, name, value);
+    else
+        return value;
+}
+
+global._ER_writePropFunc = function(obj, name, value, id) {
+    if ("ER_writePropFunc" in global)
+        return global.ER_writePropFunc(obj, name, value, id);
     else
         return value;
 }
@@ -48,9 +62,18 @@ global.ER_writePropIdx = function(obj, idx, value) {
     return obj[idx] = global._ER_writeProp(obj, idx, value);
 }
 
+global.ER_writePropIdxFunc = function(obj, idx, value, id) {
+    return obj[idx] = global._ER_writePropFunc(obj, idx, value, id);
+}
+
 global.ER_writePropIdxStrict = function(obj, idx, value) {
     "use strict";
     return obj[idx] = global._ER_writeProp(obj, idx, value);
+}
+
+global.ER_writePropIdxFuncStrict = function(obj, idx, value, id) {
+    "use strict";
+    return obj[idx] = global._ER_writePropFunc(obj, idx, value, id);
 }
 
 global.ER_preIncProp = function(obj, idx) {

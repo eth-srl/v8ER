@@ -358,6 +358,7 @@ typedef List<HeapObject*> DebugObjectCache;
   /* Serializer state. */                                                      \
   V(ExternalReferenceTable*, external_reference_table, NULL)                   \
   /* AstNode state. */                                                         \
+  V(int, function_id, 1)                                                       \
   V(int, ast_node_id, 0)                                                       \
   V(unsigned, ast_node_count, 0)                                               \
   V(int, pending_microtask_count, 0)                                           \
