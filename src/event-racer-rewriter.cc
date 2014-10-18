@@ -222,7 +222,11 @@ ForOfStatement *EventRacerRewriter::doVisit(ForOfStatement *st) {
 
 ReturnStatement *EventRacerRewriter::doVisit(ReturnStatement *st) {
   rewrite(this, st->expression_);
-  return st;
+  ZoneList<Expression *> *args = new(zone()) ZoneList<Expression*>(1, zone());
+  args->Add(st->expression_, zone());
+  return (factory_.NewReturnStatement(
+            factory_.NewCall(fn_proxy(_ER_exitFunction), args, st->position()),
+            st->position()));
 }
 
 WithStatement *EventRacerRewriter::doVisit(WithStatement *st) {
@@ -1277,32 +1281,61 @@ FunctionLiteral* EventRacerRewriter::doVisit(FunctionLiteral *lit) {
   ContextScope _(this, lit->scope());
   AstNodeIdAllocationScope __(this, lit);
   rewrite(this, lit->scope()->declarations());
+  if (!lit->body() || lit->body()->length() == 0)
+    return lit;
   rewrite(this, lit->body());
 
-  // Emit write operations for each function declaration, if at global
-  // scope.
-  if (lit->scope()->is_global_scope()) {
-    ZoneList<Declaration*> &dcls = *lit->scope()->declarations();
-    for (int i = 0; i < dcls.length(); ++i) {
-      if (dcls[i]->IsFunctionDeclaration()) {
-        FunctionDeclaration *fndcl = dcls[i]->AsFunctionDeclaration();
-        ZoneList<Expression*> *args =
-          new (zone()) ZoneList<Expression*>(3, zone());
-        args->Add(factory_.NewStringLiteral(fndcl->proxy()->raw_name(),
-                                            fndcl->proxy()->position()),
-                  zone());
-        args->Add(factory_.NewNullLiteral(RelocInfo::kNoPosition), zone());
-        args->Add(factory_.NewSmiLiteral(fndcl->fun()->function_id(),
-                                         RelocInfo::kNoPosition),
-                  zone());
-        lit->body()->InsertAt(
-          0,
-          factory_.NewExpressionStatement(
-            factory_.NewCall(fn_proxy(_ER_writeFunc), args, lit->position()),
-            lit->position()),
-          zone());
-      }
+  ZoneList<Declaration*> &dcls = *lit->scope()->declarations();
+  for (int i = 0; i < dcls.length(); ++i) {
+    if (dcls[i]->IsFunctionDeclaration()) {
+      FunctionDeclaration *fndcl = dcls[i]->AsFunctionDeclaration();
+      ZoneList<Expression*> *args =
+        new (zone()) ZoneList<Expression*>(3, zone());
+      args->Add(factory_.NewStringLiteral(fndcl->proxy()->raw_name(),
+                                          fndcl->proxy()->position()),
+                zone());
+      args->Add(factory_.NewNullLiteral(RelocInfo::kNoPosition), zone());
+      args->Add(factory_.NewSmiLiteral(fndcl->fun()->function_id(),
+                                       RelocInfo::kNoPosition),
+                zone());
+      lit->body()->InsertAt(
+        0,
+        factory_.NewExpressionStatement(
+          factory_.NewCall(fn_proxy(_ER_writeFunc), args, lit->position()),
+          lit->position()),
+        zone());
     }
+  }
+
+  // Emit a statement to log a function entry.
+  int scriptId = info_->script().is_null() ? -1 : info_->script()->id()->value();
+  ZoneList<Expression*> *args = new (zone()) ZoneList<Expression*>(3, zone());
+  if (lit->raw_name()->length()) {
+    args->Add(factory_.NewStringLiteral(lit->raw_name(), lit->position()),
+              zone());
+  } else {
+    args->Add(factory_.NewNullLiteral(RelocInfo::kNoPosition), zone());
+  }
+  args->Add(factory_.NewSmiLiteral(scriptId, RelocInfo::kNoPosition), zone());
+  args->Add(factory_.NewSmiLiteral(lit->function_id(), RelocInfo::kNoPosition),
+            zone());
+  Statement *st =
+    factory_.NewExpressionStatement(
+      factory_.NewCall(fn_proxy(_ER_enterFunction), args, lit->position()),
+      lit->position());
+  lit->body()->InsertAt(0, st, zone());
+
+  // Emit a statement to log the function exit, if the last statement is
+  // not a return. It it not a problem if this statement turns out tio
+  // be dead code.
+  if (!lit->body()->last()->IsReturnStatement()) {
+    ZoneList<Expression *> *args = new(zone()) ZoneList<Expression*>(1, zone());
+    args->Add(factory_.NewUndefinedLiteral(RelocInfo::kNoPosition), zone());
+    lit->body()->Add(factory_.NewReturnStatement(
+                       factory_.NewCall(fn_proxy(_ER_exitFunction), args,
+                                        RelocInfo::kNoPosition),
+                       RelocInfo::kNoPosition),
+                     zone());
   }
   lit->set_next_ast_node_id(ast_node_id());
   return lit;

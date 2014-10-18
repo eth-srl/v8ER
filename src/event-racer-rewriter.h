@@ -64,6 +64,8 @@ namespace internal {
   V(_ER_writePropFunc)                           \
   V(_ER_delete)                                  \
   V(_ER_deleteProp)                              \
+  V(_ER_enterFunction)                           \
+  V(_ER_exitFunction)                            \
   V(ER_readPropIdx)                              \
   V(ER_writePropIdx)                             \
   V(ER_writePropIdxFunc)                         \

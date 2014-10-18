@@ -53,6 +53,18 @@ global._ER_deleteProp = function(obj, name) {
         global.ER_deleteProp(obj, name);
 }
 
+global._ER_enterFunction = function(name, scriptId, fnId) {
+    if ("ER_enterFunction" in global)
+        global.ER_enterFunction(name, scriptId, fnId);
+}
+
+global._ER_exitFunction = function(val) {
+    if ("ER_exitFunction" in global)
+        return global.ER_exitFunction(val);
+    else
+        return val;
+}
+
 // Helper functions
 global.ER_readPropIdx = function(arr, idx) {
     return global._ER_readProp(arr, idx, arr[idx]);
