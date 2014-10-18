@@ -7368,6 +7368,9 @@ class SharedFunctionInfo: public HeapObject {
 
   DECLARE_CAST(SharedFunctionInfo)
 
+  inline int function_id() const;
+  inline void set_function_id(int function_id);
+
   // Constants.
   static const int kDontAdaptArgumentsSentinel = -1;
 
@@ -7454,9 +7457,11 @@ class SharedFunctionInfo: public HeapObject {
       kCountersOffset + kIntSize;
   static const int kProfilerTicksOffset =
       kAstNodeCountOffset + kIntSize;
+  static const int kFunctionIdOffset =
+    kProfilerTicksOffset + kIntSize;
 
   // Total size.
-  static const int kSize = kProfilerTicksOffset + kIntSize;
+  static const int kSize = kFunctionIdOffset + kIntSize;
 
 #endif
 

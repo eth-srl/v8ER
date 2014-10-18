@@ -1269,6 +1269,11 @@ Throw* EventRacerRewriter::doVisit(Throw *op) {
 }
 
 FunctionLiteral* EventRacerRewriter::doVisit(FunctionLiteral *lit) {
+  if (!info_->shared_info().is_null())
+    lit->set_function_id(info_->shared_info()->function_id());
+  else
+    lit->initialize_function_id(zone());
+
   ContextScope _(this, lit->scope());
   AstNodeIdAllocationScope __(this, lit);
   rewrite(this, lit->scope()->declarations());

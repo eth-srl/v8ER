@@ -2528,6 +2528,8 @@ class FunctionLiteral V8_FINAL : public Expression {
   int handler_count() { return handler_count_; }
   int parameter_count() { return parameter_count_; }
   int function_id() { return function_id_; }
+  void set_function_id(int id) { function_id_ = id; }
+  void initialize_function_id(Zone *zone) { function_id_ = GetNextFnId(zone); }
 
   bool AllowsLazyCompilation();
   bool AllowsLazyCompilationWithoutContext();
@@ -2634,7 +2636,7 @@ class FunctionLiteral V8_FINAL : public Expression {
         parameter_count_(parameter_count),
         function_token_position_(RelocInfo::kNoPosition),
         next_ast_node_id_(-1),
-        function_id_(GetNextFnId(zone)) {
+        function_id_(0) {
     bitfield_ = IsExpression::encode(function_type != DECLARATION) |
                 IsAnonymous::encode(function_type == ANONYMOUS_EXPRESSION) |
                 Pretenure::encode(false) |

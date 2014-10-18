@@ -663,6 +663,7 @@ static void SetFunctionInfo(Handle<SharedFunctionInfo> function_info,
   function_info->set_dont_cache(lit->flags()->Contains(kDontCache));
   function_info->set_is_generator(lit->is_generator());
   function_info->set_is_arrow(lit->is_arrow());
+  function_info->set_function_id(lit->function_id());
 }
 
 

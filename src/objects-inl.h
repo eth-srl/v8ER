@@ -5511,6 +5511,7 @@ SMI_ACCESSORS(SharedFunctionInfo, opt_count_and_bailout_reason,
 SMI_ACCESSORS(SharedFunctionInfo, counters, kCountersOffset)
 SMI_ACCESSORS(SharedFunctionInfo, ast_node_count, kAstNodeCountOffset)
 SMI_ACCESSORS(SharedFunctionInfo, profiler_ticks, kProfilerTicksOffset)
+SMI_ACCESSORS(SharedFunctionInfo, function_id, kFunctionIdOffset)
 
 #else
 
@@ -5569,6 +5570,9 @@ PSEUDO_SMI_ACCESSORS_LO(SharedFunctionInfo,
 PSEUDO_SMI_ACCESSORS_HI(SharedFunctionInfo,
                         profiler_ticks,
                         kProfilerTicksOffset)
+PSEUDO_SMI_ACCESSORS_LO(SharedFunctionInfo,
+                        function_id,
+                        kFunctionIdOffset)
 
 #endif
 
