@@ -39,7 +39,7 @@ function GetSortedArrayKeys(array, indices) {
         }
       }
     }
-    %_CallFunction(keys, function(a, b) { return a - b; }, ArraySort);
+    %_CallFunction(keys, function(a, b) { return a - b; }, ArraySort__);
   }
   return keys;
 }
@@ -334,8 +334,18 @@ function SimpleMove(array, start_i, del_count, len, num_additional_args) {
 
 // -------------------------------------------------------------------
 
+function _ER_wrap(func, name) {
+    return function() {
+        global._ER_enterFunction(name, -1, -1);
+        try {
+            return %Apply(func, this, arguments, 0, %_ArgumentsLength());
+        } finally {
+            global._ER_exitFunction(null);
+        }
+    }
+}
 
-function ArrayToString() {
+function ArrayToString_() {
   var array;
   var func;
   if (IS_ARRAY(this)) {
@@ -349,24 +359,28 @@ function ArrayToString() {
     func = array.join;
   }
   if (!IS_SPEC_FUNCTION(func)) {
+    global._ER_readArray(this);
     return %_CallFunction(array, ObjectToString);
   }
   return %_CallFunction(array, func);
 }
+var ArrayToString = _ER_wrap(ArrayToString_, "array:toString");
 
 
-function ArrayToLocaleString() {
+function ArrayToLocaleString_() {
+  global._ER_readArray(this);
   var array = ToObject(this);
   var arrayLen = array.length;
   var len = TO_UINT32(arrayLen);
   if (len === 0) return "";
   return Join(array, len, ',', ConvertToLocaleString);
 }
+var ArrayToLocaleString = _ER_wrap(ArrayToLocaleString_, "array:toLocaleString");
 
 
-function ArrayJoin(separator) {
+function ArrayJoin_(separator) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.join");
-
+  global._ER_readArray(this);
   var array = TO_OBJECT_INLINE(this);
   var length = TO_UINT32(array.length);
   if (IS_UNDEFINED(separator)) {
@@ -380,7 +394,7 @@ function ArrayJoin(separator) {
 
   return Join(array, length, separator, ConvertToString);
 }
-
+var ArrayJoin = _ER_wrap(ArrayJoin_, "array:join");
 
 function ObservedArrayPop(n) {
   n--;
@@ -400,9 +414,9 @@ function ObservedArrayPop(n) {
 
 // Removes the last element from the array and returns it. See
 // ECMA-262, section 15.4.4.6.
-function ArrayPop() {
+function ArrayPop_() {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.pop");
-
+  global._ER_writeArray(this);
   var array = TO_OBJECT_INLINE(this);
   var n = TO_UINT32(array.length);
   if (n == 0) {
@@ -419,7 +433,7 @@ function ArrayPop() {
   array.length = n;
   return value;
 }
-
+var ArrayPop = _ER_wrap(ArrayPop_, "array:pop");
 
 function ObservedArrayPush() {
   var n = TO_UINT32(this.length);
@@ -442,9 +456,9 @@ function ObservedArrayPush() {
 
 // Appends the arguments to the end of the array and returns the new
 // length of the array. See ECMA-262, section 15.4.4.7.
-function ArrayPush() {
+function ArrayPush_() {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.push");
-
+  global._ER_writeArray(this);
   if (%IsObserved(this))
     return ObservedArrayPush.apply(this, arguments);
 
@@ -460,25 +474,27 @@ function ArrayPush() {
   array.length = new_length;
   return new_length;
 }
-
+var ArrayPush = _ER_wrap(ArrayPush_, "array:push");
 
 // Returns an array containing the array elements of the object followed
 // by the array elements of each argument in order. See ECMA-262,
 // section 15.4.4.7.
-function ArrayConcatJS(arg1) {  // length == 1
+function ArrayConcatJS_(arg1) {  // length == 1
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.concat");
 
   var array = ToObject(this);
   var arg_count = %_ArgumentsLength();
   var arrays = new InternalArray(1 + arg_count);
   arrays[0] = array;
+  global._ER_readArray(arrays[0]);
   for (var i = 0; i < arg_count; i++) {
     arrays[i + 1] = %_Arguments(i);
+    global._ER_readArray(arrays[i + 1]);
   }
 
   return %ArrayConcat(arrays);
 }
-
+var ArrayConcatJS = _ER_wrap(ArrayConcatJS_, "array:concat");
 
 // For implementing reverse() on large, sparse arrays.
 function SparseReverse(array, len) {
@@ -524,9 +540,9 @@ function SparseReverse(array, len) {
 }
 
 
-function ArrayReverse() {
+function ArrayReverse_() {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.reverse");
-
+  global._ER_writeArray(this);
   var array = TO_OBJECT_INLINE(this);
   var len = TO_UINT32(array.length);
 
@@ -558,7 +574,7 @@ function ArrayReverse() {
   }
   return array;
 }
-
+var ArrayReverse = _ER_wrap(ArrayReverse_, "array:reverse");
 
 function ObservedArrayShift(len) {
   var first = this[0];
@@ -575,9 +591,9 @@ function ObservedArrayShift(len) {
   return first;
 }
 
-function ArrayShift() {
+function ArrayShift_() {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.shift");
-
+  global._ER_writeArray(this);
   var array = TO_OBJECT_INLINE(this);
   var len = TO_UINT32(array.length);
 
@@ -606,6 +622,7 @@ function ArrayShift() {
 
   return first;
 }
+var ArrayShift = _ER_wrap(ArrayShift_, "array:shift");
 
 function ObservedArrayUnshift() {
   var len = TO_UINT32(this.length);
@@ -627,9 +644,9 @@ function ObservedArrayUnshift() {
   return new_length;
 }
 
-function ArrayUnshift(arg1) {  // length == 1
+function ArrayUnshift_(arg1) {  // length == 1
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.unshift");
-
+  global._ER_writeArray(this);
   if (%IsObserved(this))
     return ObservedArrayUnshift.apply(this, arguments);
 
@@ -652,11 +669,11 @@ function ArrayUnshift(arg1) {  // length == 1
   array.length = new_length;
   return new_length;
 }
+var ArrayUnshift = _ER_wrap(ArrayUnshift_, "array:unshift");
 
-
-function ArraySlice(start, end) {
+function ArraySlice_(start, end) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.slice");
-
+  global._ER_readArray(this);
   var array = TO_OBJECT_INLINE(this);
   var len = TO_UINT32(array.length);
   var start_i = TO_INTEGER(start);
@@ -694,7 +711,7 @@ function ArraySlice(start, end) {
 
   return result;
 }
-
+var ArraySlice = _ER_wrap(ArraySlice_, "array:slice");
 
 function ComputeSpliceStartIndex(start_i, len) {
   if (start_i < 0) {
@@ -768,9 +785,9 @@ function ObservedArraySplice(start, delete_count) {
 }
 
 
-function ArraySplice(start, delete_count) {
+function ArraySplice_(start, delete_count) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.splice");
-
+  global._ER_writeArray(this);
   if (%IsObserved(this))
     return ObservedArraySplice.apply(this, arguments);
 
@@ -821,9 +838,9 @@ function ArraySplice(start, delete_count) {
   // Return the deleted elements.
   return deleted_elements;
 }
+var ArraySplice = _ER_wrap(ArraySplice_, "array:splice");
 
-
-function ArraySort(comparefn) {
+function ArraySort__(comparefn) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.sort");
 
   // In-place QuickSort algorithm.
@@ -1109,12 +1126,19 @@ function ArraySort(comparefn) {
   return this;
 }
 
+function ArraySort_(comparefn) {
+  global._ER_writeArray(this);
+  return %_CallFunction(this, comparefn, ArraySort__);
+}
+
+var ArraySort = _ER_wrap(ArraySort_, "array:sort");
 
 // The following functions cannot be made efficient on sparse arrays while
 // preserving the semantics, since the calls to the receiver function can add
 // or delete elements from the array.
-function ArrayFilter(f, receiver) {
+function ArrayFilter_(f, receiver) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.filter");
+  global._ER_readArray(this);
 
   // Pull out the length so that modifications to the length in the
   // loop will not affect the looping and side effects are visible.
@@ -1147,10 +1171,11 @@ function ArrayFilter(f, receiver) {
   %MoveArrayContents(accumulator, result);
   return result;
 }
+var ArrayFilter = _ER_wrap(ArrayFilter_, "array:filter");
 
-
-function ArrayForEach(f, receiver) {
+function ArrayForEach_(f, receiver) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.forEach");
+  global._ER_readArray(this);
 
   // Pull out the length so that modifications to the length in the
   // loop will not affect the looping and side effects are visible.
@@ -1176,12 +1201,13 @@ function ArrayForEach(f, receiver) {
     }
   }
 }
-
+var ArrayForEach = _ER_wrap(ArrayForEach_, "array:foreach");
 
 // Executes the function once for each element present in the
 // array until it finds one where callback returns true.
-function ArraySome(f, receiver) {
+function ArraySome_(f, receiver) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.some");
+  global._ER_readArray(this);
 
   // Pull out the length so that modifications to the length in the
   // loop will not affect the looping and side effects are visible.
@@ -1208,10 +1234,11 @@ function ArraySome(f, receiver) {
   }
   return false;
 }
+var ArraySome = _ER_wrap(ArraySome_, "array:some");
 
-
-function ArrayEvery(f, receiver) {
+function ArrayEvery_(f, receiver) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.every");
+  global._ER_readArray(this);
 
   // Pull out the length so that modifications to the length in the
   // loop will not affect the looping and side effects are visible.
@@ -1238,9 +1265,11 @@ function ArrayEvery(f, receiver) {
   }
   return true;
 }
+var ArrayEvery = _ER_wrap(ArrayEvery_, "array:every");
 
-function ArrayMap(f, receiver) {
+function ArrayMap_(f, receiver) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.map");
+  global._ER_readArray(this);
 
   // Pull out the length so that modifications to the length in the
   // loop will not affect the looping and side effects are visible.
@@ -1270,10 +1299,11 @@ function ArrayMap(f, receiver) {
   %MoveArrayContents(accumulator, result);
   return result;
 }
+var ArrayMap = _ER_wrap(ArrayMap_, "array:map");
 
-
-function ArrayIndexOf(element, index) {
+function ArrayIndexOf_(element, index) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.indexOf");
+  global._ER_readArray(this);
 
   var length = TO_UINT32(this.length);
   if (length == 0) return -1;
@@ -1327,10 +1357,11 @@ function ArrayIndexOf(element, index) {
   }
   return -1;
 }
+var ArrayIndexOf = _ER_wrap(ArrayIndexOf_, "array:indexOf");
 
-
-function ArrayLastIndexOf(element, index) {
+function ArrayLastIndexOf_(element, index) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.lastIndexOf");
+  global._ER_readArray(this);
 
   var length = TO_UINT32(this.length);
   if (length == 0) return -1;
@@ -1380,10 +1411,11 @@ function ArrayLastIndexOf(element, index) {
   }
   return -1;
 }
+var ArrayLastIndexOf = _ER_wrap(ArrayLastIndexOf_, "array:lastIndexOf");
 
-
-function ArrayReduce(callback, current) {
+function ArrayReduce_(callback, current) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.reduce");
+  global._ER_readArray(this);
 
   // Pull out the length so that modifications to the length in the
   // loop will not affect the looping and side effects are visible.
@@ -1418,9 +1450,11 @@ function ArrayReduce(callback, current) {
   }
   return current;
 }
+var ArrayReduce = _ER_wrap(ArrayReduce_, "array:reduce");
 
-function ArrayReduceRight(callback, current) {
+function ArrayReduceRight_(callback, current) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.reduceRight");
+  global._ER_readArray(this);
 
   // Pull out the length so that side effects are visible before the
   // callback function is checked.
@@ -1455,6 +1489,7 @@ function ArrayReduceRight(callback, current) {
   }
   return current;
 }
+var ArrayReduceRight = _ER_wrap(ArrayReduceRight_, "array:reduceRight");
 
 // ES5, 15.4.3.2
 function ArrayIsArray(obj) {

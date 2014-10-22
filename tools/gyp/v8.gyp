@@ -1419,6 +1419,7 @@
         'library_files': [
           '../../src/runtime.js',
           '../../src/v8natives.js',
+          '../../src/eventracer.js',
           '../../src/array.js',
           '../../src/string.js',
           '../../src/uri.js',
@@ -1439,7 +1440,6 @@
           '../../src/symbol.js',
           '../../src/collection.js',
           '../../src/collection-iterator.js',
-          '../../src/eventracer.js',
           '../../src/macros.py',
         ],
         'experimental_library_files': [

@@ -65,6 +65,16 @@ global._ER_exitFunction = function(val) {
         return val;
 }
 
+global._ER_readArray = function(array) {
+    if ("ER_readArray" in global)
+        return global.ER_readArray(array);
+}
+
+global._ER_writeArray = function(array) {
+    if ("ER_writeArray" in global)
+        return global.ER_writeArray(array);
+}
+
 // Helper functions
 global.ER_readPropIdx = function(arr, idx) {
     return global._ER_readProp(arr, idx, arr[idx]);

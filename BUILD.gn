@@ -190,6 +190,7 @@ action("js2c") {
   sources = [
     "src/runtime.js",
     "src/v8natives.js",
+    "src/eventracer.js",
     "src/array.js",
     "src/string.js",
     "src/symbol.js",
@@ -210,7 +211,6 @@ action("js2c") {
     "src/weak_collection.js",
     "src/promise.js",
     "src/object-observe.js",
-    "src/eventracer.js",
     "src/macros.py",
   ]
 
