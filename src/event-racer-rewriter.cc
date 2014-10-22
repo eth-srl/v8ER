@@ -402,6 +402,7 @@ Call* EventRacerRewriter::doVisit(Call *c) {
   Property *p = c->expression()->AsProperty();
   rewrite(this, p->obj_);
   rewrite(this, p->key_);
+  rewrite(this, c->arguments());
 
   ScopeHack *scope;
   ZoneList<Expression*> *args;
