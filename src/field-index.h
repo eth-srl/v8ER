@@ -23,7 +23,6 @@ class FieldIndex V8_FINAL {
                                      int index,
                                      bool is_double = false);
   static FieldIndex ForInObjectOffset(int offset, Map* map = NULL);
-  static FieldIndex ForLookupResult(const LookupResult* result);
   static FieldIndex ForDescriptor(Map* map, int descriptor_index);
   static FieldIndex ForLoadByFieldIndex(Map* map, int index);
   static FieldIndex ForKeyedLookupCacheIndex(Map* map, int index);
@@ -65,7 +64,7 @@ class FieldIndex V8_FINAL {
 
   int GetKeyedLookupCacheIndex() const;
 
-  int GetLoadFieldStubKey() const {
+  int GetFieldAccessStubKey() const {
     return bit_field_ &
         (IsInObjectBits::kMask | IsDoubleBits::kMask | IndexBits::kMask);
   }

@@ -53,7 +53,8 @@ namespace internal {
   V(Literal)                                    \
   V(RegExpLiteral)                              \
   V(NativeFunctionLiteral)                      \
-  V(ThisFunction)
+  V(ThisFunction)                               \
+  V(SuperReference)
 
 #define INSTRUMENTATION_FUNCTION_LIST(V)         \
   V(_ER_read)                                    \

@@ -6,8 +6,8 @@
 
 #include "src/disasm.h"
 #include "src/disassembler.h"
+#include "src/heap/objects-visiting.h"
 #include "src/jsregexp.h"
-#include "src/objects-visiting.h"
 #include "src/ostreams.h"
 
 namespace v8 {
@@ -240,10 +240,6 @@ void JSObject::PrintProperties(OStream& os) {  // NOLINT
           os << Brief(descs->GetCallbacksObject(i)) << " (callback)\n";
           break;
         case NORMAL:  // only in slow mode
-        case HANDLER:  // only in lookup results, not in descriptors
-        case INTERCEPTOR:  // only in lookup results, not in descriptors
-        // There are no transitions in the descriptor array.
-        case NONEXISTENT:
           UNREACHABLE();
           break;
       }
@@ -375,9 +371,6 @@ void JSObject::PrintTransitions(OStream& os) {  // NOLINT
           break;
         // Values below are never in the target descriptor array.
         case NORMAL:
-        case HANDLER:
-        case INTERCEPTOR:
-        case NONEXISTENT:
           UNREACHABLE();
           break;
       }
@@ -430,7 +423,8 @@ void Symbol::SymbolPrint(OStream& os) {  // NOLINT
   HeapObject::PrintHeader(os, "Symbol");
   os << " - hash: " << Hash();
   os << "\n - name: " << Brief(name());
-  os << " - private: " << is_private();
+  os << "\n - private: " << is_private();
+  os << "\n - own: " << is_own();
   os << "\n";
 }
 
@@ -1104,9 +1098,6 @@ void TransitionArray::PrintTransitions(OStream& os) {  // NOLINT
         break;
       // Values below are never in the target descriptor array.
       case NORMAL:
-      case HANDLER:
-      case INTERCEPTOR:
-      case NONEXISTENT:
         UNREACHABLE();
         break;
     }

@@ -73,7 +73,8 @@ UnaryMathFunction CreateExpFunction() {
 
 #if defined(V8_HOST_ARCH_MIPS)
 MemCopyUint8Function CreateMemCopyUint8Function(MemCopyUint8Function stub) {
-#if defined(USE_SIMULATOR)
+#if defined(USE_SIMULATOR) || defined(_MIPS_ARCH_MIPS32R6) || \
+    defined(_MIPS_ARCH_MIPS32RX)
   return stub;
 #else
   size_t actual_size;
@@ -1099,6 +1100,7 @@ void MathExpGenerator::EmitMathExp(MacroAssembler* masm,
   DCHECK(!temp1.is(temp3));
   DCHECK(!temp2.is(temp3));
   DCHECK(ExternalReference::math_exp_constants(0).address() != NULL);
+  DCHECK(!masm->serializer_enabled());  // External references not serializable.
 
   Label zero, infinity, done;
 

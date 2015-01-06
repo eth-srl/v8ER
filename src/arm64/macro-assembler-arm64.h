@@ -11,6 +11,24 @@
 
 #include "src/arm64/assembler-arm64-inl.h"
 
+// Simulator specific helpers.
+#if USE_SIMULATOR
+  // TODO(all): If possible automatically prepend an indicator like
+  // UNIMPLEMENTED or LOCATION.
+  #define ASM_UNIMPLEMENTED(message)                                         \
+  __ Debug(message, __LINE__, NO_PARAM)
+  #define ASM_UNIMPLEMENTED_BREAK(message)                                   \
+  __ Debug(message, __LINE__,                                                \
+           FLAG_ignore_asm_unimplemented_break ? NO_PARAM : BREAK)
+  #define ASM_LOCATION(message)                                              \
+  __ Debug("LOCATION: " message, __LINE__, NO_PARAM)
+#else
+  #define ASM_UNIMPLEMENTED(message)
+  #define ASM_UNIMPLEMENTED_BREAK(message)
+  #define ASM_LOCATION(message)
+#endif
+
+
 namespace v8 {
 namespace internal {
 
@@ -24,6 +42,11 @@ namespace internal {
   V(Ldr, CPURegister&, rt, LoadOpFor(rt))                     \
   V(Str, CPURegister&, rt, StoreOpFor(rt))                    \
   V(Ldrsw, Register&, rt, LDRSW_x)
+
+#define LSPAIR_MACRO_LIST(V)                             \
+  V(Ldp, CPURegister&, rt, rt2, LoadPairOpFor(rt, rt2))  \
+  V(Stp, CPURegister&, rt, rt2, StorePairOpFor(rt, rt2)) \
+  V(Ldpsw, CPURegister&, rt, rt2, LDPSW_x)
 
 
 // ----------------------------------------------------------------------------
@@ -243,6 +266,14 @@ class MacroAssembler : public Assembler {
                       const MemOperand& addr,
                       LoadStoreOp op);
 
+#define DECLARE_FUNCTION(FN, REGTYPE, REG, REG2, OP) \
+  inline void FN(const REGTYPE REG, const REGTYPE REG2, const MemOperand& addr);
+  LSPAIR_MACRO_LIST(DECLARE_FUNCTION)
+#undef DECLARE_FUNCTION
+
+  void LoadStorePairMacro(const CPURegister& rt, const CPURegister& rt2,
+                          const MemOperand& addr, LoadStorePairOp op);
+
   // V8-specific load/store helpers.
   void Load(const Register& rt, const MemOperand& addr, Representation r);
   void Store(const Register& rt, const MemOperand& addr, Representation r);
@@ -400,12 +431,6 @@ class MacroAssembler : public Assembler {
   inline void Ldnp(const CPURegister& rt,
                    const CPURegister& rt2,
                    const MemOperand& src);
-  inline void Ldp(const CPURegister& rt,
-                  const CPURegister& rt2,
-                  const MemOperand& src);
-  inline void Ldpsw(const Register& rt,
-                    const Register& rt2,
-                    const MemOperand& src);
   // Load a literal from the inline constant pool.
   inline void Ldr(const CPURegister& rt, const Immediate& imm);
   // Helper function for double immediate.
@@ -465,9 +490,6 @@ class MacroAssembler : public Assembler {
   inline void Stnp(const CPURegister& rt,
                    const CPURegister& rt2,
                    const MemOperand& dst);
-  inline void Stp(const CPURegister& rt,
-                  const CPURegister& rt2,
-                  const MemOperand& dst);
   inline void Sxtb(const Register& rd, const Register& rn);
   inline void Sxth(const Register& rd, const Register& rn);
   inline void Sxtw(const Register& rd, const Register& rn);
@@ -2179,7 +2201,7 @@ class MacroAssembler : public Assembler {
 // emitted is what you specified when creating the scope.
 class InstructionAccurateScope BASE_EMBEDDED {
  public:
-  InstructionAccurateScope(MacroAssembler* masm, size_t count = 0)
+  explicit InstructionAccurateScope(MacroAssembler* masm, size_t count = 0)
       : masm_(masm)
 #ifdef DEBUG
         ,

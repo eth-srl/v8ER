@@ -551,7 +551,7 @@ class HValue : public ZoneObject {
     return IsShl() || IsShr() || IsSar();
   }
 
-  HValue(HType type = HType::Tagged())
+  explicit HValue(HType type = HType::Tagged())
       : block_(NULL),
         id_(kNoNumber),
         type_(type),
@@ -1205,7 +1205,7 @@ class HInstruction : public HValue {
   DECLARE_ABSTRACT_INSTRUCTION(Instruction)
 
  protected:
-  HInstruction(HType type = HType::Tagged())
+  explicit HInstruction(HType type = HType::Tagged())
       : HValue(type),
         next_(NULL),
         previous_(NULL),
@@ -1238,7 +1238,8 @@ class HTemplateInstruction : public HInstruction {
   }
 
  protected:
-  HTemplateInstruction(HType type = HType::Tagged()) : HInstruction(type) {}
+  explicit HTemplateInstruction(HType type = HType::Tagged())
+      : HInstruction(type) {}
 
   virtual void InternalSetOperandAt(int i, HValue* value) V8_FINAL V8_OVERRIDE {
     inputs_[i] = value;
@@ -1598,7 +1599,7 @@ class HAbnormalExit V8_FINAL : public HTemplateControlInstruction<0, 0> {
 
 class HUnaryOperation : public HTemplateInstruction<1> {
  public:
-  HUnaryOperation(HValue* value, HType type = HType::Tagged())
+  explicit HUnaryOperation(HValue* value, HType type = HType::Tagged())
       : HTemplateInstruction<1>(type) {
     SetOperandAt(0, value);
   }
@@ -2716,7 +2717,7 @@ class HLoadRoot V8_FINAL : public HTemplateInstruction<0> {
   }
 
  private:
-  HLoadRoot(Heap::RootListIndex index, HType type = HType::Tagged())
+  explicit HLoadRoot(Heap::RootListIndex index, HType type = HType::Tagged())
       : HTemplateInstruction<0>(type), index_(index) {
     SetFlag(kUseGVN);
     // TODO(bmeurer): We'll need kDependsOnRoots once we add the
@@ -3706,7 +3707,8 @@ class HConstant V8_FINAL : public HTemplateInstruction<0> {
 
  private:
   friend class HGraph;
-  HConstant(Handle<Object> handle, Representation r = Representation::None());
+  explicit HConstant(Handle<Object> handle,
+                     Representation r = Representation::None());
   HConstant(int32_t value,
             Representation r = Representation::None(),
             bool is_not_in_new_space = true,
@@ -5791,9 +5793,7 @@ class HStoreGlobalCell V8_FINAL : public HUnaryOperation {
                                  Handle<PropertyCell>, PropertyDetails);
 
   Unique<PropertyCell> cell() const { return cell_; }
-  bool RequiresHoleCheck() {
-    return !details_.IsDontDelete() || details_.IsReadOnly();
-  }
+  bool RequiresHoleCheck() { return details_.IsConfigurable(); }
   bool NeedsWriteBarrier() {
     return StoringValueNeedsWriteBarrier(value());
   }
@@ -6190,8 +6190,9 @@ class HObjectAccess V8_FINAL {
       Representation representation = Representation::Tagged());
 
   // Create an access to a resolved field (in-object or backing store).
-  static HObjectAccess ForField(Handle<Map> map,
-      LookupResult *lookup, Handle<String> name = Handle<String>::null());
+  static HObjectAccess ForField(Handle<Map> map, int index,
+                                Representation representation,
+                                Handle<String> name);
 
   // Create an access for the payload of a Cell or JSGlobalPropertyCell.
   static HObjectAccess ForCellPayload(Isolate* isolate);

@@ -25,8 +25,7 @@ class Graph;
 // of function inlining.
 class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
  public:
-  AstGraphBuilder(CompilationInfo* info, JSGraph* jsgraph,
-                  SourcePositionTable* source_positions_);
+  AstGraphBuilder(CompilationInfo* info, JSGraph* jsgraph);
 
   // Creates a graph by visiting the entire AST.
   bool CreateGraph();
@@ -41,7 +40,8 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
   class Environment;
 
   Environment* environment() {
-    return reinterpret_cast<Environment*>(environment_internal());
+    return reinterpret_cast<Environment*>(
+        StructuredGraphBuilder::environment());
   }
 
   AstContext* ast_context() const { return ast_context_; }
@@ -56,8 +56,6 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
   // depends on the graph builder, but environments themselves are not virtual.
   typedef StructuredGraphBuilder::Environment BaseEnvironment;
   virtual BaseEnvironment* CopyEnvironment(BaseEnvironment* env);
-
-  SourcePositionTable* source_positions() { return source_positions_; }
 
   // TODO(mstarzinger): The pipeline only needs to be a friend to access the
   // function context. Remove as soon as the context is a parameter.
@@ -80,14 +78,17 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
   Node* BuildArgumentsObject(Variable* arguments);
 
   // Builders for variable load and assignment.
-  Node* BuildVariableAssignment(Variable* var, Node* value, Token::Value op);
+  Node* BuildVariableAssignment(Variable* var, Node* value, Token::Value op,
+                                BailoutId bailout_id);
   Node* BuildVariableDelete(Variable* var);
-  Node* BuildVariableLoad(Variable* var, ContextualMode mode = CONTEXTUAL);
+  Node* BuildVariableLoad(Variable* var, BailoutId bailout_id,
+                          ContextualMode mode = CONTEXTUAL);
 
   // Builders for accessing the function context.
   Node* BuildLoadBuiltinsObject();
   Node* BuildLoadGlobalObject();
   Node* BuildLoadClosure();
+  Node* BuildLoadObjectField(Node* object, int offset);
 
   // Builders for automatic type conversion.
   Node* BuildToBoolean(Node* value);
@@ -114,7 +115,6 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
   CompilationInfo* info_;
   AstContext* ast_context_;
   JSGraph* jsgraph_;
-  SourcePositionTable* source_positions_;
 
   // List of global declarations for functions and variables.
   ZoneList<Handle<Object> > globals_;
@@ -172,7 +172,18 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
   // Dispatched from VisitForInStatement.
   void VisitForInAssignment(Expression* expr, Node* value);
 
-  void BuildLazyBailout(Node* node, BailoutId ast_id);
+  // Flag that describes how to combine the current environment with
+  // the output of a node to obtain a framestate for lazy bailout.
+  enum OutputFrameStateCombine {
+    PUSH_OUTPUT,   // Push the output on the expression stack.
+    IGNORE_OUTPUT  // Use the frame state as-is.
+  };
+
+  // Builds deoptimization for a given node.
+  void PrepareFrameState(Node* node, BailoutId ast_id,
+                         OutputFrameStateCombine combine = IGNORE_OUTPUT);
+
+  OutputFrameStateCombine StateCombineFromAstContext();
 
   DEFINE_AST_VISITOR_SUBCLASS_MEMBERS();
   DISALLOW_COPY_AND_ASSIGN(AstGraphBuilder);
@@ -206,11 +217,9 @@ class AstGraphBuilder::Environment
     DCHECK(variable->IsStackAllocated());
     if (variable->IsParameter()) {
       values()->at(variable->index() + 1) = node;
-      parameters_dirty_ = true;
     } else {
       DCHECK(variable->IsStackLocal());
       values()->at(variable->index() + parameters_count_) = node;
-      locals_dirty_ = true;
     }
   }
   Node* Lookup(Variable* variable) {
@@ -226,7 +235,6 @@ class AstGraphBuilder::Environment
   // Operations on the operand stack.
   void Push(Node* node) {
     values()->push_back(node);
-    stack_dirty_ = true;
   }
   Node* Top() {
     DCHECK(stack_height() > 0);
@@ -260,14 +268,13 @@ class AstGraphBuilder::Environment
   Node* Checkpoint(BailoutId ast_id);
 
  private:
+  void UpdateStateValues(Node** state_values, int offset, int count);
+
   int parameters_count_;
   int locals_count_;
   Node* parameters_node_;
   Node* locals_node_;
   Node* stack_node_;
-  bool parameters_dirty_;
-  bool locals_dirty_;
-  bool stack_dirty_;
 };
 
 
@@ -278,6 +285,12 @@ class AstGraphBuilder::AstContext BASE_EMBEDDED {
   bool IsEffect() const { return kind_ == Expression::kEffect; }
   bool IsValue() const { return kind_ == Expression::kValue; }
   bool IsTest() const { return kind_ == Expression::kTest; }
+
+  // Determines how to combine the frame state with the value
+  // that is about to be plugged into this AstContext.
+  AstGraphBuilder::OutputFrameStateCombine GetStateCombine() {
+    return IsEffect() ? IGNORE_OUTPUT : PUSH_OUTPUT;
+  }
 
   // Plug a node into this expression context.  Call this function in tail
   // position in the Visit functions for expressions.

@@ -10,7 +10,7 @@ EventRacerRewriter::AstRewriterImpl(CompilationInfo *info)
   : info_(info),
     current_context_(NULL),
     id_alloc_scope_(NULL),
-    factory_(info_->zone(), info_->ast_value_factory()),
+    factory_(info_->zone(), info_->ast_value_factory(), info_->ast_node_id_gen()),
     arg_names_(NULL) {
 
   InitializeAstRewriter(info->zone());
@@ -126,11 +126,11 @@ void EventRacerRewriter::ensure_arg_names(int n) {
 }
 
 int EventRacerRewriter::ast_node_id() const {
-  return isolate()->ast_node_id();
+  return info_->ast_node_id_gen()->id();
 }
 
 void EventRacerRewriter::set_ast_node_id(int id) {
-  isolate()->set_ast_node_id(id);
+  info_->ast_node_id_gen()->set_id(id);
 }
 
 bool EventRacerRewriter::is_literal_key(const Expression *ex) const {
@@ -1382,7 +1382,8 @@ template<typename T> void traverse(AstVisitor *v, ZoneList<T *> *lst) {
   V(EmptyStatement)                             \
   V(Literal)                                    \
   V(NativeFunctionLiteral)                      \
-  V(ThisFunction)
+  V(ThisFunction)                               \
+  V(SuperReference)
 
 #define LEAF_VISIT(type)                                \
     void AstSlotCounter::Visit##type(type *nd) {        \

@@ -155,26 +155,27 @@ DEFINE_BOOL(harmony_modules, false,
             "enable harmony modules (implies block scoping)")
 DEFINE_BOOL(harmony_proxies, false, "enable harmony proxies")
 DEFINE_BOOL(harmony_generators, false, "enable harmony generators")
-DEFINE_BOOL(harmony_iteration, false, "enable harmony iteration (for-of)")
 DEFINE_BOOL(harmony_numeric_literals, false,
             "enable harmony numeric literals (0o77, 0b11)")
 DEFINE_BOOL(harmony_strings, false, "enable harmony string")
 DEFINE_BOOL(harmony_arrays, false, "enable harmony arrays")
 DEFINE_BOOL(harmony_arrow_functions, false, "enable harmony arrow functions")
-DEFINE_BOOL(harmony, false, "enable all harmony features")
+DEFINE_BOOL(harmony_classes, false, "enable harmony classes")
+DEFINE_BOOL(harmony, false, "enable all harmony features (except proxies)")
 
 DEFINE_IMPLICATION(harmony, harmony_scoping)
 DEFINE_IMPLICATION(harmony, harmony_modules)
-DEFINE_IMPLICATION(harmony, harmony_proxies)
-DEFINE_IMPLICATION(harmony, harmony_generators)
+// TODO(rossberg): Reenable when problems are sorted out.
+// DEFINE_IMPLICATION(harmony, harmony_proxies)
 DEFINE_IMPLICATION(harmony, harmony_numeric_literals)
 DEFINE_IMPLICATION(harmony, harmony_strings)
 DEFINE_IMPLICATION(harmony, harmony_arrays)
 DEFINE_IMPLICATION(harmony, harmony_arrow_functions)
+DEFINE_IMPLICATION(harmony, harmony_classes)
 DEFINE_IMPLICATION(harmony_modules, harmony_scoping)
 
 DEFINE_IMPLICATION(harmony, es_staging)
-DEFINE_IMPLICATION(es_staging, harmony_iteration)
+DEFINE_IMPLICATION(es_staging, harmony_generators)
 
 // Flags for experimental implementation features.
 DEFINE_BOOL(compiled_keyed_dictionary_loads, true,
@@ -334,9 +335,11 @@ DEFINE_BOOL(turbo_stats, false, "print TurboFan statistics")
 DEFINE_BOOL(turbo_types, false, "use typed lowering in TurboFan")
 DEFINE_BOOL(turbo_source_positions, false,
             "track source code positions when building TurboFan IR")
-DEFINE_BOOL(context_specialization, true,
+DEFINE_BOOL(context_specialization, false,
             "enable context specialization in TurboFan")
 DEFINE_BOOL(turbo_deoptimization, false, "enable deoptimization in TurboFan")
+DEFINE_BOOL(turbo_inlining, false, "enable inlining in TurboFan")
+DEFINE_BOOL(trace_turbo_inlining, false, "trace TurboFan inlining")
 
 DEFINE_INT(typed_array_max_size_in_heap, 64,
            "threshold for in-heap typed array")
@@ -523,7 +526,6 @@ DEFINE_BOOL(trace_incremental_marking, false,
             "trace progress of the incremental marking")
 DEFINE_BOOL(track_gc_object_stats, false,
             "track object counts and memory usage")
-DEFINE_BOOL(always_precise_sweeping, true, "always sweep precisely")
 DEFINE_BOOL(parallel_sweeping, false, "enable parallel sweeping")
 DEFINE_BOOL(concurrent_sweeping, true, "enable concurrent sweeping")
 DEFINE_INT(sweeper_threads, 0,

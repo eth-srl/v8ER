@@ -9,7 +9,7 @@
 
 #include "src/code-stubs.h"
 #include "src/compiler/frame.h"
-#include "src/compiler/machine-operator.h"
+#include "src/compiler/machine-type.h"
 #include "src/compiler/node.h"
 #include "src/compiler/operator.h"
 #include "src/zone.h"
@@ -22,17 +22,17 @@ namespace compiler {
 // TODO(titzer): replace with Radium locations when they are ready.
 class LinkageLocation {
  public:
-  LinkageLocation(MachineRepresentation rep, int location)
+  LinkageLocation(MachineType rep, int location)
       : rep_(rep), location_(location) {}
 
-  inline MachineRepresentation representation() const { return rep_; }
+  inline MachineType representation() const { return rep_; }
 
   static const int16_t ANY_REGISTER = 32767;
 
  private:
   friend class CallDescriptor;
   friend class OperandGenerator;
-  MachineRepresentation rep_;
+  MachineType rep_;
   int16_t location_;  // >= 0 implies register, otherwise stack slot.
 };
 
@@ -43,7 +43,12 @@ class CallDescriptor : public ZoneObject {
   // or an address--all of which require different machine sequences to call.
   enum Kind { kCallCodeObject, kCallJSFunction, kCallAddress };
 
-  enum DeoptimizationSupport { kCanDeoptimize, kCannotDeoptimize };
+  // TODO(jarin) kLazyDeoptimization and kNeedsFrameState should be unified.
+  enum DeoptimizationSupport {
+    kNoDeoptimization = 0,
+    kLazyDeoptimization = 1,
+    kNeedsFrameState = 2
+  };
 
   CallDescriptor(Kind kind, int8_t return_count, int16_t parameter_count,
                  int16_t input_count, LinkageLocation* locations,
@@ -74,8 +79,18 @@ class CallDescriptor : public ZoneObject {
 
   int InputCount() const { return input_count_; }
 
+  int FrameStateCount() const { return NeedsFrameState() ? 1 : 0; }
+
   bool CanLazilyDeoptimize() const {
-    return deoptimization_support_ == kCanDeoptimize;
+    return (deoptimization_support() & kLazyDeoptimization) != 0;
+  }
+
+  bool NeedsFrameState() const {
+    return (deoptimization_support() & kNeedsFrameState) != 0;
+  }
+
+  DeoptimizationSupport deoptimization_support() const {
+    return deoptimization_support_;
   }
 
   LinkageLocation GetReturnLocation(int index) {
@@ -141,22 +156,27 @@ class Linkage : public ZoneObject {
       Runtime::FunctionId function, int parameter_count,
       Operator::Property properties,
       CallDescriptor::DeoptimizationSupport can_deoptimize =
-          CallDescriptor::kCannotDeoptimize);
+          CallDescriptor::kNoDeoptimization);
   static CallDescriptor* GetRuntimeCallDescriptor(
       Runtime::FunctionId function, int parameter_count,
       Operator::Property properties,
       CallDescriptor::DeoptimizationSupport can_deoptimize, Zone* zone);
 
-  CallDescriptor* GetStubCallDescriptor(CodeStubInterfaceDescriptor* descriptor,
-                                        int stack_parameter_count = 0);
+  CallDescriptor* GetStubCallDescriptor(
+      CodeStubInterfaceDescriptor* descriptor, int stack_parameter_count = 0,
+      CallDescriptor::DeoptimizationSupport can_deoptimize =
+          CallDescriptor::kNoDeoptimization);
+  static CallDescriptor* GetStubCallDescriptor(
+      CodeStubInterfaceDescriptor* descriptor, int stack_parameter_count,
+      CallDescriptor::DeoptimizationSupport can_deoptimize, Zone* zone);
 
   // Creates a call descriptor for simplified C calls that is appropriate
   // for the host platform. This simplified calling convention only supports
   // integers and pointers of one word size each, i.e. no floating point,
   // structs, pointers to members, etc.
   static CallDescriptor* GetSimplifiedCDescriptor(
-      Zone* zone, int num_params, MachineRepresentation return_type,
-      const MachineRepresentation* param_types);
+      Zone* zone, int num_params, MachineType return_type,
+      const MachineType* param_types);
 
   // Get the location of an (incoming) parameter to this function.
   LinkageLocation GetParameterLocation(int index) {

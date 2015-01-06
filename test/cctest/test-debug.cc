@@ -36,7 +36,6 @@
 #include "src/debug.h"
 #include "src/deoptimizer.h"
 #include "src/frames.h"
-#include "src/stub-cache.h"
 #include "src/utils.h"
 #include "test/cctest/cctest.h"
 
@@ -4151,10 +4150,11 @@ TEST(DebugBreak) {
 
   // Set the debug break flag.
   v8::Debug::DebugBreak(env->GetIsolate());
+  CHECK(v8::Debug::CheckDebugBreak(env->GetIsolate()));
 
   // Call all functions with different argument count.
   break_point_hit_count = 0;
-  for (unsigned int i = 0; i < ARRAY_SIZE(argv); i++) {
+  for (unsigned int i = 0; i < arraysize(argv); i++) {
     f0->Call(env->Global(), i, argv);
     f1->Call(env->Global(), i, argv);
     f2->Call(env->Global(), i, argv);
@@ -4162,7 +4162,7 @@ TEST(DebugBreak) {
   }
 
   // One break for each function called.
-  CHECK_EQ(4 * ARRAY_SIZE(argv), break_point_hit_count);
+  CHECK_EQ(4 * arraysize(argv), break_point_hit_count);
 
   // Get rid of the debug event listener.
   v8::Debug::SetDebugEventListener(NULL);
@@ -4182,6 +4182,12 @@ TEST(DisableBreak) {
   // Create a function for testing stepping.
   const char* src = "function f() {g()};function g(){i=0; while(i<10){i++}}";
   v8::Local<v8::Function> f = CompileFunction(&env, src, "f");
+
+  // Set, test and cancel debug break.
+  v8::Debug::DebugBreak(env->GetIsolate());
+  CHECK(v8::Debug::CheckDebugBreak(env->GetIsolate()));
+  v8::Debug::CancelDebugBreak(env->GetIsolate());
+  CHECK(!v8::Debug::CheckDebugBreak(env->GetIsolate()));
 
   // Set the debug break flag.
   v8::Debug::DebugBreak(env->GetIsolate());
@@ -4376,10 +4382,6 @@ TEST(InterceptorPropertyMirror) {
     SNPrintF(buffer,
              "named_values[%d] instanceof debug.PropertyMirror", i);
     CHECK(CompileRun(buffer.start())->BooleanValue());
-
-    SNPrintF(buffer, "named_values[%d].propertyType()", i);
-    CHECK_EQ(v8::internal::INTERCEPTOR,
-             CompileRun(buffer.start())->Int32Value());
 
     SNPrintF(buffer, "named_values[%d].isNative()", i);
     CHECK(CompileRun(buffer.start())->BooleanValue());
@@ -4848,7 +4850,7 @@ Barriers message_queue_barriers;
 class MessageQueueDebuggerThread : public v8::base::Thread {
  public:
   MessageQueueDebuggerThread()
-      : Thread("MessageQueueDebuggerThread") { }
+      : Thread(Options("MessageQueueDebuggerThread")) {}
   void Run();
 };
 
@@ -5104,13 +5106,13 @@ Barriers threaded_debugging_barriers;
 
 class V8Thread : public v8::base::Thread {
  public:
-  V8Thread() : Thread("V8Thread") { }
+  V8Thread() : Thread(Options("V8Thread")) {}
   void Run();
 };
 
 class DebuggerThread : public v8::base::Thread {
  public:
-  DebuggerThread() : Thread("DebuggerThread") { }
+  DebuggerThread() : Thread(Options("DebuggerThread")) {}
   void Run();
 };
 
@@ -5216,14 +5218,14 @@ TEST(ThreadedDebugging) {
 
 class BreakpointsV8Thread : public v8::base::Thread {
  public:
-  BreakpointsV8Thread() : Thread("BreakpointsV8Thread") { }
+  BreakpointsV8Thread() : Thread(Options("BreakpointsV8Thread")) {}
   void Run();
 };
 
 class BreakpointsDebuggerThread : public v8::base::Thread {
  public:
   explicit BreakpointsDebuggerThread(bool global_evaluate)
-      : Thread("BreakpointsDebuggerThread"),
+      : Thread(Options("BreakpointsDebuggerThread")),
         global_evaluate_(global_evaluate) {}
   void Run();
 
@@ -6525,9 +6527,9 @@ TEST(ProcessDebugMessages) {
 class SendCommandThread : public v8::base::Thread {
  public:
   explicit SendCommandThread(v8::Isolate* isolate)
-      : Thread("SendCommandThread"),
+      : Thread(Options("SendCommandThread")),
         semaphore_(0),
-        isolate_(isolate) { }
+        isolate_(isolate) {}
 
   static void ProcessDebugMessages(v8::Isolate* isolate, void* data) {
     v8::Debug::ProcessDebugMessages();
@@ -7379,8 +7381,8 @@ static void DebugBreakTriggerTerminate(
 
 class TerminationThread : public v8::base::Thread {
  public:
-  explicit TerminationThread(v8::Isolate* isolate) : Thread("terminator"),
-                                                     isolate_(isolate) { }
+  explicit TerminationThread(v8::Isolate* isolate)
+      : Thread(Options("terminator")), isolate_(isolate) {}
 
   virtual void Run() {
     terminate_requested_semaphore.Wait();

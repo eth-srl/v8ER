@@ -45,9 +45,9 @@ class RawMachineAssembler : public GraphBuilder,
     DISALLOW_COPY_AND_ASSIGN(Label);
   };
 
-  RawMachineAssembler(
-      Graph* graph, MachineCallDescriptorBuilder* call_descriptor_builder,
-      MachineRepresentation word = MachineOperatorBuilder::pointer_rep());
+  RawMachineAssembler(Graph* graph,
+                      MachineCallDescriptorBuilder* call_descriptor_builder,
+                      MachineType word = kMachPtr);
   virtual ~RawMachineAssembler() {}
 
   Isolate* isolate() const { return zone()->isolate(); }
@@ -60,7 +60,7 @@ class RawMachineAssembler : public GraphBuilder,
   int parameter_count() const {
     return call_descriptor_builder_->parameter_count();
   }
-  const MachineRepresentation* parameter_types() const {
+  const MachineType* parameter_types() const {
     return call_descriptor_builder_->parameter_types();
   }
 
@@ -71,6 +71,10 @@ class RawMachineAssembler : public GraphBuilder,
   Label* Exit();
   void Goto(Label* label);
   void Branch(Node* condition, Label* true_val, Label* false_val);
+  // Call through CallFunctionStub with lazy deopt and frame-state.
+  Node* CallFunctionStub0(Node* function, Node* receiver, Node* context,
+                          Node* frame_state, Label* continuation,
+                          Label* deoptimization, CallFunctionFlags flags);
   // Call to a JS function with zero parameters.
   Node* CallJS0(Node* function, Node* receiver, Label* continuation,
                 Label* deoptimization);
@@ -107,10 +111,6 @@ class RawMachineAssembler : public GraphBuilder,
   BasicBlock* Use(Label* label);
   BasicBlock* EnsureBlock(Label* label);
   BasicBlock* CurrentBlock();
-
-  typedef std::vector<MachineRepresentation,
-                      zone_allocator<MachineRepresentation> >
-      RepresentationVector;
 
   Schedule* schedule_;
   MachineOperatorBuilder machine_;

@@ -63,6 +63,7 @@ using ::v8::FunctionTemplate;
 using ::v8::Handle;
 using ::v8::HandleScope;
 using ::v8::Local;
+using ::v8::Name;
 using ::v8::Message;
 using ::v8::MessageCallback;
 using ::v8::Object;
@@ -71,6 +72,7 @@ using ::v8::Persistent;
 using ::v8::Script;
 using ::v8::StackTrace;
 using ::v8::String;
+using ::v8::Symbol;
 using ::v8::TryCatch;
 using ::v8::Undefined;
 using ::v8::UniqueId;
@@ -128,19 +130,18 @@ static void SignatureCallback(
 
 
 // Tests that call v8::V8::Dispose() cannot be threaded.
-TEST(InitializeAndDisposeOnce) {
+UNINITIALIZED_TEST(InitializeAndDisposeOnce) {
   CHECK(v8::V8::Initialize());
   CHECK(v8::V8::Dispose());
 }
 
 
 // Tests that call v8::V8::Dispose() cannot be threaded.
-TEST(InitializeAndDisposeMultiple) {
+UNINITIALIZED_TEST(InitializeAndDisposeMultiple) {
   for (int i = 0; i < 3; ++i) CHECK(v8::V8::Dispose());
   for (int i = 0; i < 3; ++i) CHECK(v8::V8::Initialize());
   for (int i = 0; i < 3; ++i) CHECK(v8::V8::Dispose());
-  // TODO(mstarzinger): This should fail gracefully instead of asserting.
-  // for (int i = 0; i < 3; ++i) CHECK(v8::V8::Initialize());
+  for (int i = 0; i < 3; ++i) CHECK(v8::V8::Initialize());
   for (int i = 0; i < 3; ++i) CHECK(v8::V8::Dispose());
 }
 
@@ -261,7 +262,7 @@ THREADED_TEST(ReceiverSignature) {
   const char* test_objects[] = {
       "fun_instance", "sub_fun_instance", "obj", "unrel" };
   unsigned bad_signature_start_offset = 2;
-  for (unsigned i = 0; i < ARRAY_SIZE(test_objects); i++) {
+  for (unsigned i = 0; i < arraysize(test_objects); i++) {
     i::ScopedVector<char> source(200);
     i::SNPrintF(
         source, "var test_object = %s; test_object", test_objects[i]);
@@ -409,7 +410,8 @@ THREADED_TEST(Script) {
 
 class TestResource: public String::ExternalStringResource {
  public:
-  TestResource(uint16_t* data, int* counter = NULL, bool owning_data = true)
+  explicit TestResource(uint16_t* data, int* counter = NULL,
+                        bool owning_data = true)
       : data_(data), length_(0), counter_(counter), owning_data_(owning_data) {
     while (data[length_]) ++length_;
   }
@@ -437,11 +439,12 @@ class TestResource: public String::ExternalStringResource {
 
 class TestAsciiResource: public String::ExternalAsciiStringResource {
  public:
-  TestAsciiResource(const char* data, int* counter = NULL, size_t offset = 0)
+  explicit TestAsciiResource(const char* data, int* counter = NULL,
+                             size_t offset = 0)
       : orig_data_(data),
         data_(data + offset),
         length_(strlen(data) - offset),
-        counter_(counter) { }
+        counter_(counter) {}
 
   ~TestAsciiResource() {
     i::DeleteArray(orig_data_);
@@ -1185,7 +1188,7 @@ THREADED_PROFILED_TEST(FastReturnValues) {
       0, 234, -723,
       i::Smi::kMinValue, i::Smi::kMaxValue
   };
-  for (size_t i = 0; i < ARRAY_SIZE(int_values); i++) {
+  for (size_t i = 0; i < arraysize(int_values); i++) {
     for (int modifier = -1; modifier <= 1; modifier++) {
       int int_value = int_values[i] + modifier;
       // check int32_t
@@ -1217,7 +1220,7 @@ THREADED_PROFILED_TEST(FastReturnValues) {
       kUndefinedReturnValue,
       kEmptyStringReturnValue
   };
-  for (size_t i = 0; i < ARRAY_SIZE(oddballs); i++) {
+  for (size_t i = 0; i < arraysize(oddballs); i++) {
     fast_return_value_void = oddballs[i];
     value = TestFastReturnValues<void>();
     switch (fast_return_value_void) {
@@ -1536,6 +1539,55 @@ THREADED_TEST(IsNativeError) {
   CHECK(!not_error->IsNativeError());
   v8::Handle<Value> not_object = CompileRun("42");
   CHECK(!not_object->IsNativeError());
+}
+
+
+THREADED_TEST(ArgumentsObject) {
+  LocalContext env;
+  v8::HandleScope scope(env->GetIsolate());
+  v8::Handle<Value> arguments_object =
+      CompileRun("var out = 0; (function(){ out = arguments; })(1,2,3); out;");
+  CHECK(arguments_object->IsArgumentsObject());
+  v8::Handle<Value> array = CompileRun("[1,2,3]");
+  CHECK(!array->IsArgumentsObject());
+  v8::Handle<Value> object = CompileRun("{a:42}");
+  CHECK(!object->IsArgumentsObject());
+}
+
+
+THREADED_TEST(IsMapOrSet) {
+  LocalContext env;
+  v8::HandleScope scope(env->GetIsolate());
+  v8::Handle<Value> map = CompileRun("new Map()");
+  v8::Handle<Value> set = CompileRun("new Set()");
+  v8::Handle<Value> weak_map = CompileRun("new WeakMap()");
+  v8::Handle<Value> weak_set = CompileRun("new WeakSet()");
+  CHECK(map->IsMap());
+  CHECK(set->IsSet());
+  CHECK(weak_map->IsWeakMap());
+  CHECK(weak_set->IsWeakSet());
+
+  CHECK(!map->IsSet());
+  CHECK(!map->IsWeakMap());
+  CHECK(!map->IsWeakSet());
+
+  CHECK(!set->IsMap());
+  CHECK(!set->IsWeakMap());
+  CHECK(!set->IsWeakSet());
+
+  CHECK(!weak_map->IsMap());
+  CHECK(!weak_map->IsSet());
+  CHECK(!weak_map->IsWeakSet());
+
+  CHECK(!weak_set->IsMap());
+  CHECK(!weak_set->IsSet());
+  CHECK(!weak_set->IsWeakMap());
+
+  v8::Handle<Value> object = CompileRun("{a:42}");
+  CHECK(!object->IsMap());
+  CHECK(!object->IsSet());
+  CHECK(!object->IsWeakMap());
+  CHECK(!object->IsWeakSet());
 }
 
 
@@ -1876,6 +1928,24 @@ void SimpleAccessorSetter(Local<String> name, Local<Value> value,
   self->Set(String::Concat(v8_str("accessor_"), name), value);
 }
 
+void SymbolAccessorGetter(Local<Name> name,
+                          const v8::PropertyCallbackInfo<v8::Value>& info) {
+  CHECK(name->IsSymbol());
+  Local<Symbol> sym = Local<Symbol>::Cast(name);
+  if (sym->Name()->IsUndefined())
+    return;
+  SimpleAccessorGetter(Local<String>::Cast(sym->Name()), info);
+}
+
+void SymbolAccessorSetter(Local<Name> name, Local<Value> value,
+                          const v8::PropertyCallbackInfo<void>& info) {
+  CHECK(name->IsSymbol());
+  Local<Symbol> sym = Local<Symbol>::Cast(name);
+  if (sym->Name()->IsUndefined())
+    return;
+  SimpleAccessorSetter(Local<String>::Cast(sym->Name()), value, info);
+}
+
 void EmptyInterceptorGetter(Local<String> name,
                             const v8::PropertyCallbackInfo<v8::Value>& info) {
 }
@@ -1934,6 +2004,14 @@ void AddInterceptor(Handle<FunctionTemplate> templ,
 }
 
 
+void AddAccessor(Handle<FunctionTemplate> templ,
+                 Handle<Name> name,
+                 v8::AccessorNameGetterCallback getter,
+                 v8::AccessorNameSetterCallback setter) {
+  templ->PrototypeTemplate()->SetAccessor(name, getter, setter);
+}
+
+
 THREADED_TEST(EmptyInterceptorDoesNotShadowAccessors) {
   v8::HandleScope scope(CcTest::isolate());
   Handle<FunctionTemplate> parent = FunctionTemplate::New(CcTest::isolate());
@@ -1966,10 +2044,9 @@ THREADED_TEST(ExecutableAccessorIsPreservedOnAttributeChange) {
   i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
   i::LookupResult lookup(i_isolate);
   i::Handle<i::String> name(v8::Utils::OpenHandle(*v8_str("length")));
-  a->LookupOwnRealNamedProperty(name, &lookup);
-  CHECK(lookup.IsPropertyCallbacks());
-  i::Handle<i::Object> callback(lookup.GetCallbackObject(), i_isolate);
-  CHECK(callback->IsExecutableAccessorInfo());
+  i::LookupIterator it(a, name, i::LookupIterator::OWN_PROPERTY);
+  CHECK(it.HasProperty());
+  CHECK(it.GetAccessors()->IsExecutableAccessorInfo());
 }
 
 
@@ -2745,6 +2822,8 @@ THREADED_TEST(SymbolProperties) {
   v8::Local<v8::Symbol> sym1 = v8::Symbol::New(isolate);
   v8::Local<v8::Symbol> sym2 =
       v8::Symbol::New(isolate, v8_str("my-symbol"));
+  v8::Local<v8::Symbol> sym3 =
+      v8::Symbol::New(isolate, v8_str("sym3"));
 
   CcTest::heap()->CollectAllGarbage(i::Heap::kNoGCFlags);
 
@@ -2800,28 +2879,59 @@ THREADED_TEST(SymbolProperties) {
 
   CcTest::heap()->CollectAllGarbage(i::Heap::kNoGCFlags);
 
+  CHECK(obj->SetAccessor(sym3, SymbolAccessorGetter, SymbolAccessorSetter));
+  CHECK(obj->Get(sym3)->IsUndefined());
+  CHECK(obj->Set(sym3, v8::Integer::New(isolate, 42)));
+  CHECK(obj->Get(sym3)->Equals(v8::Integer::New(isolate, 42)));
+  CHECK(obj->Get(v8::String::NewFromUtf8(isolate, "accessor_sym3"))->Equals(
+      v8::Integer::New(isolate, 42)));
+
   // Add another property and delete it afterwards to force the object in
   // slow case.
   CHECK(obj->Set(sym2, v8::Integer::New(isolate, 2008)));
   CHECK_EQ(2002, obj->Get(sym1)->Int32Value());
   CHECK_EQ(2008, obj->Get(sym2)->Int32Value());
   CHECK_EQ(2002, obj->Get(sym1)->Int32Value());
-  CHECK_EQ(1, obj->GetOwnPropertyNames()->Length());
+  CHECK_EQ(2, obj->GetOwnPropertyNames()->Length());
 
   CHECK(obj->Has(sym1));
   CHECK(obj->Has(sym2));
+  CHECK(obj->Has(sym3));
+  CHECK(obj->Has(v8::String::NewFromUtf8(isolate, "accessor_sym3")));
   CHECK(obj->Delete(sym2));
   CHECK(obj->Has(sym1));
   CHECK(!obj->Has(sym2));
+  CHECK(obj->Has(sym3));
+  CHECK(obj->Has(v8::String::NewFromUtf8(isolate, "accessor_sym3")));
   CHECK_EQ(2002, obj->Get(sym1)->Int32Value());
-  CHECK_EQ(1, obj->GetOwnPropertyNames()->Length());
+  CHECK(obj->Get(sym3)->Equals(v8::Integer::New(isolate, 42)));
+  CHECK(obj->Get(v8::String::NewFromUtf8(isolate, "accessor_sym3"))->Equals(
+      v8::Integer::New(isolate, 42)));
+  CHECK_EQ(2, obj->GetOwnPropertyNames()->Length());
 
   // Symbol properties are inherited.
   v8::Local<v8::Object> child = v8::Object::New(isolate);
   child->SetPrototype(obj);
   CHECK(child->Has(sym1));
   CHECK_EQ(2002, child->Get(sym1)->Int32Value());
+  CHECK(obj->Get(sym3)->Equals(v8::Integer::New(isolate, 42)));
+  CHECK(obj->Get(v8::String::NewFromUtf8(isolate, "accessor_sym3"))->Equals(
+      v8::Integer::New(isolate, 42)));
   CHECK_EQ(0, child->GetOwnPropertyNames()->Length());
+}
+
+
+THREADED_TEST(SymbolTemplateProperties) {
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
+  v8::Local<v8::FunctionTemplate> foo = v8::FunctionTemplate::New(isolate);
+  v8::Local<v8::Name> name = v8::Symbol::New(isolate);
+  CHECK(!name.IsEmpty());
+  foo->PrototypeTemplate()->Set(name, v8::FunctionTemplate::New(isolate));
+  v8::Local<v8::Object> new_instance = foo->InstanceTemplate()->NewInstance();
+  CHECK(!new_instance.IsEmpty());
+  CHECK(new_instance->Has(name));
 }
 
 
@@ -2906,6 +3016,29 @@ THREADED_TEST(GlobalSymbols) {
   v8::Local<Value> sym2 = env->Global()->Get(v8_str("sym2"));
   CHECK(sym2->SameValue(glob));
   CHECK(!sym2->SameValue(glob_api));
+}
+
+
+static void CheckWellKnownSymbol(v8::Local<v8::Symbol>(*getter)(v8::Isolate*),
+                                 const char* name) {
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
+
+  v8::Local<v8::Symbol> symbol = getter(isolate);
+  std::string script = std::string("var sym = ") + name;
+  CompileRun(script.c_str());
+  v8::Local<Value> value = env->Global()->Get(v8_str("sym"));
+
+  CHECK(!value.IsEmpty());
+  CHECK(!symbol.IsEmpty());
+  CHECK(value->SameValue(symbol));
+}
+
+
+THREADED_TEST(WellKnownSymbols) {
+  CheckWellKnownSymbol(v8::Symbol::GetIterator, "Symbol.iterator");
+  CheckWellKnownSymbol(v8::Symbol::GetUnscopables, "Symbol.unscopables");
 }
 
 
@@ -5417,6 +5550,31 @@ TEST(TryCatchNative) {
              v8::FunctionTemplate::New(isolate, TryCatchNativeHelper));
   LocalContext context(0, templ);
   CompileRun("TryCatchNativeHelper();");
+  CHECK(!try_catch.HasCaught());
+}
+
+
+void TryCatchNativeResetHelper(
+    const v8::FunctionCallbackInfo<v8::Value>& args) {
+  ApiTestFuzzer::Fuzz();
+  v8::TryCatch try_catch;
+  args.GetIsolate()->ThrowException(v8_str("boom"));
+  CHECK(try_catch.HasCaught());
+  try_catch.Reset();
+  CHECK(!try_catch.HasCaught());
+}
+
+
+TEST(TryCatchNativeReset) {
+  v8::Isolate* isolate = CcTest::isolate();
+  v8::HandleScope scope(isolate);
+  v8::V8::Initialize();
+  v8::TryCatch try_catch;
+  Local<ObjectTemplate> templ = ObjectTemplate::New(isolate);
+  templ->Set(v8_str("TryCatchNativeResetHelper"),
+             v8::FunctionTemplate::New(isolate, TryCatchNativeResetHelper));
+  LocalContext context(0, templ);
+  CompileRun("TryCatchNativeResetHelper();");
   CHECK(!try_catch.HasCaught());
 }
 
@@ -15133,7 +15291,7 @@ struct RegExpInterruptionData {
 class RegExpInterruptionThread : public v8::base::Thread {
  public:
   explicit RegExpInterruptionThread(v8::Isolate* isolate)
-      : Thread("TimeoutThread"), isolate_(isolate) {}
+      : Thread(Options("TimeoutThread")), isolate_(isolate) {}
 
   virtual void Run() {
     for (regexp_interruption_data.loop_count = 0;
@@ -19044,7 +19202,7 @@ TEST(ContainsOnlyOneByte) {
       String::NewExternal(isolate,
                           new TestResource(string_contents, NULL, false));
   USE(two_byte); USE(cons_strings);
-  for (size_t i = 0; i < ARRAY_SIZE(cons_strings); i++) {
+  for (size_t i = 0; i < arraysize(cons_strings); i++) {
     // Base assumptions.
     string = cons_strings[i];
     CHECK(string->IsOneByte() && string->ContainsOnlyOneByte());
@@ -19341,10 +19499,10 @@ static int CalcFibonacci(v8::Isolate* isolate, int limit) {
 class IsolateThread : public v8::base::Thread {
  public:
   IsolateThread(v8::Isolate* isolate, int fib_limit)
-      : Thread("IsolateThread"),
+      : Thread(Options("IsolateThread")),
         isolate_(isolate),
         fib_limit_(fib_limit),
-        result_(0) { }
+        result_(0) {}
 
   void Run() {
     result_ = CalcFibonacci(isolate_, fib_limit_);
@@ -19423,9 +19581,9 @@ class InitDefaultIsolateThread : public v8::base::Thread {
   };
 
   explicit InitDefaultIsolateThread(TestCase testCase)
-      : Thread("InitDefaultIsolateThread"),
+      : Thread(Options("InitDefaultIsolateThread")),
         testCase_(testCase),
-        result_(false) { }
+        result_(false) {}
 
   void Run() {
     v8::Isolate* isolate = v8::Isolate::New();
@@ -21483,7 +21641,7 @@ class ThreadInterruptTest {
   class InterruptThread : public v8::base::Thread {
    public:
     explicit InterruptThread(ThreadInterruptTest* test)
-        : Thread("InterruptThread"), test_(test) {}
+        : Thread(Options("InterruptThread")), test_(test) {}
 
     virtual void Run() {
       struct sigaction action;
@@ -21662,7 +21820,6 @@ TEST(AccessCheckThrows) {
 
   // Create a context and set an x property on it's global object.
   LocalContext context0(NULL, global_template);
-  context0->Global()->Set(v8_str("x"), v8_num(42));
   v8::Handle<v8::Object> global0 = context0->Global();
 
   // Create a context with a different security token so that the
@@ -21891,7 +22048,7 @@ class RequestInterruptTestBaseWithSimpleInterrupt
   class InterruptThread : public v8::base::Thread {
    public:
     explicit InterruptThread(RequestInterruptTestBase* test)
-        : Thread("RequestInterruptTest"), test_(test) {}
+        : Thread(Options("RequestInterruptTest")), test_(test) {}
 
     virtual void Run() {
       test_->sem_.Wait();
@@ -22111,7 +22268,7 @@ class ClearInterruptFromAnotherThread
   class InterruptThread : public v8::base::Thread {
    public:
     explicit InterruptThread(ClearInterruptFromAnotherThread* test)
-        : Thread("RequestInterruptTest"), test_(test) {}
+        : Thread(Options("RequestInterruptTest")), test_(test) {}
 
     virtual void Run() {
       test_->sem_.Wait();
@@ -22260,12 +22417,12 @@ class ApiCallOptimizationChecker {
   void RunAll() {
     SignatureType signature_types[] =
       {kNoSignature, kSignatureOnReceiver, kSignatureOnPrototype};
-    for (unsigned i = 0; i < ARRAY_SIZE(signature_types); i++) {
+    for (unsigned i = 0; i < arraysize(signature_types); i++) {
       SignatureType signature_type = signature_types[i];
       for (int j = 0; j < 2; j++) {
         bool global = j == 0;
         int key = signature_type +
-            ARRAY_SIZE(signature_types) * (global ? 1 : 0);
+            arraysize(signature_types) * (global ? 1 : 0);
         Run(signature_type, global, key);
       }
     }

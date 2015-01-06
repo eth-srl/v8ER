@@ -378,7 +378,8 @@ void Deoptimizer::DeoptimizeMarkedCodeForContext(Context* context) {
     CHECK_EQ(code->kind(), Code::OPTIMIZED_FUNCTION);
     Object* next = code->next_code_link();
 
-    if (code->marked_for_deoptimization()) {
+    if (code->marked_for_deoptimization() &&
+        (!code->is_turbofanned() || FLAG_turbo_deoptimization)) {
       // Put the code into the list for later patching.
       codes.Add(code, &zone);
 
@@ -441,20 +442,6 @@ void Deoptimizer::DeoptimizeMarkedCodeForContext(Context* context) {
 }
 
 
-static int FindPatchAddressForReturnAddress(Code* code, int pc) {
-  DeoptimizationInputData* input_data =
-      DeoptimizationInputData::cast(code->deoptimization_data());
-  int patch_count = input_data->ReturnAddressPatchCount();
-  for (int i = 0; i < patch_count; i++) {
-    int return_pc = input_data->ReturnAddressPc(i)->value();
-    if (pc == return_pc) {
-      return input_data->PatchedAddressPc(i)->value();
-    }
-  }
-  return -1;
-}
-
-
 // For all marked Turbofanned code on stack, change the return address to go
 // to the deoptimization block.
 void Deoptimizer::PatchStackForMarkedCode(Isolate* isolate) {
@@ -470,7 +457,8 @@ void Deoptimizer::PatchStackForMarkedCode(Isolate* isolate) {
         Address* pc_address = it.frame()->pc_address();
         int pc_offset =
             static_cast<int>(*pc_address - code->instruction_start());
-        int new_pc_offset = FindPatchAddressForReturnAddress(code, pc_offset);
+        SafepointEntry safepoint_entry = code->GetSafepointEntry(*pc_address);
+        unsigned new_pc_offset = safepoint_entry.deoptimization_pc();
 
         if (FLAG_trace_deopt) {
           CodeTracer::Scope scope(isolate->GetCodeTracer());
@@ -480,8 +468,8 @@ void Deoptimizer::PatchStackForMarkedCode(Isolate* isolate) {
                  new_pc_offset);
         }
 
-        CHECK_LE(0, new_pc_offset);
-        *pc_address += new_pc_offset - pc_offset;
+        CHECK(new_pc_offset != Safepoint::kNoDeoptimizationPc);
+        *pc_address += static_cast<int>(new_pc_offset) - pc_offset;
       }
     }
   }
@@ -1624,6 +1612,9 @@ void Deoptimizer::DoComputeCompiledStubFrame(TranslationIterator* iterator,
   int major_key = CodeStub::GetMajorKey(compiled_code_);
   CodeStubInterfaceDescriptor* descriptor =
       isolate_->code_stub_interface_descriptor(major_key);
+  // Check that there is a matching descriptor to the major key.
+  // This will fail if there has not been one installed to the isolate.
+  DCHECK_EQ(descriptor->MajorKey(), major_key);
 
   // The output frame must have room for all pushed register parameters
   // and the standard stack frame slots.  Include space for an argument

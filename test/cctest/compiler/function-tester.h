@@ -27,10 +27,14 @@ namespace compiler {
 
 class FunctionTester : public InitializedHandleScope {
  public:
-  explicit FunctionTester(const char* source)
+  explicit FunctionTester(const char* source, uint32_t flags = 0)
       : isolate(main_isolate()),
-        function((FLAG_allow_natives_syntax = true, NewFunction(source))) {
+        function((FLAG_allow_natives_syntax = true, NewFunction(source))),
+        flags_(flags) {
     Compile(function);
+    const uint32_t supported_flags = CompilationInfo::kContextSpecializing |
+                                     CompilationInfo::kInliningEnabled;
+    CHECK_EQ(0, flags_ & ~supported_flags);
   }
 
   Isolate* isolate;
@@ -44,6 +48,12 @@ class FunctionTester : public InitializedHandleScope {
     StrictMode strict_mode = info.function()->strict_mode();
     info.SetStrictMode(strict_mode);
     info.SetOptimizing(BailoutId::None(), Handle<Code>(function->code()));
+    if (flags_ & CompilationInfo::kContextSpecializing) {
+      info.MarkAsContextSpecializing();
+    }
+    if (flags_ & CompilationInfo::kInliningEnabled) {
+      info.MarkAsInliningEnabled();
+    }
     CHECK(Rewriter::Rewrite(&info));
     CHECK(Scope::Analyze(&info));
     {
@@ -55,6 +65,8 @@ class FunctionTester : public InitializedHandleScope {
     }
     info.PrepareForCompilation(info.function()->scope());
     CHECK_NE(NULL, info.scope());
+    Handle<ScopeInfo> scope_info = ScopeInfo::Create(info.scope(), info.zone());
+    info.shared_info()->set_scope_info(*scope_info);
 
     EnsureDeoptimizationSupport(&info);
 
@@ -195,6 +207,9 @@ class FunctionTester : public InitializedHandleScope {
   Handle<Object> true_value() { return isolate->factory()->true_value(); }
 
   Handle<Object> false_value() { return isolate->factory()->false_value(); }
+
+ private:
+  uint32_t flags_;
 };
 }
 }

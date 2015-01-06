@@ -14,7 +14,6 @@
 #include "src/scopeinfo.h"
 #include "src/scopes.h"
 #include "src/snapshot.h"
-#include "src/stub-cache.h"
 
 namespace v8 {
 namespace internal {
@@ -283,6 +282,9 @@ void BreakableStatementChecker::VisitCompareOperation(CompareOperation* expr) {
 
 void BreakableStatementChecker::VisitThisFunction(ThisFunction* expr) {
 }
+
+
+void BreakableStatementChecker::VisitSuperReference(SuperReference* expr) {}
 
 
 #define __ ACCESS_MASM(masm())
@@ -819,6 +821,12 @@ void FullCodeGenerator::SetStatementPosition(Statement* stmt) {
 }
 
 
+void FullCodeGenerator::VisitSuperReference(SuperReference* super) {
+  DCHECK(FLAG_harmony_classes);
+  UNIMPLEMENTED();
+}
+
+
 void FullCodeGenerator::SetExpressionPosition(Expression* expr) {
   if (!info_->is_debug()) {
     CodeGenerator::RecordPositions(masm_, expr->position());
@@ -870,7 +878,7 @@ FullCodeGenerator::InlineFunctionGenerator
         static_cast<int>(id) - static_cast<int>(Runtime::kFirstInlineFunction);
     DCHECK(lookup_index >= 0);
     DCHECK(static_cast<size_t>(lookup_index) <
-           ARRAY_SIZE(kInlineFunctionGenerators));
+           arraysize(kInlineFunctionGenerators));
     return kInlineFunctionGenerators[lookup_index];
 }
 
@@ -1463,6 +1471,8 @@ void FullCodeGenerator::VisitDebuggerStatement(DebuggerStatement* stmt) {
 
   __ DebugBreak();
   // Ignore the return value.
+
+  PrepareForBailoutForId(stmt->DebugBreakId(), NO_REGISTERS);
 }
 
 

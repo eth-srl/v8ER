@@ -77,6 +77,7 @@ class ImplementationUtilities;
 class Int32;
 class Integer;
 class Isolate;
+class Name;
 class Number;
 class NumberObject;
 class Object;
@@ -1367,6 +1368,12 @@ class V8_EXPORT Value : public Data {
   bool IsFalse() const;
 
   /**
+   * Returns true if this value is a symbol or a string.
+   * This is an experimental feature.
+   */
+  bool IsName() const;
+
+  /**
    * Returns true if this value is an instance of the String type.
    * See ECMA-262 8.4.
    */
@@ -1424,6 +1431,11 @@ class V8_EXPORT Value : public Data {
   bool IsDate() const;
 
   /**
+   * Returns true if this value is an Arguments object.
+   */
+  bool IsArgumentsObject() const;
+
+  /**
    * Returns true if this value is a Boolean object.
    */
   bool IsBooleanObject() const;
@@ -1459,6 +1471,30 @@ class V8_EXPORT Value : public Data {
    * This is an experimental feature.
    */
   bool IsPromise() const;
+
+  /**
+   * Returns true if this value is a Map.
+   * This is an experimental feature.
+   */
+  bool IsMap() const;
+
+  /**
+   * Returns true if this value is a Set.
+   * This is an experimental feature.
+   */
+  bool IsSet() const;
+
+  /**
+   * Returns true if this value is a WeakMap.
+   * This is an experimental feature.
+   */
+  bool IsWeakMap() const;
+
+  /**
+   * Returns true if this value is a WeakSet.
+   * This is an experimental feature.
+   */
+  bool IsWeakSet() const;
 
   /**
    * Returns true if this value is an ArrayBuffer.
@@ -1594,9 +1630,20 @@ class V8_EXPORT Boolean : public Primitive {
 
 
 /**
+ * A superclass for symbols and strings.
+ */
+class V8_EXPORT Name : public Primitive {
+ public:
+  V8_INLINE static Name* Cast(v8::Value* obj);
+ private:
+  static void CheckCast(v8::Value* obj);
+};
+
+
+/**
  * A JavaScript string value (ECMA-262, 4.3.17).
  */
-class V8_EXPORT String : public Primitive {
+class V8_EXPORT String : public Name {
  public:
   enum Encoding {
     UNKNOWN_ENCODING = 0x1,
@@ -1935,7 +1982,7 @@ class V8_EXPORT String : public Primitive {
  *
  * This is an experimental feature. Use at your own risk.
  */
-class V8_EXPORT Symbol : public Primitive {
+class V8_EXPORT Symbol : public Name {
  public:
   // Returns the print name string of the symbol, or undefined if none.
   Local<Value> Name() const;
@@ -1955,7 +2002,12 @@ class V8_EXPORT Symbol : public Primitive {
   // registry that is not accessible by (and cannot clash with) JavaScript code.
   static Local<Symbol> ForApi(Isolate *isolate, Local<String> name);
 
+  // Well-known symbols
+  static Local<Symbol> GetIterator(Isolate* isolate);
+  static Local<Symbol> GetUnscopables(Isolate* isolate);
+
   V8_INLINE static Symbol* Cast(v8::Value* obj);
+
  private:
   Symbol();
   static void CheckCast(v8::Value* obj);
@@ -2079,10 +2131,17 @@ enum ExternalArrayType {
 typedef void (*AccessorGetterCallback)(
     Local<String> property,
     const PropertyCallbackInfo<Value>& info);
+typedef void (*AccessorNameGetterCallback)(
+    Local<Name> property,
+    const PropertyCallbackInfo<Value>& info);
 
 
 typedef void (*AccessorSetterCallback)(
     Local<String> property,
+    Local<Value> value,
+    const PropertyCallbackInfo<void>& info);
+typedef void (*AccessorNameSetterCallback)(
+    Local<Name> property,
     Local<Value> value,
     const PropertyCallbackInfo<void>& info);
 
@@ -2159,14 +2218,20 @@ class V8_EXPORT Object : public Value {
                    Handle<Value> data = Handle<Value>(),
                    AccessControl settings = DEFAULT,
                    PropertyAttribute attribute = None);
+  bool SetAccessor(Handle<Name> name,
+                   AccessorNameGetterCallback getter,
+                   AccessorNameSetterCallback setter = 0,
+                   Handle<Value> data = Handle<Value>(),
+                   AccessControl settings = DEFAULT,
+                   PropertyAttribute attribute = None);
 
   // This function is not yet stable and should not be used at this time.
-  bool SetDeclaredAccessor(Local<String> name,
+  bool SetDeclaredAccessor(Local<Name> name,
                            Local<DeclaredAccessorDescriptor> descriptor,
                            PropertyAttribute attribute = None,
                            AccessControl settings = DEFAULT);
 
-  void SetAccessorProperty(Local<String> name,
+  void SetAccessorProperty(Local<Name> name,
                            Local<Function> getter,
                            Handle<Function> setter = Handle<Function>(),
                            PropertyAttribute attribute = None,
@@ -3168,12 +3233,12 @@ class V8_EXPORT External : public Value {
 class V8_EXPORT Template : public Data {
  public:
   /** Adds a property to each instance created by this template.*/
-  void Set(Handle<String> name, Handle<Data> value,
+  void Set(Handle<Name> name, Handle<Data> value,
            PropertyAttribute attributes = None);
   V8_INLINE void Set(Isolate* isolate, const char* name, Handle<Data> value);
 
   void SetAccessorProperty(
-     Local<String> name,
+     Local<Name> name,
      Local<FunctionTemplate> getter = Local<FunctionTemplate>(),
      Local<FunctionTemplate> setter = Local<FunctionTemplate>(),
      PropertyAttribute attribute = None,
@@ -3215,9 +3280,18 @@ class V8_EXPORT Template : public Data {
                              Local<AccessorSignature> signature =
                                  Local<AccessorSignature>(),
                              AccessControl settings = DEFAULT);
+  void SetNativeDataProperty(Local<Name> name,
+                             AccessorNameGetterCallback getter,
+                             AccessorNameSetterCallback setter = 0,
+                             // TODO(dcarney): gcc can't handle Local below
+                             Handle<Value> data = Handle<Value>(),
+                             PropertyAttribute attribute = None,
+                             Local<AccessorSignature> signature =
+                                 Local<AccessorSignature>(),
+                             AccessControl settings = DEFAULT);
 
   // This function is not yet stable and should not be used at this time.
-  bool SetDeclaredAccessor(Local<String> name,
+  bool SetDeclaredAccessor(Local<Name> name,
                            Local<DeclaredAccessorDescriptor> descriptor,
                            PropertyAttribute attribute = None,
                            Local<AccessorSignature> signature =
@@ -3584,12 +3658,20 @@ class V8_EXPORT ObjectTemplate : public Template {
                    PropertyAttribute attribute = None,
                    Handle<AccessorSignature> signature =
                        Handle<AccessorSignature>());
+  void SetAccessor(Handle<Name> name,
+                   AccessorNameGetterCallback getter,
+                   AccessorNameSetterCallback setter = 0,
+                   Handle<Value> data = Handle<Value>(),
+                   AccessControl settings = DEFAULT,
+                   PropertyAttribute attribute = None,
+                   Handle<AccessorSignature> signature =
+                       Handle<AccessorSignature>());
 
   /**
    * Sets a named property handler on the object template.
    *
-   * Whenever a named property is accessed on objects created from
-   * this object template, the provided callback is invoked instead of
+   * Whenever a property whose name is a string is accessed on objects created
+   * from this object template, the provided callback is invoked instead of
    * accessing the property directly on the JavaScript object.
    *
    * \param getter The callback to invoke when getting a property.
@@ -5114,7 +5196,8 @@ class V8_EXPORT TryCatch {
 
   /**
    * Clears any exceptions that may have been caught by this try/catch block.
-   * After this method has been called, HasCaught() will return false.
+   * After this method has been called, HasCaught() will return false. Cancels
+   * the scheduled exception if it is caught and ReThrow() is not called before.
    *
    * It is not necessary to clear a try/catch block before using it again; if
    * another exception is thrown the previously caught exception will just be
@@ -5157,6 +5240,8 @@ class V8_EXPORT TryCatch {
   }
 
  private:
+  void ResetInternal();
+
   // Make it hard to create heap-allocated TryCatch blocks.
   TryCatch(const TryCatch&);
   void operator=(const TryCatch&);
@@ -6332,6 +6417,14 @@ bool Value::QuickIsString() const {
 
 template <class T> Value* Value::Cast(T* value) {
   return static_cast<Value*>(value);
+}
+
+
+Name* Name::Cast(v8::Value* value) {
+#ifdef V8_ENABLE_CHECKS
+  CheckCast(value);
+#endif
+  return static_cast<Name*>(value);
 }
 
 

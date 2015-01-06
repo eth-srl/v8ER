@@ -186,7 +186,7 @@ Handle<String> Factory::InternalizeOneByteString(Vector<const uint8_t> string) {
 
 Handle<String> Factory::InternalizeOneByteString(
     Handle<SeqOneByteString> string, int from, int length) {
-  SubStringKey<uint8_t> key(string, from, length);
+  SeqOneByteSubStringKey key(string, from, length);
   return InternalizeStringWithKey(&key);
 }
 
@@ -201,12 +201,6 @@ template<class StringTableKey>
 Handle<String> Factory::InternalizeStringWithKey(StringTableKey* key) {
   return StringTable::LookupKey(isolate(), key);
 }
-
-
-template Handle<String> Factory::InternalizeStringWithKey<
-    SubStringKey<uint8_t> > (SubStringKey<uint8_t>* key);
-template Handle<String> Factory::InternalizeStringWithKey<
-    SubStringKey<uint16_t> > (SubStringKey<uint16_t>* key);
 
 
 MaybeHandle<String> Factory::NewStringFromOneByte(Vector<const uint8_t> string,
@@ -270,6 +264,7 @@ MaybeHandle<String> Factory::NewStringFromTwoByte(Vector<const uc16> string,
   int length = string.length();
   const uc16* start = string.start();
   if (String::IsOneByte(start, length)) {
+    if (length == 1) return LookupSingleCharacterStringFromCode(string[0]);
     Handle<SeqOneByteString> result;
     ASSIGN_RETURN_ON_EXCEPTION(
         isolate(),
@@ -308,6 +303,17 @@ MUST_USE_RESULT Handle<String> Factory::NewOneByteInternalizedString(
   CALL_HEAP_FUNCTION(
       isolate(),
       isolate()->heap()->AllocateOneByteInternalizedString(str, hash_field),
+      String);
+}
+
+
+MUST_USE_RESULT Handle<String> Factory::NewOneByteInternalizedSubString(
+    Handle<SeqOneByteString> string, int offset, int length,
+    uint32_t hash_field) {
+  CALL_HEAP_FUNCTION(
+      isolate(), isolate()->heap()->AllocateOneByteInternalizedString(
+                     Vector<const uint8_t>(string->GetChars() + offset, length),
+                     hash_field),
       String);
 }
 
@@ -659,6 +665,14 @@ Handle<Symbol> Factory::NewSymbol() {
 Handle<Symbol> Factory::NewPrivateSymbol() {
   Handle<Symbol> symbol = NewSymbol();
   symbol->set_is_private(true);
+  return symbol;
+}
+
+
+Handle<Symbol> Factory::NewPrivateOwnSymbol() {
+  Handle<Symbol> symbol = NewSymbol();
+  symbol->set_is_private(true);
+  symbol->set_is_own(true);
   return symbol;
 }
 
@@ -1125,7 +1139,7 @@ Handle<String> Factory::EmergencyNewError(const char* message,
   space -= Min(space, strlen(message));
   p = &buffer[kBufferSize] - space;
 
-  for (unsigned i = 0; i < ARRAY_SIZE(args); i++) {
+  for (int i = 0; i < Smi::cast(args->length())->value(); i++) {
     if (space > 0) {
       *p++ = ' ';
       space--;
@@ -1170,7 +1184,7 @@ Handle<Object> Factory::NewError(const char* maker,
   Handle<Object> exception;
   if (!Execution::TryCall(fun,
                           isolate()->js_builtins_object(),
-                          ARRAY_SIZE(argv),
+                          arraysize(argv),
                           argv,
                           &exception).ToHandle(&result)) {
     return exception;
@@ -1197,7 +1211,7 @@ Handle<Object> Factory::NewError(const char* constructor,
   Handle<Object> exception;
   if (!Execution::TryCall(fun,
                           isolate()->js_builtins_object(),
-                          ARRAY_SIZE(argv),
+                          arraysize(argv),
                           argv,
                           &exception).ToHandle(&result)) {
     return exception;
@@ -1268,11 +1282,6 @@ Handle<JSFunction> Factory::NewFunction(Handle<String> name,
       ? isolate()->sloppy_function_with_readonly_prototype_map()
       : isolate()->sloppy_function_map();
   Handle<JSFunction> result = NewFunction(map, name, code);
-  if (!prototype->IsTheHole()) {
-    Handle<JSObject> js_proto = Handle<JSObject>::cast(prototype);
-    Handle<Map> new_map = Map::CopyAsPrototypeMap(handle(js_proto->map()));
-    JSObject::MigrateToMap(js_proto, new_map);
-  }
   result->set_prototype_or_initial_map(*prototype);
   return result;
 }
@@ -1293,9 +1302,9 @@ Handle<JSFunction> Factory::NewFunction(Handle<String> name,
   if (prototype->IsTheHole() && !function->shared()->is_generator()) {
     prototype = NewFunctionPrototype(function);
   }
-  initial_map->set_prototype(*prototype);
-  function->set_initial_map(*initial_map);
-  initial_map->set_constructor(*function);
+
+  JSFunction::SetInitialMap(function, initial_map,
+                            Handle<JSReceiver>::cast(prototype));
 
   return function;
 }
@@ -1323,9 +1332,10 @@ Handle<JSObject> Factory::NewFunctionPrototype(Handle<JSFunction> function) {
     // maps between prototypes of different constructors.
     Handle<JSFunction> object_function(native_context->object_function());
     DCHECK(object_function->has_initial_map());
-    new_map = Map::CopyAsPrototypeMap(handle(object_function->initial_map()));
+    new_map = handle(object_function->initial_map());
   }
 
+  DCHECK(!new_map->is_prototype_map());
   Handle<JSObject> prototype = NewJSObjectFromMap(new_map);
 
   if (!function->shared()->is_generator()) {
@@ -1767,20 +1777,19 @@ Handle<JSProxy> Factory::NewJSFunctionProxy(Handle<Object> handler,
 }
 
 
-void Factory::ReinitializeJSReceiver(Handle<JSReceiver> object,
-                                     InstanceType type,
-                                     int size) {
-  DCHECK(type >= FIRST_JS_OBJECT_TYPE);
+void Factory::ReinitializeJSProxy(Handle<JSProxy> proxy, InstanceType type,
+                                  int size) {
+  DCHECK(type == JS_OBJECT_TYPE || type == JS_FUNCTION_TYPE);
 
   // Allocate fresh map.
   // TODO(rossberg): Once we optimize proxies, cache these maps.
   Handle<Map> map = NewMap(type, size);
 
   // Check that the receiver has at least the size of the fresh object.
-  int size_difference = object->map()->instance_size() - map->instance_size();
+  int size_difference = proxy->map()->instance_size() - map->instance_size();
   DCHECK(size_difference >= 0);
 
-  map->set_prototype(object->map()->prototype());
+  map->set_prototype(proxy->map()->prototype());
 
   // Allocate the backing storage for the properties.
   int prop_size = map->InitialPropertiesLength();
@@ -1801,24 +1810,31 @@ void Factory::ReinitializeJSReceiver(Handle<JSReceiver> object,
 
   // Put in filler if the new object is smaller than the old.
   if (size_difference > 0) {
-    Address address = object->address();
+    Address address = proxy->address();
     heap->CreateFillerObjectAt(address + map->instance_size(), size_difference);
     heap->AdjustLiveBytes(address, -size_difference, Heap::FROM_MUTATOR);
   }
 
   // Reset the map for the object.
-  object->synchronized_set_map(*map);
-  Handle<JSObject> jsobj = Handle<JSObject>::cast(object);
+  proxy->synchronized_set_map(*map);
+  Handle<JSObject> jsobj = Handle<JSObject>::cast(proxy);
 
   // Reinitialize the object from the constructor map.
   heap->InitializeJSObjectFromMap(*jsobj, *properties, *map);
 
+  // The current native context is used to set up certain bits.
+  // TODO(adamk): Using the current context seems wrong, it should be whatever
+  // context the JSProxy originated in. But that context isn't stored anywhere.
+  Handle<Context> context(isolate()->native_context());
+
   // Functions require some minimal initialization.
   if (type == JS_FUNCTION_TYPE) {
     map->set_function_with_prototype(true);
-    Handle<JSFunction> js_function = Handle<JSFunction>::cast(object);
-    Handle<Context> context(isolate()->native_context());
+    Handle<JSFunction> js_function = Handle<JSFunction>::cast(proxy);
     InitializeFunction(js_function, shared.ToHandleChecked(), context);
+  } else {
+    // Provide JSObjects with a constructor.
+    map->set_constructor(context->object_function());
   }
 }
 
@@ -1856,13 +1872,13 @@ void Factory::ReinitializeJSGlobalProxy(Handle<JSGlobalProxy> object,
 }
 
 
-void Factory::BecomeJSObject(Handle<JSReceiver> object) {
-  ReinitializeJSReceiver(object, JS_OBJECT_TYPE, JSObject::kHeaderSize);
+void Factory::BecomeJSObject(Handle<JSProxy> proxy) {
+  ReinitializeJSProxy(proxy, JS_OBJECT_TYPE, JSObject::kHeaderSize);
 }
 
 
-void Factory::BecomeJSFunction(Handle<JSReceiver> object) {
-  ReinitializeJSReceiver(object, JS_FUNCTION_TYPE, JSFunction::kSize);
+void Factory::BecomeJSFunction(Handle<JSProxy> proxy) {
+  ReinitializeJSProxy(proxy, JS_FUNCTION_TYPE, JSFunction::kSize);
 }
 
 
@@ -2030,7 +2046,7 @@ Handle<String> Factory::NumberToString(Handle<Object> number,
   }
 
   char arr[100];
-  Vector<char> buffer(arr, ARRAY_SIZE(arr));
+  Vector<char> buffer(arr, arraysize(arr));
   const char* str;
   if (number->IsSmi()) {
     int num = Handle<Smi>::cast(number)->value();
@@ -2165,8 +2181,7 @@ Handle<JSFunction> Factory::CreateApiFunction(
   if (prototype->IsTheHole()) {
 #ifdef DEBUG
     LookupIterator it(handle(JSObject::cast(result->prototype())),
-                      constructor_string(),
-                      LookupIterator::CHECK_OWN_REAL);
+                      constructor_string(), LookupIterator::OWN_PROPERTY);
     MaybeHandle<Object> maybe_prop = Object::GetProperty(&it);
     DCHECK(it.IsFound());
     DCHECK(maybe_prop.ToHandleChecked().is_identical_to(result));

@@ -12,15 +12,15 @@ namespace compiler {
 
 RawMachineAssembler::RawMachineAssembler(
     Graph* graph, MachineCallDescriptorBuilder* call_descriptor_builder,
-    MachineRepresentation word)
+    MachineType word)
     : GraphBuilder(graph),
       schedule_(new (zone()) Schedule(zone())),
       machine_(zone(), word),
       common_(zone()),
       call_descriptor_builder_(call_descriptor_builder),
       parameters_(NULL),
-      exit_label_(schedule()->exit()),
-      current_block_(schedule()->entry()) {
+      exit_label_(schedule()->end()),
+      current_block_(schedule()->start()) {
   Node* s = graph->NewNode(common_.Start(parameter_count()));
   graph->SetStart(s);
   if (parameter_count() == 0) return;
@@ -34,8 +34,7 @@ RawMachineAssembler::RawMachineAssembler(
 Schedule* RawMachineAssembler::Export() {
   // Compute the correct codegen order.
   DCHECK(schedule_->rpo_order()->empty());
-  Scheduler scheduler(zone(), graph(), schedule_);
-  scheduler.ComputeSpecialRPO();
+  Scheduler::ComputeSpecialRPO(schedule_);
   // Invalidate MachineAssembler.
   Schedule* schedule = schedule_;
   schedule_ = NULL;
@@ -56,7 +55,7 @@ RawMachineAssembler::Label* RawMachineAssembler::Exit() {
 
 
 void RawMachineAssembler::Goto(Label* label) {
-  DCHECK(current_block_ != schedule()->exit());
+  DCHECK(current_block_ != schedule()->end());
   schedule()->AddGoto(CurrentBlock(), Use(label));
   current_block_ = NULL;
 }
@@ -64,7 +63,7 @@ void RawMachineAssembler::Goto(Label* label) {
 
 void RawMachineAssembler::Branch(Node* condition, Label* true_val,
                                  Label* false_val) {
-  DCHECK(current_block_ != schedule()->exit());
+  DCHECK(current_block_ != schedule()->end());
   Node* branch = NewNode(common()->Branch(), condition);
   schedule()->AddBranch(CurrentBlock(), branch, Use(true_val), Use(false_val));
   current_block_ = NULL;
@@ -84,6 +83,31 @@ void RawMachineAssembler::Deoptimize(Node* state) {
 }
 
 
+Node* RawMachineAssembler::CallFunctionStub0(Node* function, Node* receiver,
+                                             Node* context, Node* frame_state,
+                                             Label* continuation,
+                                             Label* deoptimization,
+                                             CallFunctionFlags flags) {
+  CallFunctionStub stub(isolate(), 0, flags);
+  CodeStubInterfaceDescriptor* d = isolate()->code_stub_interface_descriptor(
+      reinterpret_cast<CodeStub*>(&stub)->MajorKey());
+  stub.InitializeInterfaceDescriptor(d);
+
+  CallDescriptor* desc = Linkage::GetStubCallDescriptor(
+      d, 1, static_cast<CallDescriptor::DeoptimizationSupport>(
+                CallDescriptor::kLazyDeoptimization |
+                CallDescriptor::kNeedsFrameState),
+      zone());
+  Node* stub_code = HeapConstant(stub.GetCode());
+  Node* call = graph()->NewNode(common()->Call(desc), stub_code, function,
+                                receiver, context, frame_state);
+  schedule()->AddCall(CurrentBlock(), call, Use(continuation),
+                      Use(deoptimization));
+  current_block_ = NULL;
+  return call;
+}
+
+
 Node* RawMachineAssembler::CallJS0(Node* function, Node* receiver,
                                    Label* continuation, Label* deoptimization) {
   CallDescriptor* descriptor = Linkage::GetJSCallDescriptor(1, zone());
@@ -98,9 +122,9 @@ Node* RawMachineAssembler::CallJS0(Node* function, Node* receiver,
 Node* RawMachineAssembler::CallRuntime1(Runtime::FunctionId function,
                                         Node* arg0, Label* continuation,
                                         Label* deoptimization) {
-  CallDescriptor* descriptor =
-      Linkage::GetRuntimeCallDescriptor(function, 1, Operator::kNoProperties,
-                                        CallDescriptor::kCanDeoptimize, zone());
+  CallDescriptor* descriptor = Linkage::GetRuntimeCallDescriptor(
+      function, 1, Operator::kNoProperties, CallDescriptor::kLazyDeoptimization,
+      zone());
 
   Node* centry = HeapConstant(CEntryStub(isolate(), 1).GetCode());
   Node* ref = NewNode(

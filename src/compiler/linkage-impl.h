@@ -13,19 +13,18 @@ class LinkageHelper {
  public:
   static LinkageLocation TaggedStackSlot(int index) {
     DCHECK(index < 0);
-    return LinkageLocation(kMachineTagged, index);
+    return LinkageLocation(kMachAnyTagged, index);
   }
 
   static LinkageLocation TaggedRegisterLocation(Register reg) {
-    return LinkageLocation(kMachineTagged, Register::ToAllocationIndex(reg));
+    return LinkageLocation(kMachAnyTagged, Register::ToAllocationIndex(reg));
   }
 
   static inline LinkageLocation WordRegisterLocation(Register reg) {
-    return LinkageLocation(MachineOperatorBuilder::pointer_rep(),
-                           Register::ToAllocationIndex(reg));
+    return LinkageLocation(kMachPtr, Register::ToAllocationIndex(reg));
   }
 
-  static LinkageLocation UnconstrainedRegister(MachineRepresentation rep) {
+  static LinkageLocation UnconstrainedRegister(MachineType rep) {
     return LinkageLocation(rep, LinkageLocation::ANY_REGISTER);
   }
 
@@ -64,7 +63,7 @@ class LinkageHelper {
                        locations,                        // locations
                        Operator::kNoProperties,          // properties
                        kNoCalleeSaved,  // callee-saved registers
-                       CallDescriptor::kCanDeoptimize);  // deoptimization
+                       CallDescriptor::kLazyDeoptimization);  // deoptimization
   }
 
 
@@ -98,7 +97,7 @@ class LinkageHelper {
 
     DCHECK_LE(return_count, 2);
 
-    locations[index++] = UnconstrainedRegister(kMachineTagged);  // CEntryStub
+    locations[index++] = UnconstrainedRegister(kMachAnyTagged);  // CEntryStub
 
     for (int i = 0; i < parameter_count; i++) {
       // All parameters to runtime calls go on the stack.
@@ -128,7 +127,8 @@ class LinkageHelper {
   template <typename LinkageTraits>
   static CallDescriptor* GetStubCallDescriptor(
       Zone* zone, CodeStubInterfaceDescriptor* descriptor,
-      int stack_parameter_count) {
+      int stack_parameter_count,
+      CallDescriptor::DeoptimizationSupport can_deoptimize) {
     int register_parameter_count = descriptor->GetEnvironmentParameterCount();
     int parameter_count = register_parameter_count + stack_parameter_count;
     const int code_count = 1;
@@ -142,7 +142,7 @@ class LinkageHelper {
     int index = 0;
     locations[index++] =
         TaggedRegisterLocation(LinkageTraits::ReturnValueReg());
-    locations[index++] = UnconstrainedRegister(kMachineTagged);  // code
+    locations[index++] = UnconstrainedRegister(kMachAnyTagged);  // code
     for (int i = 0; i < parameter_count; i++) {
       if (i < register_parameter_count) {
         // The first parameters to code stub calls go in registers.
@@ -165,23 +165,21 @@ class LinkageHelper {
                        locations,                        // locations
                        Operator::kNoProperties,          // properties
                        kNoCalleeSaved,  // callee-saved registers
-                       CallDescriptor::kCannotDeoptimize,  // deoptimization
+                       can_deoptimize,  // deoptimization
                        CodeStub::MajorName(descriptor->MajorKey(), false));
-    // TODO(jarin) should deoptimize!
   }
 
 
   template <typename LinkageTraits>
   static CallDescriptor* GetSimplifiedCDescriptor(
-      Zone* zone, int num_params, MachineRepresentation return_type,
-      const MachineRepresentation* param_types) {
+      Zone* zone, int num_params, MachineType return_type,
+      const MachineType* param_types) {
     LinkageLocation* locations =
         zone->NewArray<LinkageLocation>(num_params + 2);
     int index = 0;
     locations[index++] =
         TaggedRegisterLocation(LinkageTraits::ReturnValueReg());
-    locations[index++] = LinkageHelper::UnconstrainedRegister(
-        MachineOperatorBuilder::pointer_rep());
+    locations[index++] = LinkageHelper::UnconstrainedRegister(kMachPtr);
     // TODO(dcarney): test with lots of parameters.
     int i = 0;
     for (; i < LinkageTraits::CRegisterParametersLength() && i < num_params;
@@ -196,7 +194,7 @@ class LinkageHelper {
     return new (zone) CallDescriptor(
         CallDescriptor::kCallAddress, 1, num_params, num_params + 1, locations,
         Operator::kNoProperties, LinkageTraits::CCalleeSaveRegisters(),
-        CallDescriptor::kCannotDeoptimize);  // TODO(jarin) should deoptimize!
+        CallDescriptor::kNoDeoptimization);  // TODO(jarin) should deoptimize!
   }
 };
 }

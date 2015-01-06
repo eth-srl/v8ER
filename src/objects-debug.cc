@@ -6,9 +6,9 @@
 
 #include "src/disasm.h"
 #include "src/disassembler.h"
+#include "src/heap/objects-visiting.h"
 #include "src/jsregexp.h"
 #include "src/macro-assembler.h"
-#include "src/objects-visiting.h"
 #include "src/ostreams.h"
 
 namespace v8 {
@@ -308,9 +308,9 @@ void Map::MapVerify() {
 }
 
 
-void Map::SharedMapVerify() {
+void Map::DictionaryMapVerify() {
   MapVerify();
-  CHECK(is_shared());
+  CHECK(is_dictionary_map());
   CHECK(instance_descriptors()->IsEmpty());
   CHECK_EQ(0, pre_allocated_property_fields());
   CHECK_EQ(0, unused_property_fields());
@@ -1012,7 +1012,7 @@ void NormalizedMapCache::NormalizedMapCacheVerify() {
     for (int i = 0; i < length(); i++) {
       Object* e = FixedArray::get(i);
       if (e->IsMap()) {
-        Map::cast(e)->SharedMapVerify();
+        Map::cast(e)->DictionaryMapVerify();
       } else {
         CHECK(e->IsUndefined());
       }

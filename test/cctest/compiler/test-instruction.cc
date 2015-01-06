@@ -25,14 +25,14 @@ typedef v8::internal::compiler::InstructionSequence TestInstrSeq;
 // A testing helper for the register code abstraction.
 class InstructionTester : public HandleAndZoneScope {
  public:  // We're all friends here.
-  explicit InstructionTester()
+  InstructionTester()
       : isolate(main_isolate()),
         graph(zone()),
         schedule(zone()),
         info(static_cast<HydrogenCodeStub*>(NULL), main_isolate()),
         linkage(&info),
         common(zone()),
-        machine(zone(), kMachineWord32),
+        machine(zone()),
         code(NULL) {}
 
   ~InstructionTester() { delete code; }
@@ -51,8 +51,7 @@ class InstructionTester : public HandleAndZoneScope {
   void allocCode() {
     if (schedule.rpo_order()->size() == 0) {
       // Compute the RPO order.
-      Scheduler scheduler(zone(), &graph, &schedule);
-      scheduler.ComputeSpecialRPO();
+      Scheduler::ComputeSpecialRPO(&schedule);
       DCHECK(schedule.rpo_order()->size() > 0);
     }
     code = new TestInstrSeq(&linkage, &graph, &schedule);
@@ -60,19 +59,19 @@ class InstructionTester : public HandleAndZoneScope {
 
   Node* Int32Constant(int32_t val) {
     Node* node = graph.NewNode(common.Int32Constant(val));
-    schedule.AddNode(schedule.entry(), node);
+    schedule.AddNode(schedule.start(), node);
     return node;
   }
 
   Node* Float64Constant(double val) {
     Node* node = graph.NewNode(common.Float64Constant(val));
-    schedule.AddNode(schedule.entry(), node);
+    schedule.AddNode(schedule.start(), node);
     return node;
   }
 
   Node* Parameter(int32_t which) {
     Node* node = graph.NewNode(common.Parameter(which));
-    schedule.AddNode(schedule.entry(), node);
+    schedule.AddNode(schedule.start(), node);
     return node;
   }
 
@@ -104,7 +103,7 @@ TEST(InstructionBasic) {
     R.Int32Constant(i);  // Add some nodes to the graph.
   }
 
-  BasicBlock* last = R.schedule.entry();
+  BasicBlock* last = R.schedule.start();
   for (int i = 0; i < 5; i++) {
     BasicBlock* block = R.schedule.NewBasicBlock();
     R.schedule.AddGoto(last, block);
@@ -131,10 +130,10 @@ TEST(InstructionBasic) {
 TEST(InstructionGetBasicBlock) {
   InstructionTester R;
 
-  BasicBlock* b0 = R.schedule.entry();
+  BasicBlock* b0 = R.schedule.start();
   BasicBlock* b1 = R.schedule.NewBasicBlock();
   BasicBlock* b2 = R.schedule.NewBasicBlock();
-  BasicBlock* b3 = R.schedule.exit();
+  BasicBlock* b3 = R.schedule.end();
 
   R.schedule.AddGoto(b0, b1);
   R.schedule.AddGoto(b1, b2);
@@ -189,7 +188,7 @@ TEST(InstructionGetBasicBlock) {
 TEST(InstructionIsGapAt) {
   InstructionTester R;
 
-  BasicBlock* b0 = R.schedule.entry();
+  BasicBlock* b0 = R.schedule.start();
   R.schedule.AddReturn(b0, R.Int32Constant(1));
 
   R.allocCode();
@@ -214,8 +213,8 @@ TEST(InstructionIsGapAt) {
 TEST(InstructionIsGapAt2) {
   InstructionTester R;
 
-  BasicBlock* b0 = R.schedule.entry();
-  BasicBlock* b1 = R.schedule.exit();
+  BasicBlock* b0 = R.schedule.start();
+  BasicBlock* b1 = R.schedule.end();
   R.schedule.AddGoto(b0, b1);
   R.schedule.AddReturn(b1, R.Int32Constant(1));
 
@@ -257,7 +256,7 @@ TEST(InstructionIsGapAt2) {
 TEST(InstructionAddGapMove) {
   InstructionTester R;
 
-  BasicBlock* b0 = R.schedule.entry();
+  BasicBlock* b0 = R.schedule.start();
   R.schedule.AddReturn(b0, R.Int32Constant(1));
 
   R.allocCode();
@@ -325,9 +324,9 @@ TEST(InstructionOperands) {
       new (&zone) UnallocatedOperand(UnallocatedOperand::MUST_HAVE_REGISTER),
       new (&zone) UnallocatedOperand(UnallocatedOperand::MUST_HAVE_REGISTER)};
 
-  for (size_t i = 0; i < ARRAY_SIZE(outputs); i++) {
-    for (size_t j = 0; j < ARRAY_SIZE(inputs); j++) {
-      for (size_t k = 0; k < ARRAY_SIZE(temps); k++) {
+  for (size_t i = 0; i < arraysize(outputs); i++) {
+    for (size_t j = 0; j < arraysize(inputs); j++) {
+      for (size_t k = 0; k < arraysize(temps); k++) {
         TestInstr* m =
             TestInstr::New(&zone, 101, i, outputs, j, inputs, k, temps);
         CHECK(i == m->OutputCount());

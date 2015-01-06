@@ -96,7 +96,7 @@ function SetUpLockedPrototype(constructor, fields, methods) {
     %AddNamedProperty(prototype, key, f, DONT_ENUM | DONT_DELETE | READ_ONLY);
     %SetNativeFlag(f);
   }
-  %SetPrototype(prototype, null);
+  %InternalSetPrototype(prototype, null);
   %ToFastProperties(prototype);
 }
 
@@ -571,10 +571,6 @@ SetUpLockedPrototype(PropertyDescriptor, $Array(
 // property descriptor. For a description of the array layout please
 // see the runtime.cc file.
 function ConvertDescriptorArrayToDescriptor(desc_array) {
-  if (desc_array === false) {
-    throw 'Internal error: invalid desc_array';
-  }
-
   if (IS_UNDEFINED(desc_array)) {
     return UNDEFINED;
   }
@@ -649,9 +645,6 @@ function GetOwnPropertyJS(obj, v) {
   // If p is not a property on obj undefined is returned.
   var props = %GetOwnProperty(ToObject(obj), p);
 
-  // A false value here means that access checks failed.
-  if (props === false) return UNDEFINED;
-
   return ConvertDescriptorArrayToDescriptor(props);
 }
 
@@ -692,11 +685,8 @@ function DefineProxyProperty(obj, p, attributes, should_throw) {
 
 // ES5 8.12.9.
 function DefineObjectProperty(obj, p, desc, should_throw) {
-  var current_or_access = %GetOwnProperty(ToObject(obj), ToName(p));
-  // A false value here means that access checks failed.
-  if (current_or_access === false) return UNDEFINED;
-
-  var current = ConvertDescriptorArrayToDescriptor(current_or_access);
+  var current_array = %GetOwnProperty(ToObject(obj), ToName(p));
+  var current = ConvertDescriptorArrayToDescriptor(current_array);
   var extensible = %IsExtensible(ToObject(obj));
 
   // Error handling according to spec.
@@ -840,8 +830,18 @@ function DefineObjectProperty(obj, p, desc, should_throw) {
     //                 property.
     // Step 12 - updating an existing accessor property with an accessor
     //           descriptor.
-    var getter = desc.hasGetter() ? desc.getGet() : null;
-    var setter = desc.hasSetter() ? desc.getSet() : null;
+    var getter = null;
+    if (desc.hasGetter()) {
+      getter = desc.getGet();
+    } else if (IsAccessorDescriptor(current) && current.hasGetter()) {
+      getter = current.getGet();
+    }
+    var setter = null;
+    if (desc.hasSetter()) {
+      setter = desc.getSet();
+    } else if (IsAccessorDescriptor(current) && current.hasSetter()) {
+      setter = current.getSet();
+    }
     %DefineAccessorPropertyUnchecked(obj, p, getter, setter, flag);
   }
   return true;
@@ -925,34 +925,36 @@ function DefineArrayProperty(obj, p, desc, should_throw) {
   }
 
   // Step 4 - Special handling for array index.
-  var index = ToUint32(p);
-  var emit_splice = false;
-  if (ToString(index) == p && index != 4294967295) {
-    var length = obj.length;
-    if (index >= length && %IsObserved(obj)) {
-      emit_splice = true;
-      BeginPerformSplice(obj);
-    }
-
-    var length_desc = GetOwnPropertyJS(obj, "length");
-    if ((index >= length && !length_desc.isWritable()) ||
-        !DefineObjectProperty(obj, p, desc, true)) {
-      if (emit_splice)
-        EndPerformSplice(obj);
-      if (should_throw) {
-        throw MakeTypeError("define_disallowed", [p]);
-      } else {
-        return false;
+  if (!IS_SYMBOL(p)) {
+    var index = ToUint32(p);
+    var emit_splice = false;
+    if (ToString(index) == p && index != 4294967295) {
+      var length = obj.length;
+      if (index >= length && %IsObserved(obj)) {
+        emit_splice = true;
+        BeginPerformSplice(obj);
       }
+
+      var length_desc = GetOwnPropertyJS(obj, "length");
+      if ((index >= length && !length_desc.isWritable()) ||
+          !DefineObjectProperty(obj, p, desc, true)) {
+        if (emit_splice)
+          EndPerformSplice(obj);
+        if (should_throw) {
+          throw MakeTypeError("define_disallowed", [p]);
+        } else {
+          return false;
+        }
+      }
+      if (index >= length) {
+        obj.length = index + 1;
+      }
+      if (emit_splice) {
+        EndPerformSplice(obj);
+        EnqueueSpliceRecord(obj, length, [], index + 1 - length);
+      }
+      return true;
     }
-    if (index >= length) {
-      obj.length = index + 1;
-    }
-    if (emit_splice) {
-      EndPerformSplice(obj);
-      EnqueueSpliceRecord(obj, length, [], index + 1 - length);
-    }
-    return true;
   }
 
   // Step 5 - Fallback to default implementation.
@@ -1125,7 +1127,8 @@ function ObjectCreate(proto, properties) {
   if (!IS_SPEC_OBJECT(proto) && proto !== null) {
     throw MakeTypeError("proto_object_or_null", [proto]);
   }
-  var obj = { __proto__: proto };
+  var obj = {};
+  %InternalSetPrototype(obj, proto);
   if (!IS_UNDEFINED(properties)) ObjectDefineProperties(obj, properties);
   return obj;
 }
@@ -1875,3 +1878,33 @@ function SetUpFunction() {
 }
 
 SetUpFunction();
+
+
+// ----------------------------------------------------------------------------
+// Iterator related spec functions.
+
+// ES6 rev 26, 2014-07-18
+// 7.4.1 CheckIterable ( obj )
+function ToIterable(obj) {
+  if (!IS_SPEC_OBJECT(obj)) {
+    return UNDEFINED;
+  }
+  return obj[symbolIterator];
+}
+
+
+// ES6 rev 26, 2014-07-18
+// 7.4.2 GetIterator ( obj, method )
+function GetIterator(obj, method) {
+  if (IS_UNDEFINED(method)) {
+    method = ToIterable(obj);
+  }
+  if (!IS_SPEC_FUNCTION(method)) {
+    throw MakeTypeError('not_iterable', [obj]);
+  }
+  var iterator = %_CallFunction(obj, method);
+  if (!IS_SPEC_OBJECT(iterator)) {
+    throw MakeTypeError('not_an_iterator', [iterator]);
+  }
+  return iterator;
+}

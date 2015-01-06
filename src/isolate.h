@@ -78,6 +78,7 @@ typedef void* ExternalReferenceRedirectorPointer();
 
 class Debug;
 class Debugger;
+class PromiseOnStack;
 
 #if !defined(__arm__) && V8_TARGET_ARCH_ARM || \
     !defined(__aarch64__) && V8_TARGET_ARCH_ARM64 || \
@@ -240,11 +241,7 @@ class ThreadLocalTop BASE_EMBEDDED {
         v8::TryCatch::JSStackComparableAddress(try_catch_handler()));
   }
 
-  void Free() {
-    DCHECK(!has_pending_message_);
-    DCHECK(!external_caught_exception_);
-    DCHECK(try_catch_handler_ == NULL);
-  }
+  void Free();
 
   Isolate* isolate_;
   // The context where the current execution method is created and for variable
@@ -269,6 +266,11 @@ class ThreadLocalTop BASE_EMBEDDED {
   // Stack.
   Address c_entry_fp_;  // the frame pointer of the top c entry frame
   Address handler_;   // try-blocks are chained through the stack
+
+  // Throwing an exception may cause a Promise rejection.  For this purpose
+  // we keep track of a stack of nested promises and the corresponding
+  // try-catch handlers.
+  PromiseOnStack* promise_on_stack_;
 
 #ifdef USE_SIMULATOR
   Simulator* simulator_;
@@ -340,8 +342,6 @@ typedef List<HeapObject*> DebugObjectCache;
   V(int, serialize_partial_snapshot_cache_capacity, 0)                         \
   V(Object**, serialize_partial_snapshot_cache, NULL)                          \
   /* Assembler state. */                                                       \
-  /* A previously allocated buffer of kMinimalBufferSize bytes, or NULL. */    \
-  V(byte*, assembler_spare_buffer, NULL)                                       \
   V(FatalErrorCallback, exception_behavior, NULL)                              \
   V(LogEventCallback, event_logger, NULL)                                      \
   V(AllowCodeGenerationFromStringsCallback, allow_code_gen_callback, NULL)     \
@@ -357,10 +357,6 @@ typedef List<HeapObject*> DebugObjectCache;
   V(Object*, string_stream_current_security_token, NULL)                       \
   /* Serializer state. */                                                      \
   V(ExternalReferenceTable*, external_reference_table, NULL)                   \
-  /* AstNode state. */                                                         \
-  V(int, function_id, 1)                                                       \
-  V(int, ast_node_id, 0)                                                       \
-  V(unsigned, ast_node_count, 0)                                               \
   V(int, pending_microtask_count, 0)                                           \
   V(bool, autorun_microtasks, true)                                            \
   V(HStatistics*, hstatistics, NULL)                                           \
@@ -372,6 +368,7 @@ typedef List<HeapObject*> DebugObjectCache;
   V(uint32_t, per_isolate_assert_data, 0xFFFFFFFFu)                            \
   V(InterruptCallback, api_interrupt_callback, NULL)                           \
   V(void*, api_interrupt_callback_data, NULL)                                  \
+  V(int, function_id, 1)                                                       \
   ISOLATE_INIT_SIMULATOR_LIST(V)
 
 #define THREAD_LOCAL_TOP_ACCESSOR(type, name)                        \
@@ -678,6 +675,11 @@ class Isolate {
   // handler the exception is scheduled to be rethrown when we return to running
   // JavaScript code.  If an exception is scheduled true is returned.
   bool OptionalRescheduleException(bool is_bottom_call);
+
+  // Push and pop a promise and the current try-catch handler.
+  void PushPromise(Handle<JSObject> promise);
+  void PopPromise();
+  Handle<Object> GetPromiseOnStackOnThrow();
 
   class ExceptionScope {
    public:
@@ -1350,6 +1352,22 @@ class Isolate {
 
 #undef FIELD_ACCESSOR
 #undef THREAD_LOCAL_TOP_ACCESSOR
+
+
+class PromiseOnStack {
+ public:
+  PromiseOnStack(StackHandler* handler, Handle<JSObject> promise,
+                 PromiseOnStack* prev)
+      : handler_(handler), promise_(promise), prev_(prev) {}
+  StackHandler* handler() { return handler_; }
+  Handle<JSObject> promise() { return promise_; }
+  PromiseOnStack* prev() { return prev_; }
+
+ private:
+  StackHandler* handler_;
+  Handle<JSObject> promise_;
+  PromiseOnStack* prev_;
+};
 
 
 // If the GCC version is 4.1.x or 4.2.x an additional field is added to the

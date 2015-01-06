@@ -164,8 +164,11 @@ class Factory V8_FINAL {
       uint32_t hash_field);
 
   MUST_USE_RESULT Handle<String> NewOneByteInternalizedString(
-        Vector<const uint8_t> str,
-        uint32_t hash_field);
+      Vector<const uint8_t> str, uint32_t hash_field);
+
+  MUST_USE_RESULT Handle<String> NewOneByteInternalizedSubString(
+      Handle<SeqOneByteString> string, int offset, int length,
+      uint32_t hash_field);
 
   MUST_USE_RESULT Handle<String> NewTwoByteInternalizedString(
         Vector<const uc16> str,
@@ -221,6 +224,7 @@ class Factory V8_FINAL {
   // Create a symbol.
   Handle<Symbol> NewSymbol();
   Handle<Symbol> NewPrivateSymbol();
+  Handle<Symbol> NewPrivateOwnSymbol();
 
   // Create a global (but otherwise uninitialized) context.
   Handle<Context> NewNativeContext();
@@ -445,13 +449,6 @@ class Factory V8_FINAL {
                                      Handle<Object> construct_trap,
                                      Handle<Object> prototype);
 
-  // Reinitialize a JSReceiver into an (empty) JS object of respective type and
-  // size, but keeping the original prototype.  The receiver must have at least
-  // the size of the new object.  The object is reinitialized and behaves as an
-  // object that has been freshly allocated.
-  void ReinitializeJSReceiver(
-      Handle<JSReceiver> object, InstanceType type, int size);
-
   // Reinitialize an JSGlobalProxy based on a constructor.  The object
   // must have the same size as objects allocated using the
   // constructor.  The object is reinitialized and behaves as an
@@ -460,8 +457,8 @@ class Factory V8_FINAL {
                                  Handle<JSFunction> constructor);
 
   // Change the type of the argument into a JS object/function and reinitialize.
-  void BecomeJSObject(Handle<JSReceiver> object);
-  void BecomeJSFunction(Handle<JSReceiver> object);
+  void BecomeJSObject(Handle<JSProxy> object);
+  void BecomeJSFunction(Handle<JSProxy> object);
 
   Handle<JSFunction> NewFunction(Handle<String> name,
                                  Handle<Code> code,
@@ -703,6 +700,12 @@ class Factory V8_FINAL {
   Handle<JSFunction> NewFunction(Handle<Map> map,
                                  Handle<String> name,
                                  MaybeHandle<Code> maybe_code);
+
+  // Reinitialize a JSProxy into an (empty) JS object of respective type and
+  // size, but keeping the original prototype.  The receiver must have at least
+  // the size of the new object.  The object is reinitialized and behaves as an
+  // object that has been freshly allocated.
+  void ReinitializeJSProxy(Handle<JSProxy> proxy, InstanceType type, int size);
 };
 
 } }  // namespace v8::internal

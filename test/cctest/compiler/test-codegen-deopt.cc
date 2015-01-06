@@ -51,6 +51,8 @@ class DeoptCodegenTester {
     CHECK(Scope::Analyze(&info));
     info.PrepareForCompilation(info.function()->scope());
     CHECK_NE(NULL, info.scope());
+    Handle<ScopeInfo> scope_info = ScopeInfo::Create(info.scope(), info.zone());
+    info.shared_info()->set_scope_info(*scope_info);
 
     FunctionTester::EnsureDeoptimizationSupport(&info);
 
@@ -121,8 +123,8 @@ class TrivialDeoptCodegenTester : public DeoptCodegenTester {
     //   deopt();
     // }
 
-    MachineRepresentation parameter_reps[] = {kMachineTagged};
-    MachineCallDescriptorBuilder descriptor_builder(kMachineTagged, 1,
+    MachineType parameter_reps[] = {kMachAnyTagged};
+    MachineCallDescriptorBuilder descriptor_builder(kMachAnyTagged, 1,
                                                     parameter_reps);
 
     RawMachineAssembler m(graph, &descriptor_builder);
@@ -150,8 +152,12 @@ class TrivialDeoptCodegenTester : public DeoptCodegenTester {
     m.NewNode(common.LazyDeoptimization(), call);
 
     bailout_id = GetCallBailoutId();
-    FrameStateDescriptor stateDescriptor(bailout_id);
-    Node* state_node = m.NewNode(common.FrameState(stateDescriptor));
+    Node* parameters = m.NewNode(common.StateValues(1), undef_node);
+    Node* locals = m.NewNode(common.StateValues(0));
+    Node* stack = m.NewNode(common.StateValues(0));
+
+    Node* state_node =
+        m.NewNode(common.FrameState(bailout_id), parameters, locals, stack);
     m.Deoptimize(state_node);
 
     // Schedule the graph:
@@ -196,14 +202,14 @@ TEST(TurboTrivialDeoptCodegen) {
   Label* cont_label = t.code->GetLabel(t.cont_block);
   Label* deopt_label = t.code->GetLabel(t.deopt_block);
 
-  // Check the patch table. It should patch the continuation address to the
-  // deoptimization block address.
-  CHECK_EQ(1, data->ReturnAddressPatchCount());
-  CHECK_EQ(cont_label->pos(), data->ReturnAddressPc(0)->value());
-  CHECK_EQ(deopt_label->pos(), data->PatchedAddressPc(0)->value());
+  // Check the safepoint - it should contain an entry for the call
+  // with the right deoptimization address.
+  SafepointEntry entry = t.result_code->GetSafepointEntry(
+      t.result_code->instruction_start() + cont_label->pos());
+  CHECK(entry.is_valid());
+  CHECK_EQ(deopt_label->pos(), entry.deoptimization_pc());
 
   // Check that we deoptimize to the right AST id.
-  CHECK_EQ(1, data->DeoptCount());
   CHECK_EQ(1, data->DeoptCount());
   CHECK_EQ(t.bailout_id.ToInt(), data->AstId(0).ToInt());
 }
@@ -253,8 +259,8 @@ class TrivialRuntimeDeoptCodegenTester : public DeoptCodegenTester {
     //   %DeoptimizeFunction(foo);
     // }
 
-    MachineRepresentation parameter_reps[] = {kMachineTagged};
-    MachineCallDescriptorBuilder descriptor_builder(kMachineTagged, 2,
+    MachineType parameter_reps[] = {kMachAnyTagged};
+    MachineCallDescriptorBuilder descriptor_builder(kMachAnyTagged, 2,
                                                     parameter_reps);
 
     RawMachineAssembler m(graph, &descriptor_builder);
@@ -281,8 +287,12 @@ class TrivialRuntimeDeoptCodegenTester : public DeoptCodegenTester {
     m.NewNode(common.LazyDeoptimization(), call);
 
     bailout_id = GetCallBailoutId();
-    FrameStateDescriptor stateDescriptor(bailout_id);
-    Node* state_node = m.NewNode(common.FrameState(stateDescriptor));
+    Node* parameters = m.NewNode(common.StateValues(1), undef_node);
+    Node* locals = m.NewNode(common.StateValues(0));
+    Node* stack = m.NewNode(common.StateValues(0));
+
+    Node* state_node =
+        m.NewNode(common.FrameState(bailout_id), parameters, locals, stack);
     m.Deoptimize(state_node);
 
     // Schedule the graph:

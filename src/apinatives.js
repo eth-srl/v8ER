@@ -68,11 +68,11 @@ function InstantiateFunction(data, name) {
         // internal ToBoolean doesn't handle that!
         if (typeof parent !== 'undefined') {
           var parent_fun = Instantiate(parent);
-          %SetPrototype(prototype, parent_fun.prototype);
+          %InternalSetPrototype(prototype, parent_fun.prototype);
         }
       }
       var fun = %CreateApiFunction(data, prototype);
-      if (name) %FunctionSetName(fun, name);
+      if (IS_STRING(name)) %FunctionSetName(fun, name);
       var doNotCache = flags & (1 << kDoNotCacheBit);
       if (!doNotCache) cache[serialNumber] = fun;
       ConfigureTemplateInstance(fun, data);

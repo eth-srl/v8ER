@@ -1325,8 +1325,9 @@ LInstruction* LChunkBuilder::DoDivI(HDiv* instr) {
   DCHECK(instr->right()->representation().Equals(instr->representation()));
   LOperand* dividend = UseRegister(instr->left());
   LOperand* divisor = UseRegister(instr->right());
+  LOperand* temp = TempRegister();
   LInstruction* result =
-      DefineAsRegister(new(zone()) LDivI(dividend, divisor));
+      DefineAsRegister(new(zone()) LDivI(dividend, divisor, temp));
   if (instr->CheckFlag(HValue::kCanBeDivByZero) ||
       instr->CheckFlag(HValue::kBailoutOnMinusZero) ||
       (instr->CheckFlag(HValue::kCanOverflow) &&
@@ -1511,7 +1512,7 @@ LInstruction* LChunkBuilder::DoMul(HMul* instr) {
     return DefineAsRegister(mul);
 
   } else if (instr->representation().IsDouble()) {
-    if (kArchVariant == kMips32r2) {
+    if (IsMipsArchVariant(kMips32r2) || IsMipsArchVariant(kMips32r6)) {
       if (instr->HasOneUse() && instr->uses().value()->IsAdd()) {
         HAdd* add = HAdd::cast(instr->uses().value());
         if (instr == add->left()) {
@@ -1584,7 +1585,7 @@ LInstruction* LChunkBuilder::DoAdd(HAdd* instr) {
     LInstruction* result = DefineAsRegister(add);
     return result;
   } else if (instr->representation().IsDouble()) {
-    if (kArchVariant == kMips32r2) {
+    if (IsMipsArchVariant(kMips32r2) || IsMipsArchVariant(kMips32r6)) {
       if (instr->left()->IsMul())
         return DoMultiplyAdd(HMul::cast(instr->left()), instr->right());
 
@@ -2050,11 +2051,11 @@ LInstruction* LChunkBuilder::DoLoadGlobalCell(HLoadGlobalCell* instr) {
 
 LInstruction* LChunkBuilder::DoLoadGlobalGeneric(HLoadGlobalGeneric* instr) {
   LOperand* context = UseFixed(instr->context(), cp);
-  LOperand* global_object = UseFixed(instr->global_object(),
-                                     LoadIC::ReceiverRegister());
+  LOperand* global_object =
+      UseFixed(instr->global_object(), LoadConvention::ReceiverRegister());
   LOperand* vector = NULL;
   if (FLAG_vector_ics) {
-    vector = FixedTemp(LoadIC::VectorRegister());
+    vector = FixedTemp(FullVectorLoadConvention::VectorRegister());
   }
   LLoadGlobalGeneric* result =
       new(zone()) LLoadGlobalGeneric(context, global_object, vector);
@@ -2109,10 +2110,11 @@ LInstruction* LChunkBuilder::DoLoadNamedField(HLoadNamedField* instr) {
 
 LInstruction* LChunkBuilder::DoLoadNamedGeneric(HLoadNamedGeneric* instr) {
   LOperand* context = UseFixed(instr->context(), cp);
-  LOperand* object = UseFixed(instr->object(), LoadIC::ReceiverRegister());
+  LOperand* object =
+      UseFixed(instr->object(), LoadConvention::ReceiverRegister());
   LOperand* vector = NULL;
   if (FLAG_vector_ics) {
-    vector = FixedTemp(LoadIC::VectorRegister());
+    vector = FixedTemp(FullVectorLoadConvention::VectorRegister());
   }
 
   LInstruction* result =
@@ -2174,11 +2176,12 @@ LInstruction* LChunkBuilder::DoLoadKeyed(HLoadKeyed* instr) {
 
 LInstruction* LChunkBuilder::DoLoadKeyedGeneric(HLoadKeyedGeneric* instr) {
   LOperand* context = UseFixed(instr->context(), cp);
-  LOperand* object = UseFixed(instr->object(), LoadIC::ReceiverRegister());
-  LOperand* key = UseFixed(instr->key(), LoadIC::NameRegister());
+  LOperand* object =
+      UseFixed(instr->object(), LoadConvention::ReceiverRegister());
+  LOperand* key = UseFixed(instr->key(), LoadConvention::NameRegister());
   LOperand* vector = NULL;
   if (FLAG_vector_ics) {
-    vector = FixedTemp(LoadIC::VectorRegister());
+    vector = FixedTemp(FullVectorLoadConvention::VectorRegister());
   }
 
   LInstruction* result =
@@ -2234,9 +2237,10 @@ LInstruction* LChunkBuilder::DoStoreKeyed(HStoreKeyed* instr) {
 
 LInstruction* LChunkBuilder::DoStoreKeyedGeneric(HStoreKeyedGeneric* instr) {
   LOperand* context = UseFixed(instr->context(), cp);
-  LOperand* obj = UseFixed(instr->object(), KeyedStoreIC::ReceiverRegister());
-  LOperand* key = UseFixed(instr->key(), KeyedStoreIC::NameRegister());
-  LOperand* val = UseFixed(instr->value(), KeyedStoreIC::ValueRegister());
+  LOperand* obj =
+      UseFixed(instr->object(), StoreConvention::ReceiverRegister());
+  LOperand* key = UseFixed(instr->key(), StoreConvention::NameRegister());
+  LOperand* val = UseFixed(instr->value(), StoreConvention::ValueRegister());
 
   DCHECK(instr->object()->representation().IsTagged());
   DCHECK(instr->key()->representation().IsTagged());
@@ -2310,8 +2314,9 @@ LInstruction* LChunkBuilder::DoStoreNamedField(HStoreNamedField* instr) {
 
 LInstruction* LChunkBuilder::DoStoreNamedGeneric(HStoreNamedGeneric* instr) {
   LOperand* context = UseFixed(instr->context(), cp);
-  LOperand* obj = UseFixed(instr->object(), StoreIC::ReceiverRegister());
-  LOperand* val = UseFixed(instr->value(), StoreIC::ValueRegister());
+  LOperand* obj =
+      UseFixed(instr->object(), StoreConvention::ReceiverRegister());
+  LOperand* val = UseFixed(instr->value(), StoreConvention::ValueRegister());
 
   LInstruction* result = new(zone()) LStoreNamedGeneric(context, obj, val);
   return MarkAsCall(result, instr);

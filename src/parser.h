@@ -373,20 +373,22 @@ class ParserTraits {
     typedef AstNodeFactory<AstConstructionVisitor> Factory;
   };
 
+  class Checkpoint;
+
   explicit ParserTraits(Parser* parser) : parser_(parser) {}
 
   // Custom operations executed when FunctionStates are created and destructed.
-  template<typename FunctionState>
-  static void SetUpFunctionState(FunctionState* function_state, Zone* zone) {
-    Isolate* isolate = zone->isolate();
-    function_state->saved_ast_node_id_ = isolate->ast_node_id();
-    isolate->set_ast_node_id(BailoutId::FirstUsable().ToInt());
+  template <typename FunctionState>
+  static void SetUpFunctionState(FunctionState* function_state) {
+    function_state->saved_id_gen_ = *function_state->ast_node_id_gen_;
+    *function_state->ast_node_id_gen_ =
+        AstNode::IdGen(BailoutId::FirstUsable().ToInt());
   }
 
-  template<typename FunctionState>
-  static void TearDownFunctionState(FunctionState* function_state, Zone* zone) {
+  template <typename FunctionState>
+  static void TearDownFunctionState(FunctionState* function_state) {
     if (function_state->outer_function_state_ != NULL) {
-      zone->isolate()->set_ast_node_id(function_state->saved_ast_node_id_);
+      *function_state->ast_node_id_gen_ = function_state->saved_id_gen_;
     }
   }
 
@@ -424,7 +426,8 @@ class ParserTraits {
   }
 
   static void CheckFunctionLiteralInsideTopLevelObjectLiteral(
-      Scope* scope, Expression* value, bool* has_function) {
+      Scope* scope, ObjectLiteralProperty* property, bool* has_function) {
+    Expression* value = property->value();
     if (scope->DeclarationScope()->is_global_scope() &&
         value->AsFunctionLiteral() != NULL) {
       *has_function = true;
@@ -514,6 +517,7 @@ class ParserTraits {
   static Literal* EmptyLiteral() {
     return NULL;
   }
+  static ObjectLiteralProperty* EmptyObjectLiteralProperty() { return NULL; }
 
   // Used in error return values.
   static ZoneList<Expression*>* NullExpressionList() {
@@ -530,8 +534,12 @@ class ParserTraits {
   // Producing data during the recursive descent.
   const AstRawString* GetSymbol(Scanner* scanner);
   const AstRawString* GetNextSymbol(Scanner* scanner);
+  const AstRawString* GetNumberAsSymbol(Scanner* scanner);
 
   Expression* ThisExpression(Scope* scope,
+                             AstNodeFactory<AstConstructionVisitor>* factory,
+                             int pos = RelocInfo::kNoPosition);
+  Expression* SuperReference(Scope* scope,
                              AstNodeFactory<AstConstructionVisitor>* factory,
                              int pos = RelocInfo::kNoPosition);
   Literal* ExpressionFromLiteral(
@@ -581,8 +589,6 @@ class ParserTraits {
       Token::Value fvar_init_op, bool is_generator, bool* ok);
   V8_INLINE void CheckConflictingVarDeclarations(v8::internal::Scope* scope,
                                                  bool* ok);
-
-  static int next_ast_node_id(Zone *z) { return z->isolate()->ast_node_id(); }
 
  private:
   Parser* parser_;

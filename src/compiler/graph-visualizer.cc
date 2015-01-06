@@ -24,7 +24,7 @@ namespace compiler {
 
 class GraphVisualizer : public NullNodeVisitor {
  public:
-  GraphVisualizer(OStream& os, const Graph* graph);  // NOLINT
+  GraphVisualizer(OStream& os, Zone* zone, const Graph* graph);  // NOLINT
 
   void Print();
 
@@ -35,6 +35,7 @@ class GraphVisualizer : public NullNodeVisitor {
   void AnnotateNode(Node* node);
   void PrintEdge(Node* from, int index, Node* to);
 
+  Zone* zone_;
   NodeSet all_nodes_;
   NodeSet white_nodes_;
   bool use_to_def_;
@@ -46,11 +47,12 @@ class GraphVisualizer : public NullNodeVisitor {
 
 
 static Node* GetControlCluster(Node* node) {
-  if (NodeProperties::IsBasicBlockBegin(node)) {
+  if (OperatorProperties::IsBasicBlockBegin(node->op())) {
     return node;
-  } else if (NodeProperties::GetControlInputCount(node) == 1) {
+  } else if (OperatorProperties::GetControlInputCount(node->op()) == 1) {
     Node* control = NodeProperties::GetControlInput(node, 0);
-    return NodeProperties::IsBasicBlockBegin(control) ? control : NULL;
+    return OperatorProperties::IsBasicBlockBegin(control->op()) ? control
+                                                                : NULL;
   } else {
     return NULL;
   }
@@ -156,19 +158,27 @@ void GraphVisualizer::AnnotateNode(Node* node) {
   os_ << "    label=\"{{#" << node->id() << ":" << Escaped(label);
 
   InputIter i = node->inputs().begin();
-  for (int j = NodeProperties::GetValueInputCount(node); j > 0; ++i, j--) {
+  for (int j = OperatorProperties::GetValueInputCount(node->op()); j > 0;
+       ++i, j--) {
     os_ << "|<I" << i.index() << ">#" << (*i)->id();
   }
-  for (int j = NodeProperties::GetContextInputCount(node); j > 0; ++i, j--) {
+  for (int j = OperatorProperties::GetContextInputCount(node->op()); j > 0;
+       ++i, j--) {
     os_ << "|<I" << i.index() << ">X #" << (*i)->id();
   }
-  for (int j = NodeProperties::GetEffectInputCount(node); j > 0; ++i, j--) {
+  for (int j = OperatorProperties::GetFrameStateInputCount(node->op()); j > 0;
+       ++i, j--) {
+    os_ << "|<I" << i.index() << ">X #" << (*i)->id();
+  }
+  for (int j = OperatorProperties::GetEffectInputCount(node->op()); j > 0;
+       ++i, j--) {
     os_ << "|<I" << i.index() << ">E #" << (*i)->id();
   }
 
-  if (!use_to_def_ || NodeProperties::IsBasicBlockBegin(node) ||
+  if (!use_to_def_ || OperatorProperties::IsBasicBlockBegin(node->op()) ||
       GetControlCluster(node) == NULL) {
-    for (int j = NodeProperties::GetControlInputCount(node); j > 0; ++i, j--) {
+    for (int j = OperatorProperties::GetControlInputCount(node->op()); j > 0;
+         ++i, j--) {
       os_ << "|<I" << i.index() << ">C #" << (*i)->id();
     }
   }
@@ -191,9 +201,9 @@ void GraphVisualizer::PrintEdge(Node* from, int index, Node* to) {
   os_ << "  ID" << from->id();
   if (all_nodes_.count(to) == 0) {
     os_ << ":I" << index << ":n -> DEAD_INPUT";
-  } else if (NodeProperties::IsBasicBlockBegin(from) ||
+  } else if (OperatorProperties::IsBasicBlockBegin(from->op()) ||
              GetControlCluster(from) == NULL ||
-             (NodeProperties::GetControlInputCount(from) > 0 &&
+             (OperatorProperties::GetControlInputCount(from->op()) > 0 &&
               NodeProperties::GetControlInput(from) != to)) {
     os_ << ":I" << index << ":n -> ID" << to->id() << ":s";
     if (unconstrained) os_ << " [constraint=false,style=dotted]";
@@ -220,8 +230,8 @@ void GraphVisualizer::Print() {
   // Visit all uses of white nodes.
   use_to_def_ = false;
   GenericGraphVisit::Visit<GraphVisualizer, NodeUseIterationTraits<Node> >(
-      const_cast<Graph*>(graph_), white_nodes_.begin(), white_nodes_.end(),
-      this);
+      const_cast<Graph*>(graph_), zone_, white_nodes_.begin(),
+      white_nodes_.end(), this);
 
   os_ << "  DEAD_INPUT [\n"
       << "    style=\"filled\" \n"
@@ -241,18 +251,19 @@ void GraphVisualizer::Print() {
 }
 
 
-GraphVisualizer::GraphVisualizer(OStream& os, const Graph* graph)  // NOLINT
-    : all_nodes_(NodeSet::key_compare(),
-                 NodeSet::allocator_type(graph->zone())),
-      white_nodes_(NodeSet::key_compare(),
-                   NodeSet::allocator_type(graph->zone())),
+GraphVisualizer::GraphVisualizer(OStream& os, Zone* zone,
+                                 const Graph* graph)  // NOLINT
+    : zone_(zone),
+      all_nodes_(NodeSet::key_compare(), NodeSet::allocator_type(zone)),
+      white_nodes_(NodeSet::key_compare(), NodeSet::allocator_type(zone)),
       use_to_def_(true),
       os_(os),
       graph_(graph) {}
 
 
 OStream& operator<<(OStream& os, const AsDOT& ad) {
-  GraphVisualizer(os, &ad.graph).Print();
+  Zone tmp_zone(ad.graph.zone()->isolate());
+  GraphVisualizer(os, &tmp_zone, &ad.graph).Print();
   return os;
 }
 }

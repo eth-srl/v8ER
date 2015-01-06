@@ -3,6 +3,8 @@
 # all paths in here must match this assumption.
 
 vars = {
+  "chromium_git": "https://chromium.googlesource.com",
+
   "chromium_trunk": "https://src.chromium.org/svn/trunk",
 
   "buildtools_revision": "fb782d4369d5ae04f17a2fceef7de5a63e50f07b",
@@ -21,13 +23,18 @@ deps = {
     Var("buildtools_revision"),
 
   "v8/testing/gtest":
-    "http://googletest.googlecode.com/svn/trunk@643",
+    "http://googletest.googlecode.com/svn/trunk@692",
 
   "v8/testing/gmock":
-    "http://googlemock.googlecode.com/svn/trunk@410",
+    "http://googlemock.googlecode.com/svn/trunk@485",
 }
 
 deps_os = {
+  "android": {
+    "v8/third_party/android_tools":
+      Var("chromium_git") + "/android_tools.git" + "@" +
+          "31869996507de16812bb53a3d0aaa15cd6194c16",
+  },
   "win": {
     "v8/third_party/cygwin":
       Var("chromium_trunk") + "/deps/third_party/cygwin@66844",
@@ -41,6 +48,7 @@ include_rules = [
   # Everybody can use some things.
   "+include",
   "+unicode",
+  "+third_party/fdlibm",
 ]
 
 # checkdeps.py shouldn't check for includes in these directories:

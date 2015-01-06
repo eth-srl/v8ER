@@ -35,23 +35,13 @@ class CallOperator : public Operator1<CallDescriptor*> {
  public:
   CallOperator(CallDescriptor* descriptor, const char* mnemonic)
       : Operator1<CallDescriptor*>(
-            IrOpcode::kCall, descriptor->properties(), descriptor->InputCount(),
+            IrOpcode::kCall, descriptor->properties(),
+            descriptor->InputCount() + descriptor->FrameStateCount(),
             descriptor->ReturnCount(), mnemonic, descriptor) {}
 
   virtual OStream& PrintParameter(OStream& os) const {  // NOLINT
     return os << "[" << *parameter() << "]";
   }
-};
-
-class FrameStateDescriptor {
- public:
-  explicit FrameStateDescriptor(BailoutId bailout_id)
-      : bailout_id_(bailout_id) {}
-
-  BailoutId bailout_id() const { return bailout_id_; }
-
- private:
-  BailoutId bailout_id_;
 };
 
 // Interface for building common operators that can be used at any level of IR,
@@ -141,9 +131,27 @@ class CommonOperatorBuilder {
     return new (zone_) Operator1<int>(IrOpcode::kEffectPhi, Operator::kPure, 0,
                                       0, "EffectPhi", arguments);
   }
-  Operator* FrameState(const FrameStateDescriptor& descriptor) {
-    return new (zone_) Operator1<FrameStateDescriptor>(
-        IrOpcode::kFrameState, Operator::kPure, 0, 1, "FrameState", descriptor);
+  Operator* ControlEffect() {
+    return new (zone_) SimpleOperator(IrOpcode::kControlEffect, Operator::kPure,
+                                      0, 0, "ControlEffect");
+  }
+  Operator* ValueEffect(int arguments) {
+    DCHECK(arguments > 0);  // Disallow empty value effects.
+    return new (zone_) SimpleOperator(IrOpcode::kValueEffect, Operator::kPure,
+                                      arguments, 0, "ValueEffect");
+  }
+  Operator* Finish(int arguments) {
+    DCHECK(arguments > 0);  // Disallow empty finishes.
+    return new (zone_) Operator1<int>(IrOpcode::kFinish, Operator::kPure, 1, 1,
+                                      "Finish", arguments);
+  }
+  Operator* StateValues(int arguments) {
+    return new (zone_) Operator1<int>(IrOpcode::kStateValues, Operator::kPure,
+                                      arguments, 1, "StateValues", arguments);
+  }
+  Operator* FrameState(BailoutId ast_id) {
+    return new (zone_) Operator1<BailoutId>(
+        IrOpcode::kFrameState, Operator::kPure, 3, 1, "FrameState", ast_id);
   }
   Operator* Call(CallDescriptor* descriptor) {
     return new (zone_) CallOperator(descriptor, "Call");

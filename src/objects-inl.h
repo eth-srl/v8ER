@@ -21,14 +21,14 @@
 #include "src/heap/heap-inl.h"
 #include "src/heap/heap.h"
 #include "src/heap/incremental-marking.h"
+#include "src/heap/objects-visiting.h"
 #include "src/heap/spaces.h"
+#include "src/heap/store-buffer.h"
 #include "src/isolate.h"
 #include "src/lookup.h"
 #include "src/objects.h"
-#include "src/objects-visiting.h"
 #include "src/property.h"
 #include "src/prototype.h"
-#include "src/store-buffer.h"
 #include "src/transitions-inl.h"
 #include "src/v8memory.h"
 
@@ -533,21 +533,17 @@ class OneByteStringKey : public SequentialStringKey<uint8_t> {
 };
 
 
-template<class Char>
-class SubStringKey : public HashTableKey {
+class SeqOneByteSubStringKey : public HashTableKey {
  public:
-  SubStringKey(Handle<String> string, int from, int length)
+  SeqOneByteSubStringKey(Handle<SeqOneByteString> string, int from, int length)
       : string_(string), from_(from), length_(length) {
-    if (string_->IsSlicedString()) {
-      string_ = Handle<String>(Unslice(*string_, &from_));
-    }
-    DCHECK(string_->IsSeqString() || string->IsExternalString());
+    DCHECK(string_->IsSeqOneByteString());
   }
 
   virtual uint32_t Hash() V8_OVERRIDE {
     DCHECK(length_ >= 0);
     DCHECK(from_ + length_ <= string_->length());
-    const Char* chars = GetChars() + from_;
+    const uint8_t* chars = string_->GetChars() + from_;
     hash_field_ = StringHasher::HashSequentialString(
         chars, length_, string_->GetHeap()->HashSeed());
     uint32_t result = hash_field_ >> String::kHashShift;
@@ -563,17 +559,7 @@ class SubStringKey : public HashTableKey {
   virtual Handle<Object> AsHandle(Isolate* isolate) V8_OVERRIDE;
 
  private:
-  const Char* GetChars();
-  String* Unslice(String* string, int* offset) {
-    while (string->IsSlicedString()) {
-      SlicedString* sliced = SlicedString::cast(string);
-      *offset += sliced->offset();
-      string = sliced->parent();
-    }
-    return string;
-  }
-
-  Handle<String> string_;
+  Handle<SeqOneByteString> string_;
   int from_;
   int length_;
   uint32_t hash_field_;
@@ -731,19 +717,9 @@ bool Object::IsDeoptimizationInputData() const {
   // the entry size.
   int length = FixedArray::cast(this)->length();
   if (length == 0) return true;
-  if (length < DeoptimizationInputData::kFirstDeoptEntryIndex) return false;
 
-  FixedArray* self = FixedArray::cast(const_cast<Object*>(this));
-  int deopt_count =
-      Smi::cast(self->get(DeoptimizationInputData::kDeoptEntryCountIndex))
-          ->value();
-  int patch_count =
-      Smi::cast(
-          self->get(
-              DeoptimizationInputData::kReturnAddressPatchEntryCountIndex))
-          ->value();
-
-  return length == DeoptimizationInputData::LengthFor(deopt_count, patch_count);
+  length -= DeoptimizationInputData::kFirstDeoptEntryIndex;
+  return length >= 0 && length % DeoptimizationInputData::kDeoptEntrySize == 0;
 }
 
 
@@ -2206,7 +2182,8 @@ void FixedArray::set(int index, Smi* value) {
 
 
 void FixedArray::set(int index, Object* value) {
-  DCHECK(map() != GetHeap()->fixed_cow_array_map());
+  DCHECK_NE(GetHeap()->fixed_cow_array_map(), map());
+  DCHECK_EQ(FIXED_ARRAY_TYPE, map()->instance_type());
   DCHECK(index >= 0 && index < this->length());
   int offset = kHeaderSize + index * kPointerSize;
   WRITE_FIELD(this, offset, value);
@@ -2982,6 +2959,11 @@ Object** DescriptorArray::GetValueSlot(int descriptor_number) {
 }
 
 
+int DescriptorArray::GetValueOffset(int descriptor_number) {
+  return OffsetOfElementAt(ToValueIndex(descriptor_number));
+}
+
+
 Object* DescriptorArray::GetValue(int descriptor_number) {
   DCHECK(descriptor_number < number_of_descriptors());
   return get(ToValueIndex(descriptor_number));
@@ -3067,27 +3049,6 @@ void DescriptorArray::Set(int descriptor_number, Descriptor* desc) {
   set(ToKeyIndex(descriptor_number), *desc->GetKey());
   set(ToValueIndex(descriptor_number), *desc->GetValue());
   set(ToDetailsIndex(descriptor_number), desc->GetDetails().AsSmi());
-}
-
-
-void DescriptorArray::Append(Descriptor* desc,
-                             const WhitenessWitness& witness) {
-  DisallowHeapAllocation no_gc;
-  int descriptor_number = number_of_descriptors();
-  SetNumberOfDescriptors(descriptor_number + 1);
-  Set(descriptor_number, desc, witness);
-
-  uint32_t hash = desc->GetKey()->Hash();
-
-  int insertion;
-
-  for (insertion = descriptor_number; insertion > 0; --insertion) {
-    Name* key = GetSortedKey(insertion - 1);
-    if (key->Hash() <= hash) break;
-    SetSortedKey(insertion, GetSortedKeyIndex(insertion - 1));
-  }
-
-  SetSortedKey(insertion, descriptor_number);
 }
 
 
@@ -3366,6 +3327,7 @@ bool Name::Equals(Handle<Name> one, Handle<Name> two) {
 ACCESSORS(Symbol, name, Object, kNameOffset)
 ACCESSORS(Symbol, flags, Smi, kFlagsOffset)
 BOOL_ACCESSORS(Symbol, flags, is_private, kPrivateBit)
+BOOL_ACCESSORS(Symbol, flags, is_own, kOwnBit)
 
 
 bool String::Equals(String* other) {
@@ -4446,22 +4408,13 @@ bool Map::is_extensible() {
 }
 
 
-void Map::mark_prototype_map() {
-  set_bit_field2(IsPrototypeMapBits::update(bit_field2(), true));
+void Map::set_is_prototype_map(bool value) {
+  set_bit_field2(IsPrototypeMapBits::update(bit_field2(), value));
 }
 
 bool Map::is_prototype_map() {
   return IsPrototypeMapBits::decode(bit_field2());
 }
-
-
-void Map::set_is_shared(bool value) {
-  set_bit_field3(IsShared::update(bit_field3(), value));
-}
-
-
-bool Map::is_shared() {
-  return IsShared::decode(bit_field3()); }
 
 
 void Map::set_dictionary_map(bool value) {
@@ -4481,8 +4434,8 @@ Code::Flags Code::flags() {
 }
 
 
-void Map::set_owns_descriptors(bool is_shared) {
-  set_bit_field3(OwnsDescriptors::update(bit_field3(), is_shared));
+void Map::set_owns_descriptors(bool owns_descriptors) {
+  set_bit_field3(OwnsDescriptors::update(bit_field3(), owns_descriptors));
 }
 
 
@@ -5939,11 +5892,6 @@ Map* JSFunction::initial_map() {
 }
 
 
-void JSFunction::set_initial_map(Map* value) {
-  set_prototype_or_initial_map(value);
-}
-
-
 bool JSFunction::has_initial_map() {
   return prototype_or_initial_map()->IsMap();
 }
@@ -6080,8 +6028,8 @@ ACCESSORS(JSCollection, table, Object, kTableOffset)
   }
 
 ORDERED_HASH_TABLE_ITERATOR_ACCESSORS(table, Object, kTableOffset)
-ORDERED_HASH_TABLE_ITERATOR_ACCESSORS(index, Smi, kIndexOffset)
-ORDERED_HASH_TABLE_ITERATOR_ACCESSORS(kind, Smi, kKindOffset)
+ORDERED_HASH_TABLE_ITERATOR_ACCESSORS(index, Object, kIndexOffset)
+ORDERED_HASH_TABLE_ITERATOR_ACCESSORS(kind, Object, kKindOffset)
 
 #undef ORDERED_HASH_TABLE_ITERATOR_ACCESSORS
 
@@ -6506,6 +6454,10 @@ uint32_t Name::Hash() {
   if (IsHashFieldComputed(field)) return field >> kHashShift;
   // Slow case: compute hash code and set it. Has to be a string.
   return String::cast(this)->ComputeAndSetHash();
+}
+
+bool Name::IsOwn() {
+  return this->IsSymbol() && Symbol::cast(this)->is_own();
 }
 
 
@@ -7040,6 +6992,16 @@ Handle<Object> TypeFeedbackInfo::UninitializedSentinel(Isolate* isolate) {
 
 Handle<Object> TypeFeedbackInfo::MegamorphicSentinel(Isolate* isolate) {
   return isolate->factory()->megamorphic_symbol();
+}
+
+
+Handle<Object> TypeFeedbackInfo::PremonomorphicSentinel(Isolate* isolate) {
+  return isolate->factory()->megamorphic_symbol();
+}
+
+
+Handle<Object> TypeFeedbackInfo::GenericSentinel(Isolate* isolate) {
+  return isolate->factory()->generic_symbol();
 }
 
 

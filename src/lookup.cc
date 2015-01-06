@@ -5,6 +5,7 @@
 #include "src/v8.h"
 
 #include "src/bootstrapper.h"
+#include "src/deoptimizer.h"
 #include "src/lookup.h"
 #include "src/lookup-inl.h"
 
@@ -34,8 +35,8 @@ void LookupIterator::Next() {
   // Either was found in the receiver, or the receiver has no prototype.
   if (holder == NULL) return;
 
-  maybe_holder_ = handle(holder);
-  holder_map_ = handle(map);
+  maybe_holder_ = handle(holder, isolate_);
+  holder_map_ = handle(map, isolate_);
 }
 
 
@@ -52,7 +53,19 @@ Handle<JSReceiver> LookupIterator::GetRoot() const {
 Handle<Map> LookupIterator::GetReceiverMap() const {
   Handle<Object> receiver = GetReceiver();
   if (receiver->IsNumber()) return isolate_->factory()->heap_number_map();
-  return handle(Handle<HeapObject>::cast(receiver)->map());
+  return handle(Handle<HeapObject>::cast(receiver)->map(), isolate_);
+}
+
+
+Handle<JSObject> LookupIterator::GetStoreTarget() const {
+  Handle<JSObject> receiver = Handle<JSObject>::cast(GetReceiver());
+
+  if (receiver->IsJSGlobalProxy()) {
+    PrototypeIterator iter(isolate(), receiver);
+    if (iter.IsAtEnd()) return receiver;
+    return Handle<JSGlobalObject>::cast(PrototypeIterator::GetCurrent(iter));
+  }
+  return receiver;
 }
 
 
@@ -89,6 +102,14 @@ bool LookupIterator::HasProperty() {
         holder_map_->instance_descriptors()->GetDetails(number_);
   }
 
+  LoadPropertyKind();
+
+  has_property_ = true;
+  return true;
+}
+
+
+void LookupIterator::LoadPropertyKind() {
   switch (property_details_.type()) {
     case v8::internal::FIELD:
     case v8::internal::NORMAL:
@@ -98,14 +119,15 @@ bool LookupIterator::HasProperty() {
     case v8::internal::CALLBACKS:
       property_kind_ = ACCESSOR;
       break;
-    case v8::internal::HANDLER:
-    case v8::internal::NONEXISTENT:
-    case v8::internal::INTERCEPTOR:
-      UNREACHABLE();
   }
+}
 
-  has_property_ = true;
-  return true;
+
+void LookupIterator::ReloadPropertyInformation() {
+  state_ = BEFORE_PROPERTY;
+  state_ = LookupInHolder(*holder_map_);
+  DCHECK(IsFound());
+  HasProperty();
 }
 
 
@@ -116,52 +138,118 @@ void LookupIterator::PrepareForDataProperty(Handle<Object> value) {
   holder_map_ =
       Map::PrepareForDataProperty(holder_map_, descriptor_number(), value);
   JSObject::MigrateToMap(GetHolder<JSObject>(), holder_map_);
-  // Reload property information.
-  if (holder_map_->is_dictionary_map()) {
-    property_encoding_ = DICTIONARY;
-  } else {
-    property_encoding_ = DESCRIPTOR;
-  }
-  CHECK(HasProperty());
+  ReloadPropertyInformation();
 }
 
 
-void LookupIterator::TransitionToDataProperty(
+void LookupIterator::ReconfigureDataProperty(Handle<Object> value,
+                                             PropertyAttributes attributes) {
+  DCHECK(has_property_);
+  DCHECK(HolderIsReceiverOrHiddenPrototype());
+  Handle<JSObject> holder = GetHolder<JSObject>();
+  if (property_encoding_ != DICTIONARY) {
+    holder_map_ = Map::ReconfigureDataProperty(holder_map_, descriptor_number(),
+                                               attributes);
+    JSObject::MigrateToMap(holder, holder_map_);
+  }
+
+  if (holder_map_->is_dictionary_map()) {
+    PropertyDetails details(attributes, NORMAL, 0);
+    JSObject::SetNormalizedProperty(holder, name(), value, details);
+  }
+
+  ReloadPropertyInformation();
+}
+
+
+void LookupIterator::PrepareTransitionToDataProperty(
     Handle<Object> value, PropertyAttributes attributes,
     Object::StoreFromKeyed store_mode) {
-  DCHECK(!has_property_ || !HolderIsReceiverOrHiddenPrototype());
+  if (state_ == TRANSITION) return;
+  DCHECK(!has_property_ || property_kind_ != ACCESSOR);
+  DCHECK(!(has_property_ || state_ == JSPROXY) ||
+         !HolderIsReceiverOrHiddenPrototype());
 
   // Can only be called when the receiver is a JSObject. JSProxy has to be
   // handled via a trap. Adding properties to primitive values is not
   // observable.
-  Handle<JSObject> receiver = Handle<JSObject>::cast(GetReceiver());
+  Handle<JSObject> receiver = GetStoreTarget();
 
-  // Properties have to be added to context extension objects through
-  // SetOwnPropertyIgnoreAttributes.
-  DCHECK(!receiver->IsJSContextExtensionObject());
-
-  if (receiver->IsJSGlobalProxy()) {
-    PrototypeIterator iter(isolate(), receiver);
-    receiver =
-        Handle<JSGlobalObject>::cast(PrototypeIterator::GetCurrent(iter));
+  if (!name().is_identical_to(isolate()->factory()->hidden_string()) &&
+      !receiver->map()->is_extensible()) {
+    return;
   }
 
+  transition_map_ = Map::TransitionToDataProperty(
+      handle(receiver->map(), isolate_), name_, value, attributes, store_mode);
+  state_ = TRANSITION;
+}
+
+
+void LookupIterator::ApplyTransitionToDataProperty() {
+  DCHECK_EQ(TRANSITION, state_);
+
+  Handle<JSObject> receiver = GetStoreTarget();
   maybe_holder_ = receiver;
-  holder_map_ = Map::TransitionToDataProperty(handle(receiver->map()), name_,
-                                              value, attributes, store_mode);
+  holder_map_ = transition_map_;
+  JSObject::MigrateToMap(receiver, holder_map_);
+  ReloadPropertyInformation();
+}
+
+
+void LookupIterator::TransitionToAccessorProperty(
+    AccessorComponent component, Handle<Object> accessor,
+    PropertyAttributes attributes) {
+  DCHECK(!accessor->IsNull());
+  // Can only be called when the receiver is a JSObject. JSProxy has to be
+  // handled via a trap. Adding properties to primitive values is not
+  // observable.
+  Handle<JSObject> receiver = GetStoreTarget();
+  maybe_holder_ = receiver;
+  holder_map_ =
+      Map::TransitionToAccessorProperty(handle(receiver->map(), isolate_),
+                                        name_, component, accessor, attributes);
   JSObject::MigrateToMap(receiver, holder_map_);
 
-  // Reload the information.
-  state_ = NOT_FOUND;
-  configuration_ = CHECK_OWN_REAL;
-  state_ = LookupInHolder(*holder_map_);
-  DCHECK(IsFound());
-  HasProperty();
+  ReloadPropertyInformation();
+
+  if (!holder_map_->is_dictionary_map()) return;
+
+  // We have to deoptimize since accesses to data properties may have been
+  // inlined without a corresponding map-check.
+  if (holder_map_->IsGlobalObjectMap()) {
+    Deoptimizer::DeoptimizeGlobalObject(*receiver);
+  }
+
+  // Install the accessor into the dictionary-mode object.
+  PropertyDetails details(attributes, CALLBACKS, 0);
+  Handle<AccessorPair> pair;
+  if (IsFound() && HasProperty() && property_kind() == ACCESSOR &&
+      GetAccessors()->IsAccessorPair()) {
+    pair = Handle<AccessorPair>::cast(GetAccessors());
+    // If the component and attributes are identical, nothing has to be done.
+    if (pair->get(component) == *accessor) {
+      if (property_details().attributes() == attributes) return;
+    } else {
+      pair = AccessorPair::Copy(pair);
+      pair->set(component, *accessor);
+    }
+  } else {
+    pair = isolate()->factory()->NewAccessorPair();
+    pair->set(component, *accessor);
+  }
+  JSObject::SetNormalizedProperty(receiver, name_, pair, details);
+
+  JSObject::ReoptimizeIfPrototype(receiver);
+  holder_map_ = handle(receiver->map(), isolate_);
+  ReloadPropertyInformation();
 }
 
 
 bool LookupIterator::HolderIsReceiverOrHiddenPrototype() const {
   DCHECK(has_property_ || state_ == INTERCEPTOR || state_ == JSPROXY);
+  // Optimization that only works if configuration_ is not mutable.
+  if (!check_prototype_chain()) return true;
   DisallowHeapAllocation no_gc;
   Handle<Object> receiver = GetReceiver();
   if (!receiver->IsJSReceiver()) return false;
@@ -205,12 +293,32 @@ Handle<Object> LookupIterator::FetchValue() const {
 }
 
 
+int LookupIterator::GetConstantIndex() const {
+  DCHECK(has_property_);
+  DCHECK_EQ(DESCRIPTOR, property_encoding_);
+  DCHECK_EQ(v8::internal::CONSTANT, property_details_.type());
+  return descriptor_number();
+}
+
+
 FieldIndex LookupIterator::GetFieldIndex() const {
-  DCHECK_EQ(PROPERTY, state_);
+  DCHECK(has_property_);
+  DCHECK_EQ(DESCRIPTOR, property_encoding_);
+  DCHECK_EQ(v8::internal::FIELD, property_details_.type());
   int index =
       holder_map()->instance_descriptors()->GetFieldIndex(descriptor_number());
   bool is_double = representation().IsDouble();
   return FieldIndex::ForPropertyIndex(*holder_map(), index, is_double);
+}
+
+
+Handle<HeapType> LookupIterator::GetFieldType() const {
+  DCHECK(has_property_);
+  DCHECK_EQ(DESCRIPTOR, property_encoding_);
+  DCHECK_EQ(v8::internal::FIELD, property_details_.type());
+  return handle(
+      holder_map()->instance_descriptors()->GetFieldType(descriptor_number()),
+      isolate_);
 }
 
 

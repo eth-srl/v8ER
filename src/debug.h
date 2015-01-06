@@ -333,23 +333,6 @@ class LockingCommandMessageQueue BASE_EMBEDDED {
 };
 
 
-class PromiseOnStack {
- public:
-  PromiseOnStack(Isolate* isolate,
-                 PromiseOnStack* prev,
-                 Handle<JSFunction> getter);
-  ~PromiseOnStack();
-  StackHandler* handler() { return handler_; }
-  Handle<JSFunction> getter() { return getter_; }
-  PromiseOnStack* prev() { return prev_; }
- private:
-  Isolate* isolate_;
-  StackHandler* handler_;
-  Handle<JSFunction> getter_;
-  PromiseOnStack* prev_;
-};
-
-
 // This class contains the debugger support. The main purpose is to handle
 // setting break points in the code.
 //
@@ -361,7 +344,9 @@ class Debug {
  public:
   // Debug event triggers.
   void OnDebugBreak(Handle<Object> break_points_hit, bool auto_continue);
-  void OnException(Handle<Object> exception, bool uncaught);
+
+  void OnThrow(Handle<Object> exception, bool uncaught);
+  void OnPromiseReject(Handle<JSObject> promise, Handle<Object> value);
   void OnCompileError(Handle<Script> script);
   void OnBeforeCompile(Handle<Script> script);
   void OnAfterCompile(Handle<Script> script);
@@ -451,10 +436,6 @@ class Debug {
   // Check whether this frame is just about to return.
   bool IsBreakAtReturn(JavaScriptFrame* frame);
 
-  // Promise handling.
-  void PromiseHandlePrologue(Handle<JSFunction> promise_getter);
-  void PromiseHandleEpilogue();
-
   // Support for LiveEdit
   void FramesHaveBeenDropped(StackFrame::Id new_break_frame_id,
                              LiveEdit::FrameDropMode mode,
@@ -523,6 +504,9 @@ class Debug {
   inline bool has_commands() const { return !command_queue_.IsEmpty(); }
   inline bool ignore_events() const { return is_suppressed_ || !is_active_; }
 
+  void OnException(Handle<Object> exception, bool uncaught,
+                   Handle<Object> promise);
+
   // Constructors for debug event objects.
   MUST_USE_RESULT MaybeHandle<Object> MakeJSObject(
       const char* constructor_name,
@@ -545,8 +529,8 @@ class Debug {
   // Mirror cache handling.
   void ClearMirrorCache();
 
-  // Returns a promise if it does not have a reject handler.
-  Handle<Object> GetPromiseForUncaughtException();
+  // Returns a promise if the pushed try-catch handler matches the current one.
+  bool PromiseHasRejectHandler(Handle<JSObject> promise);
 
   void CallEventCallback(v8::DebugEvent event,
                          Handle<Object> exec_state,
@@ -652,13 +636,6 @@ class Debug {
     // of the pointer to function being restarted. Otherwise (most of the time)
     // stores NULL. This pointer is used with 'step in' implementation.
     Object** restarter_frame_function_pointer_;
-
-    // When a promise is being resolved, we may want to trigger a debug event
-    // if we catch a throw.  For this purpose we remember the try-catch
-    // handler address that would catch the exception.  We also hold onto a
-    // closure that returns a promise if the exception is considered uncaught.
-    // Due to the possibility of reentry we use a linked list.
-    PromiseOnStack* promise_on_stack_;
   };
 
   // Storage location for registers when handling debug break calls

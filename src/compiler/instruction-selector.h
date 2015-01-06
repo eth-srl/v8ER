@@ -130,7 +130,7 @@ class InstructionSelector V8_FINAL {
 
   // Inform the register allocation of the representation of the value produced
   // by {node}.
-  void MarkAsRepresentation(MachineRepresentation rep, Node* node);
+  void MarkAsRepresentation(MachineType rep, Node* node);
 
   // Initialize the call buffer with the InstructionOperands, nodes, etc,
   // corresponding
@@ -141,6 +141,10 @@ class InstructionSelector V8_FINAL {
                             bool call_code_immediate,
                             bool call_address_immediate, BasicBlock* cont_node,
                             BasicBlock* deopt_node);
+
+  FrameStateDescriptor* GetFrameStateDescriptor(Node* node);
+  void AddFrameStateInputs(Node* state, InstructionOperandVector* inputs,
+                           FrameStateDescriptor* descriptor);
 
   // ===========================================================================
   // ============= Architecture-specific graph covering methods. ===============
@@ -169,6 +173,7 @@ class InstructionSelector V8_FINAL {
   void VisitWord64Compare(Node* node, FlagsContinuation* cont);
   void VisitFloat64Compare(Node* node, FlagsContinuation* cont);
 
+  void VisitFinish(Node* node);
   void VisitParameter(Node* node);
   void VisitPhi(Node* node);
   void VisitProjection(Node* node);
@@ -179,7 +184,7 @@ class InstructionSelector V8_FINAL {
   void VisitBranch(Node* input, BasicBlock* tbranch, BasicBlock* fbranch);
   void VisitReturn(Node* value);
   void VisitThrow(Node* value);
-  void VisitDeoptimization(Node* deopt);
+  void VisitDeoptimize(Node* deopt);
 
   // ===========================================================================
 
@@ -192,15 +197,12 @@ class InstructionSelector V8_FINAL {
 
   // ===========================================================================
 
-  typedef zone_allocator<Instruction*> InstructionPtrZoneAllocator;
-  typedef std::deque<Instruction*, InstructionPtrZoneAllocator> Instructions;
-
   Zone zone_;
   InstructionSequence* sequence_;
   SourcePositionTable* source_positions_;
   Features features_;
   BasicBlock* current_block_;
-  Instructions instructions_;
+  ZoneDeque<Instruction*> instructions_;
   BoolVector defined_;
   BoolVector used_;
 };

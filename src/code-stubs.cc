@@ -9,8 +9,8 @@
 #include "src/cpu-profiler.h"
 #include "src/factory.h"
 #include "src/gdb-jit.h"
+#include "src/ic/handler-compiler.h"
 #include "src/macro-assembler.h"
-#include "src/stub-cache.h"
 
 namespace v8 {
 namespace internal {
@@ -291,7 +291,7 @@ void BinaryOpICWithAllocationSiteStub::GenerateAheadOfTime(Isolate* isolate) {
 
 void BinaryOpICWithAllocationSiteStub::PrintState(
     OStream& os) const {  // NOLINT
-  os << state_;
+  os << state();
 }
 
 
@@ -320,7 +320,7 @@ void StringAddStub::PrintBaseName(OStream& os) const {  // NOLINT
 }
 
 
-InlineCacheState ICCompareStub::GetICState() {
+InlineCacheState ICCompareStub::GetICState() const {
   CompareIC::State state = Max(left_, right_);
   switch (state) {
     case CompareIC::UNINITIALIZED:
@@ -380,7 +380,7 @@ bool ICCompareStub::FindCodeInSpecialCache(Code** code_out) {
 }
 
 
-int ICCompareStub::MinorKey() const {
+uint32_t ICCompareStub::MinorKey() const {
   return OpField::encode(op_ - Token::EQ) |
          LeftStateField::encode(left_) |
          RightStateField::encode(right_) |
@@ -554,12 +554,12 @@ Type* CompareNilICStub::GetInputType(Zone* zone, Handle<Map> map) {
 
 
 void CallIC_ArrayStub::PrintState(OStream& os) const {  // NOLINT
-  os << state_ << " (Array)";
+  os << state() << " (Array)";
 }
 
 
 void CallICStub::PrintState(OStream& os) const {  // NOLINT
-  os << state_;
+  os << state();
 }
 
 
@@ -581,62 +581,64 @@ void JSEntryStub::FinishCode(Handle<Code> code) {
 
 void LoadFastElementStub::InitializeInterfaceDescriptor(
     CodeStubInterfaceDescriptor* descriptor) {
-  Register registers[] = { InterfaceDescriptor::ContextRegister(),
-                           LoadIC::ReceiverRegister(),
-                           LoadIC::NameRegister() };
-  STATIC_ASSERT(LoadIC::kParameterCount == 2);
-  descriptor->Initialize(MajorKey(), ARRAY_SIZE(registers), registers,
+  Register registers[] = {InterfaceDescriptor::ContextRegister(),
+                          LoadConvention::ReceiverRegister(),
+                          LoadConvention::NameRegister()};
+  STATIC_ASSERT(LoadConvention::kParameterCount == 2);
+  descriptor->Initialize(MajorKey(), arraysize(registers), registers,
                          FUNCTION_ADDR(KeyedLoadIC_MissFromStubFailure));
 }
 
 
 void LoadDictionaryElementStub::InitializeInterfaceDescriptor(
     CodeStubInterfaceDescriptor* descriptor) {
-  Register registers[] = { InterfaceDescriptor::ContextRegister(),
-                           LoadIC::ReceiverRegister(),
-                           LoadIC::NameRegister() };
-  STATIC_ASSERT(LoadIC::kParameterCount == 2);
-  descriptor->Initialize(MajorKey(), ARRAY_SIZE(registers), registers,
+  Register registers[] = {InterfaceDescriptor::ContextRegister(),
+                          LoadConvention::ReceiverRegister(),
+                          LoadConvention::NameRegister()};
+  STATIC_ASSERT(LoadConvention::kParameterCount == 2);
+  descriptor->Initialize(MajorKey(), arraysize(registers), registers,
                          FUNCTION_ADDR(KeyedLoadIC_MissFromStubFailure));
 }
 
 
 void KeyedLoadGenericStub::InitializeInterfaceDescriptor(
     CodeStubInterfaceDescriptor* descriptor) {
-  Register registers[] = { InterfaceDescriptor::ContextRegister(),
-                           LoadIC::ReceiverRegister(),
-                           LoadIC::NameRegister() };
-  STATIC_ASSERT(LoadIC::kParameterCount == 2);
+  Register registers[] = {InterfaceDescriptor::ContextRegister(),
+                          LoadConvention::ReceiverRegister(),
+                          LoadConvention::NameRegister()};
+  STATIC_ASSERT(LoadConvention::kParameterCount == 2);
   descriptor->Initialize(
-      MajorKey(), ARRAY_SIZE(registers), registers,
+      MajorKey(), arraysize(registers), registers,
       Runtime::FunctionForId(Runtime::kKeyedGetProperty)->entry);
 }
 
 
-void LoadFieldStub::InitializeInterfaceDescriptor(
+void HandlerStub::InitializeInterfaceDescriptor(
     CodeStubInterfaceDescriptor* descriptor) {
-  Register registers[] = { InterfaceDescriptor::ContextRegister(),
-                           LoadIC::ReceiverRegister() };
-  descriptor->Initialize(MajorKey(), ARRAY_SIZE(registers), registers);
-}
-
-
-void StringLengthStub::InitializeInterfaceDescriptor(
-    CodeStubInterfaceDescriptor* descriptor) {
-  Register registers[] = { InterfaceDescriptor::ContextRegister(),
-                           LoadIC::ReceiverRegister(),
-                           LoadIC::NameRegister() };
-  descriptor->Initialize(MajorKey(), ARRAY_SIZE(registers), registers);
+  if (kind() == Code::LOAD_IC) {
+    Register registers[] = {InterfaceDescriptor::ContextRegister(),
+                            LoadConvention::ReceiverRegister(),
+                            LoadConvention::NameRegister()};
+    descriptor->Initialize(MajorKey(), arraysize(registers), registers);
+  } else {
+    DCHECK_EQ(Code::STORE_IC, kind());
+    Register registers[] = {InterfaceDescriptor::ContextRegister(),
+                            StoreConvention::ReceiverRegister(),
+                            StoreConvention::NameRegister(),
+                            StoreConvention::ValueRegister()};
+    descriptor->Initialize(MajorKey(), arraysize(registers), registers,
+                           FUNCTION_ADDR(StoreIC_MissFromStubFailure));
+  }
 }
 
 
 void StoreFastElementStub::InitializeInterfaceDescriptor(
     CodeStubInterfaceDescriptor* descriptor) {
-  Register registers[] = { InterfaceDescriptor::ContextRegister(),
-                           KeyedStoreIC::ReceiverRegister(),
-                           KeyedStoreIC::NameRegister(),
-                           KeyedStoreIC::ValueRegister() };
-  descriptor->Initialize(MajorKey(), ARRAY_SIZE(registers), registers,
+  Register registers[] = {InterfaceDescriptor::ContextRegister(),
+                          StoreConvention::ReceiverRegister(),
+                          StoreConvention::NameRegister(),
+                          StoreConvention::ValueRegister()};
+  descriptor->Initialize(MajorKey(), arraysize(registers), registers,
                          FUNCTION_ADDR(KeyedStoreIC_MissFromStubFailure));
 }
 
@@ -648,19 +650,8 @@ void ElementsTransitionAndStoreStub::InitializeInterfaceDescriptor(
                            MapRegister(),
                            KeyRegister(),
                            ObjectRegister() };
-  descriptor->Initialize(MajorKey(), ARRAY_SIZE(registers), registers,
+  descriptor->Initialize(MajorKey(), arraysize(registers), registers,
                          FUNCTION_ADDR(ElementsTransitionAndStoreIC_Miss));
-}
-
-
-void StoreGlobalStub::InitializeInterfaceDescriptor(
-    CodeStubInterfaceDescriptor* descriptor) {
-  Register registers[] = { InterfaceDescriptor::ContextRegister(),
-                           StoreIC::ReceiverRegister(),
-                           StoreIC::NameRegister(),
-                           StoreIC::ValueRegister() };
-  descriptor->Initialize(MajorKey(), ARRAY_SIZE(registers), registers,
-                         FUNCTION_ADDR(StoreIC_MissFromStubFailure));
 }
 
 
@@ -669,7 +660,36 @@ void InstanceofStub::InitializeInterfaceDescriptor(
   Register registers[] = { InterfaceDescriptor::ContextRegister(),
                            InstanceofStub::left(),
                            InstanceofStub::right() };
-  descriptor->Initialize(MajorKey(), ARRAY_SIZE(registers), registers);
+  descriptor->Initialize(MajorKey(), arraysize(registers), registers);
+}
+
+
+static void InitializeVectorLoadStub(CodeStubInterfaceDescriptor* descriptor,
+                                     CodeStub::Major major,
+                                     Address deoptimization_handler) {
+  DCHECK(FLAG_vector_ics);
+  Register registers[] = {InterfaceDescriptor::ContextRegister(),
+                          FullVectorLoadConvention::ReceiverRegister(),
+                          FullVectorLoadConvention::NameRegister(),
+                          FullVectorLoadConvention::SlotRegister(),
+                          FullVectorLoadConvention::VectorRegister()};
+  descriptor->Initialize(major, arraysize(registers), registers,
+                         deoptimization_handler);
+}
+
+
+void VectorLoadStub::InitializeInterfaceDescriptor(
+    CodeStubInterfaceDescriptor* descriptor) {
+  InitializeVectorLoadStub(descriptor, MajorKey(),
+                           FUNCTION_ADDR(VectorLoadIC_MissFromStubFailure));
+}
+
+
+void VectorKeyedLoadStub::InitializeInterfaceDescriptor(
+    CodeStubInterfaceDescriptor* descriptor) {
+  InitializeVectorLoadStub(
+      descriptor, MajorKey(),
+      FUNCTION_ADDR(VectorKeyedLoadIC_MissFromStubFailure));
 }
 
 
@@ -685,7 +705,7 @@ void CreateAllocationSiteStub::GenerateAheadOfTime(Isolate* isolate) {
 
 
 void StoreElementStub::Generate(MacroAssembler* masm) {
-  switch (elements_kind_) {
+  switch (elements_kind()) {
     case FAST_ELEMENTS:
     case FAST_HOLEY_ELEMENTS:
     case FAST_SMI_ELEMENTS:
@@ -701,7 +721,7 @@ void StoreElementStub::Generate(MacroAssembler* masm) {
       UNREACHABLE();
       break;
     case DICTIONARY_ELEMENTS:
-      ElementHandlerCompiler::GenerateStoreDictionaryElement(masm);
+      ElementHandlerCompiler::GenerateStoreSlow(masm);
       break;
     case SLOPPY_ARGUMENTS_ELEMENTS:
       UNREACHABLE();
@@ -710,9 +730,27 @@ void StoreElementStub::Generate(MacroAssembler* masm) {
 }
 
 
+void ArgumentsAccessStub::Generate(MacroAssembler* masm) {
+  switch (type()) {
+    case READ_ELEMENT:
+      GenerateReadElement(masm);
+      break;
+    case NEW_SLOPPY_FAST:
+      GenerateNewSloppyFast(masm);
+      break;
+    case NEW_SLOPPY_SLOW:
+      GenerateNewSloppySlow(masm);
+      break;
+    case NEW_STRICT:
+      GenerateNewStrict(masm);
+      break;
+  }
+}
+
+
 void ArgumentsAccessStub::PrintName(OStream& os) const {  // NOLINT
   os << "ArgumentsAccessStub_";
-  switch (type_) {
+  switch (type()) {
     case READ_ELEMENT:
       os << "ReadElement";
       break;
@@ -731,7 +769,7 @@ void ArgumentsAccessStub::PrintName(OStream& os) const {  // NOLINT
 
 
 void CallFunctionStub::PrintName(OStream& os) const {  // NOLINT
-  os << "CallFunctionStub_Args" << argc_;
+  os << "CallFunctionStub_Args" << argc();
 }
 
 
@@ -743,7 +781,7 @@ void CallConstructStub::PrintName(OStream& os) const {  // NOLINT
 
 void ArrayConstructorStub::PrintName(OStream& os) const {  // NOLINT
   os << "ArrayConstructorStub";
-  switch (argument_count_) {
+  switch (argument_count()) {
     case ANY:
       os << "_Any";
       break;
@@ -772,15 +810,17 @@ OStream& ArrayConstructorStubBase::BasePrintName(OStream& os,  // NOLINT
 
 
 bool ToBooleanStub::UpdateStatus(Handle<Object> object) {
-  Types old_types(types_);
-  bool to_boolean_value = types_.UpdateStatus(object);
-  TraceTransition(old_types, types_);
+  Types new_types = types();
+  Types old_types = new_types;
+  bool to_boolean_value = new_types.UpdateStatus(object);
+  TraceTransition(old_types, new_types);
+  set_sub_minor_key(TypesBits::update(sub_minor_key(), new_types.ToByte()));
   return to_boolean_value;
 }
 
 
 void ToBooleanStub::PrintState(OStream& os) const {  // NOLINT
-  os << types_;
+  os << types();
 }
 
 
@@ -948,8 +988,24 @@ void KeyedLoadGenericStub::InstallDescriptors(Isolate* isolate) {
 }
 
 
+// static
+void StoreFieldStub::InstallDescriptors(Isolate* isolate) {
+  StoreFieldStub stub(isolate, FieldIndex::ForInObjectOffset(0),
+                      Representation::None());
+  InstallDescriptor(isolate, &stub);
+}
+
+
+// static
+void LoadFastElementStub::InstallDescriptors(Isolate* isolate) {
+  LoadFastElementStub stub(isolate, true, FAST_ELEMENTS);
+  InstallDescriptor(isolate, &stub);
+}
+
+
 ArrayConstructorStub::ArrayConstructorStub(Isolate* isolate)
-    : PlatformCodeStub(isolate), argument_count_(ANY) {
+    : PlatformCodeStub(isolate) {
+  minor_key_ = ArgumentCountBits::encode(ANY);
   ArrayConstructorStubBase::GenerateStubsAheadOfTime(isolate);
 }
 
@@ -958,11 +1014,11 @@ ArrayConstructorStub::ArrayConstructorStub(Isolate* isolate,
                                            int argument_count)
     : PlatformCodeStub(isolate) {
   if (argument_count == 0) {
-    argument_count_ = NONE;
+    minor_key_ = ArgumentCountBits::encode(NONE);
   } else if (argument_count == 1) {
-    argument_count_ = ONE;
+    minor_key_ = ArgumentCountBits::encode(ONE);
   } else if (argument_count >= 2) {
-    argument_count_ = MORE_THAN_ONE;
+    minor_key_ = ArgumentCountBits::encode(MORE_THAN_ONE);
   } else {
     UNREACHABLE();
   }

@@ -1663,11 +1663,11 @@ LInstruction* LChunkBuilder::DoLoadGlobalCell(HLoadGlobalCell* instr) {
 
 LInstruction* LChunkBuilder::DoLoadGlobalGeneric(HLoadGlobalGeneric* instr) {
   LOperand* context = UseFixed(instr->context(), cp);
-  LOperand* global_object = UseFixed(instr->global_object(),
-                                     LoadIC::ReceiverRegister());
+  LOperand* global_object =
+      UseFixed(instr->global_object(), LoadConvention::ReceiverRegister());
   LOperand* vector = NULL;
   if (FLAG_vector_ics) {
-    vector = FixedTemp(LoadIC::VectorRegister());
+    vector = FixedTemp(FullVectorLoadConvention::VectorRegister());
   }
 
   LLoadGlobalGeneric* result =
@@ -1725,11 +1725,12 @@ LInstruction* LChunkBuilder::DoLoadKeyed(HLoadKeyed* instr) {
 
 LInstruction* LChunkBuilder::DoLoadKeyedGeneric(HLoadKeyedGeneric* instr) {
   LOperand* context = UseFixed(instr->context(), cp);
-  LOperand* object = UseFixed(instr->object(), LoadIC::ReceiverRegister());
-  LOperand* key = UseFixed(instr->key(), LoadIC::NameRegister());
+  LOperand* object =
+      UseFixed(instr->object(), LoadConvention::ReceiverRegister());
+  LOperand* key = UseFixed(instr->key(), LoadConvention::NameRegister());
   LOperand* vector = NULL;
   if (FLAG_vector_ics) {
-    vector = FixedTemp(LoadIC::VectorRegister());
+    vector = FixedTemp(FullVectorLoadConvention::VectorRegister());
   }
 
   LInstruction* result =
@@ -1747,10 +1748,11 @@ LInstruction* LChunkBuilder::DoLoadNamedField(HLoadNamedField* instr) {
 
 LInstruction* LChunkBuilder::DoLoadNamedGeneric(HLoadNamedGeneric* instr) {
   LOperand* context = UseFixed(instr->context(), cp);
-  LOperand* object = UseFixed(instr->object(), LoadIC::ReceiverRegister());
+  LOperand* object =
+      UseFixed(instr->object(), LoadConvention::ReceiverRegister());
   LOperand* vector = NULL;
   if (FLAG_vector_ics) {
-    vector = FixedTemp(LoadIC::VectorRegister());
+    vector = FixedTemp(FullVectorLoadConvention::VectorRegister());
   }
 
   LInstruction* result =
@@ -2203,8 +2205,7 @@ LInstruction* LChunkBuilder::DoShift(Token::Value op,
     return DoArithmeticT(op, instr);
   }
 
-  DCHECK(instr->representation().IsInteger32() ||
-         instr->representation().IsSmi());
+  DCHECK(instr->representation().IsSmiOrInteger32());
   DCHECK(instr->left()->representation().Equals(instr->representation()));
   DCHECK(instr->right()->representation().Equals(instr->representation()));
 
@@ -2215,42 +2216,30 @@ LInstruction* LChunkBuilder::DoShift(Token::Value op,
   LOperand* left = instr->representation().IsSmi()
       ? UseRegister(instr->left())
       : UseRegisterAtStart(instr->left());
+  LOperand* right = UseRegisterOrConstantAtStart(instr->right());
 
-  HValue* right_value = instr->right();
-  LOperand* right = NULL;
-  LOperand* temp = NULL;
-  int constant_value = 0;
-  if (right_value->IsConstant()) {
-    right = UseConstant(right_value);
-    constant_value = JSShiftAmountFromHConstant(right_value);
-  } else {
-    right = UseRegisterAtStart(right_value);
-    if (op == Token::ROR) {
-      temp = TempRegister();
-    }
-  }
-
-  // Shift operations can only deoptimize if we do a logical shift by 0 and the
-  // result cannot be truncated to int32.
-  bool does_deopt = false;
-  if ((op == Token::SHR) && (constant_value == 0)) {
+  // The only shift that can deoptimize is `left >>> 0`, where left is negative.
+  // In these cases, the result is a uint32 that is too large for an int32.
+  bool right_can_be_zero = !instr->right()->IsConstant() ||
+                           (JSShiftAmountFromHConstant(instr->right()) == 0);
+  bool can_deopt = false;
+  if ((op == Token::SHR) && right_can_be_zero) {
     if (FLAG_opt_safe_uint32_operations) {
-      does_deopt = !instr->CheckFlag(HInstruction::kUint32);
+      can_deopt = !instr->CheckFlag(HInstruction::kUint32);
     } else {
-      does_deopt = !instr->CheckUsesForFlag(HValue::kTruncatingToInt32);
+      can_deopt = !instr->CheckUsesForFlag(HValue::kTruncatingToInt32);
     }
   }
 
   LInstruction* result;
   if (instr->representation().IsInteger32()) {
-    result = DefineAsRegister(new(zone()) LShiftI(op, left, right, does_deopt));
+    result = DefineAsRegister(new (zone()) LShiftI(op, left, right, can_deopt));
   } else {
     DCHECK(instr->representation().IsSmi());
-    result = DefineAsRegister(
-        new(zone()) LShiftS(op, left, right, temp, does_deopt));
+    result = DefineAsRegister(new (zone()) LShiftS(op, left, right, can_deopt));
   }
 
-  return does_deopt ? AssignEnvironment(result) : result;
+  return can_deopt ? AssignEnvironment(result) : result;
 }
 
 
@@ -2379,10 +2368,10 @@ LInstruction* LChunkBuilder::DoStoreKeyed(HStoreKeyed* instr) {
 
 LInstruction* LChunkBuilder::DoStoreKeyedGeneric(HStoreKeyedGeneric* instr) {
   LOperand* context = UseFixed(instr->context(), cp);
-  LOperand* object = UseFixed(instr->object(),
-                              KeyedStoreIC::ReceiverRegister());
-  LOperand* key = UseFixed(instr->key(), KeyedStoreIC::NameRegister());
-  LOperand* value = UseFixed(instr->value(), KeyedStoreIC::ValueRegister());
+  LOperand* object =
+      UseFixed(instr->object(), StoreConvention::ReceiverRegister());
+  LOperand* key = UseFixed(instr->key(), StoreConvention::NameRegister());
+  LOperand* value = UseFixed(instr->value(), StoreConvention::ValueRegister());
 
   DCHECK(instr->object()->representation().IsTagged());
   DCHECK(instr->key()->representation().IsTagged());
@@ -2424,8 +2413,9 @@ LInstruction* LChunkBuilder::DoStoreNamedField(HStoreNamedField* instr) {
 
 LInstruction* LChunkBuilder::DoStoreNamedGeneric(HStoreNamedGeneric* instr) {
   LOperand* context = UseFixed(instr->context(), cp);
-  LOperand* object = UseFixed(instr->object(), StoreIC::ReceiverRegister());
-  LOperand* value = UseFixed(instr->value(), StoreIC::ValueRegister());
+  LOperand* object =
+      UseFixed(instr->object(), StoreConvention::ReceiverRegister());
+  LOperand* value = UseFixed(instr->value(), StoreConvention::ValueRegister());
 
   LInstruction* result = new(zone()) LStoreNamedGeneric(context, object, value);
   return MarkAsCall(result, instr);

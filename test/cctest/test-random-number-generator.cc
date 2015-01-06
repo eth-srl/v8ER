@@ -40,43 +40,8 @@ static const int kRandomSeeds[] = {
 };
 
 
-TEST(NextIntWithMaxValue) {
-  for (unsigned n = 0; n < ARRAY_SIZE(kRandomSeeds); ++n) {
-    v8::base::RandomNumberGenerator rng(kRandomSeeds[n]);
-    for (int max = 1; max <= kMaxRuns; ++max) {
-      int n = rng.NextInt(max);
-      CHECK_LE(0, n);
-      CHECK_LT(n, max);
-    }
-  }
-}
-
-
-TEST(NextBoolReturnsBooleanValue) {
-  for (unsigned n = 0; n < ARRAY_SIZE(kRandomSeeds); ++n) {
-    v8::base::RandomNumberGenerator rng(kRandomSeeds[n]);
-    for (int k = 0; k < kMaxRuns; ++k) {
-      bool b = rng.NextBool();
-      CHECK(b == false || b == true);
-    }
-  }
-}
-
-
-TEST(NextDoubleRange) {
-  for (unsigned n = 0; n < ARRAY_SIZE(kRandomSeeds); ++n) {
-    v8::base::RandomNumberGenerator rng(kRandomSeeds[n]);
-    for (int k = 0; k < kMaxRuns; ++k) {
-      double d = rng.NextDouble();
-      CHECK_LE(0.0, d);
-      CHECK_LT(d, 1.0);
-    }
-  }
-}
-
-
 TEST(RandomSeedFlagIsUsed) {
-  for (unsigned n = 0; n < ARRAY_SIZE(kRandomSeeds); ++n) {
+  for (unsigned n = 0; n < arraysize(kRandomSeeds); ++n) {
     FLAG_random_seed = kRandomSeeds[n];
     v8::Isolate* i = v8::Isolate::New();
     v8::base::RandomNumberGenerator& rng1 =

@@ -1,3 +1,159 @@
+2014-08-28: Version 3.29.27
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-28: Version 3.29.25
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-28: Version 3.29.24
+
+        Tweaks to generate XP-compatible .exes (Chromium issue 407517).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-28: Version 3.29.23
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-27: Version 3.29.20
+
+        Handle empty allocation list in CodeRange properly (issue 3540, Chromium
+        issue 407566).
+
+        Fixed inlining of constant values (issue 3529).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-25: Version 3.29.17
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-24: Version 3.29.16
+
+        Fix issue with numeric property names (issue 3507).
+
+        Add back the duplicate property checker (issue 3498).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-22: Version 3.29.14
+
+        Don't inline Array.shift() if receiver map is not extensible (Chromium
+        issue 405517).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-21: Version 3.29.11
+
+        Refactor ParseObjectLiteral.
+
+        Support symbol-named properties in API (issue 3394).
+
+        Suppress test262 test that tests duplicate properties.
+
+        ES6: Duplicate properties are no longer an error (issue 3498).
+
+        Expose function CheckDebugBreak in the debugger api.
+
+        Remove RegExp.$input (issue 3486).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-21: Version 3.29.10
+
+        ES6: Make sure we do not store -0 as the key in Map/Set (issue 3515).
+
+        Remove removed flags from tests.
+
+        Expose well-known Symbols to C++ API (Chromium issue 341423).
+
+        Implement ES6 Array.of() (issue 3427).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-20: Version 3.29.9
+
+        Correctly handle holes when concat()ing double arrays (Chromium issue
+        403409).
+
+        [turbofan] Refactor the InstructionSelector tests (issue 3489).
+
+        ES6: Make Map/Set constructors support iterable values (issue 3508).
+
+        WeakMap/WeakSet: Add test for non object keys (issue 3399).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-12: Version 3.28.71
+
+        ToNumber(Symbol) should throw TypeError (issue 3499).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-11: Version 3.28.69
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-09: Version 3.28.65
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-08: Version 3.28.64
+
+        ES6: Implement WeakMap and WeakSet constructor logic (issue 3399).
+
+        Enable ES6 unscopables (issue 3401).
+
+        Turn on harmony_unscopables for es_staging (issue 3401).
+
+        Remove proxies from --harmony switch for M38, because problems.
+
+        Reland "Add initial support for compiler unit tests using GTest/GMock."
+        (issue 3489).
+
+        Enable ES6 iteration by default (issue 2214).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-08-07: Version 3.28.62
+
+        Only escape U+0022 in argument values of `String.prototype` HTML methods
+        (issue 2217).
+
+        Update webkit test for expected own properties.
+
+        This implements unscopables (issue 3401).
+
+        Add `CheckObjectCoercible` for the `String.prototype` HTML methods
+        (issue 2218).
+
+        Add initial support for compiler unit tests using GTest/GMock (issue
+        3489).
+
+        Trigger exception debug events on Promise reject (Chromium issue
+        393913).
+
+        Refactor unit tests for the base library to use GTest (issue 3489).
+
+        Performance and stability improvements on all platforms.
+
+
 2014-08-06: Version 3.28.60
 
         Enable ES6 Map and Set by default (issue 1622).

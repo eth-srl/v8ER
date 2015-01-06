@@ -160,7 +160,7 @@ enum BindingFlags {
   V(CONFIGURE_GLOBAL_INDEX, JSFunction, configure_global_fun)                  \
   V(FUNCTION_CACHE_INDEX, JSObject, function_cache)                            \
   V(JSFUNCTION_RESULT_CACHES_INDEX, FixedArray, jsfunction_result_caches)      \
-  V(NORMALIZED_MAP_CACHE_INDEX, NormalizedMapCache, normalized_map_cache)      \
+  V(NORMALIZED_MAP_CACHE_INDEX, Object, normalized_map_cache)                  \
   V(RUNTIME_CONTEXT_INDEX, Context, runtime_context)                           \
   V(CALL_AS_FUNCTION_DELEGATE_INDEX, JSFunction, call_as_function_delegate)    \
   V(CALL_AS_CONSTRUCTOR_DELEGATE_INDEX, JSFunction,                            \
@@ -200,7 +200,9 @@ enum BindingFlags {
   V(ITERATOR_RESULT_MAP_INDEX, Map, iterator_result_map)                       \
   V(MAP_ITERATOR_MAP_INDEX, Map, map_iterator_map)                             \
   V(SET_ITERATOR_MAP_INDEX, Map, set_iterator_map)                             \
-  V(ITERATOR_SYMBOL_INDEX, Symbol, iterator_symbol)
+  V(ITERATOR_SYMBOL_INDEX, Symbol, iterator_symbol)                            \
+  V(UNSCOPABLES_SYMBOL_INDEX, Symbol, unscopables_symbol)                      \
+  V(ARRAY_VALUES_ITERATOR_INDEX, JSFunction, array_values_iterator)
 
 // JSFunctions are pairs (context, function code), sometimes also called
 // closures. A Context object is used to represent function contexts and
@@ -394,6 +396,8 @@ class Context: public FixedArray {
     MAP_ITERATOR_MAP_INDEX,
     SET_ITERATOR_MAP_INDEX,
     ITERATOR_SYMBOL_INDEX,
+    UNSCOPABLES_SYMBOL_INDEX,
+    ARRAY_VALUES_ITERATOR_INDEX,
 
     // Properties from here are treated as weak references by the full GC.
     // Scavenge treats them as strong references.

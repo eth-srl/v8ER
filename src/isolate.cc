@@ -8,6 +8,7 @@
 
 #include "src/ast.h"
 #include "src/base/platform/platform.h"
+#include "src/base/sys-info.h"
 #include "src/base/utils/random-number-generator.h"
 #include "src/bootstrapper.h"
 #include "src/codegen.h"
@@ -19,6 +20,7 @@
 #include "src/heap/sweeper-thread.h"
 #include "src/heap-profiler.h"
 #include "src/hydrogen.h"
+#include "src/ic/stub-cache.h"
 #include "src/isolate-inl.h"
 #include "src/lithium-allocator.h"
 #include "src/log.h"
@@ -30,7 +32,6 @@
 #include "src/scopeinfo.h"
 #include "src/serialize.h"
 #include "src/simulator.h"
-#include "src/stub-cache.h"
 #include "src/version.h"
 #include "src/vm-state-inl.h"
 
@@ -79,6 +80,7 @@ void ThreadLocalTop::InitializeInternal() {
   save_context_ = NULL;
   catcher_ = NULL;
   top_lookup_result_ = NULL;
+  promise_on_stack_ = NULL;
 
   // These members are re-initialized later after deserialization
   // is complete.
@@ -97,6 +99,12 @@ void ThreadLocalTop::Initialize() {
   simulator_ = Simulator::current(isolate_);
 #endif
   thread_id_ = ThreadId::Current();
+}
+
+
+void ThreadLocalTop::Free() {
+  // Match unmatched PopPromise calls.
+  while (promise_on_stack_) isolate_->PopPromise();
 }
 
 
@@ -1026,7 +1034,7 @@ void Isolate::DoThrow(Object* exception, MessageLocation* location) {
 
   // Notify debugger of exception.
   if (catchable_by_javascript) {
-    debug()->OnException(exception_handle, report_exception);
+    debug()->OnThrow(exception_handle, report_exception);
   }
 
   // Generate the message if required.
@@ -1049,8 +1057,8 @@ void Isolate::DoThrow(Object* exception, MessageLocation* location) {
           // Look up as own property.  If the lookup fails, the exception is
           // probably not a valid Error object.  In that case, we fall through
           // and capture the stack trace at this throw site.
-          LookupIterator lookup(
-              exception_handle, key, LookupIterator::CHECK_OWN_REAL);
+          LookupIterator lookup(exception_handle, key,
+                                LookupIterator::OWN_PROPERTY);
           Handle<Object> stack_trace_property;
           if (Object::GetProperty(&lookup).ToHandle(&stack_trace_property) &&
               stack_trace_property->IsJSArray()) {
@@ -1286,6 +1294,48 @@ bool Isolate::OptionalRescheduleException(bool is_bottom_call) {
   thread_local_top()->scheduled_exception_ = pending_exception();
   clear_pending_exception();
   return true;
+}
+
+
+void Isolate::PushPromise(Handle<JSObject> promise) {
+  ThreadLocalTop* tltop = thread_local_top();
+  PromiseOnStack* prev = tltop->promise_on_stack_;
+  StackHandler* handler = StackHandler::FromAddress(Isolate::handler(tltop));
+  Handle<JSObject> global_handle =
+      Handle<JSObject>::cast(global_handles()->Create(*promise));
+  tltop->promise_on_stack_ = new PromiseOnStack(handler, global_handle, prev);
+}
+
+
+void Isolate::PopPromise() {
+  ThreadLocalTop* tltop = thread_local_top();
+  if (tltop->promise_on_stack_ == NULL) return;
+  PromiseOnStack* prev = tltop->promise_on_stack_->prev();
+  Handle<Object> global_handle = tltop->promise_on_stack_->promise();
+  delete tltop->promise_on_stack_;
+  tltop->promise_on_stack_ = prev;
+  global_handles()->Destroy(global_handle.location());
+}
+
+
+Handle<Object> Isolate::GetPromiseOnStackOnThrow() {
+  Handle<Object> undefined = factory()->undefined_value();
+  ThreadLocalTop* tltop = thread_local_top();
+  if (tltop->promise_on_stack_ == NULL) return undefined;
+  StackHandler* promise_try = tltop->promise_on_stack_->handler();
+  // Find the top-most try-catch handler.
+  StackHandler* handler = StackHandler::FromAddress(Isolate::handler(tltop));
+  do {
+    if (handler == promise_try) {
+      // Mark the pushed try-catch handler to prevent a later duplicate event
+      // triggered with the following reject.
+      return tltop->promise_on_stack_->promise();
+    }
+    handler = handler->next();
+    // Throwing inside a Promise can be intercepted by an inner try-catch, so
+    // we stop at the first try-catch handler.
+  } while (handler != NULL && !handler->is_catch());
+  return undefined;
 }
 
 
@@ -1543,6 +1593,7 @@ void Isolate::TearDown() {
 
 void Isolate::GlobalTearDown() {
   delete thread_data_table_;
+  thread_data_table_ = NULL;
 }
 
 
@@ -1551,6 +1602,8 @@ void Isolate::Deinit() {
     TRACE_ISOLATE(deinit);
 
     debug()->Unload();
+
+    FreeThreadResources();
 
     if (concurrent_recompilation_enabled()) {
       optimizing_compiler_thread_->Stop();
@@ -1644,9 +1697,6 @@ Isolate::~Isolate() {
 
   delete entry_stack_;
   entry_stack_ = NULL;
-
-  delete[] assembler_spare_buffer_;
-  assembler_spare_buffer_ = NULL;
 
   delete unicode_cache_;
   unicode_cache_ = NULL;
@@ -1898,7 +1948,7 @@ bool Isolate::Init(Deserializer* des) {
   if (max_available_threads_ < 1) {
     // Choose the default between 1 and 4.
     max_available_threads_ =
-        Max(Min(base::OS::NumberOfProcessorsOnline(), 4), 1);
+        Max(Min(base::SysInfo::NumberOfProcessors(), 4), 1);
   }
 
   if (!FLAG_job_based_sweeping) {
@@ -2003,6 +2053,8 @@ bool Isolate::Init(Deserializer* des) {
     StringAddStub::InstallDescriptors(this);
     RegExpConstructResultStub::InstallDescriptors(this);
     KeyedLoadGenericStub::InstallDescriptors(this);
+    StoreFieldStub::InstallDescriptors(this);
+    LoadFastElementStub::InstallDescriptors(this);
   }
 
   CallDescriptors::InitializeForIsolate(this);
@@ -2220,7 +2272,7 @@ Handle<JSObject> Isolate::GetSymbolRegistry() {
     static const char* nested[] = {
       "for", "for_api", "for_intern", "keyFor", "private_api", "private_intern"
     };
-    for (unsigned i = 0; i < ARRAY_SIZE(nested); ++i) {
+    for (unsigned i = 0; i < arraysize(nested); ++i) {
       Handle<String> name = factory()->InternalizeUtf8String(nested[i]);
       Handle<JSObject> obj = factory()->NewJSObjectFromMap(map);
       JSObject::NormalizeProperties(obj, KEEP_INOBJECT_PROPERTIES, 8);

@@ -5,42 +5,65 @@
 #ifndef V8_COMPILER_SCHEDULER_H_
 #define V8_COMPILER_SCHEDULER_H_
 
-#include <vector>
-
 #include "src/v8.h"
 
 #include "src/compiler/opcodes.h"
 #include "src/compiler/schedule.h"
-#include "src/zone-allocator.h"
 #include "src/zone-containers.h"
 
 namespace v8 {
 namespace internal {
 namespace compiler {
 
+// Computes a schedule from a graph, placing nodes into basic blocks and
+// ordering the basic blocks in the special RPO order.
 class Scheduler {
  public:
-  explicit Scheduler(Zone* zone);
-  Scheduler(Zone* zone, Graph* graph, Schedule* schedule);
+  // The complete scheduling algorithm.
+  // Create a new schedule and place all nodes from the graph into it.
+  static Schedule* ComputeSchedule(Graph* graph);
 
-  Schedule* NewSchedule(Graph* graph);
+  // Compute the RPO of blocks in an existing schedule.
+  static BasicBlockVector* ComputeSpecialRPO(Schedule* schedule);
 
-  BasicBlockVector* ComputeSpecialRPO();
+  // (Exposed for testing only)
+  // Build and connect the CFG for a node graph, but don't schedule nodes.
+  static void ComputeCFG(Graph* graph, Schedule* schedule);
 
  private:
+  enum Placement { kUnknown, kSchedulable, kFixed };
+
+  // Per-node data tracked during scheduling.
+  struct SchedulerData {
+    int unscheduled_count_;      // Number of unscheduled uses of this node.
+    int minimum_rpo_;            // Minimum legal RPO placement.
+    bool is_connected_control_;  // {true} if control-connected to the end node.
+    bool is_floating_control_;   // {true} if control, but not control-connected
+                                 // to the end node.
+    Placement placement_ : 3;    // Whether the node is fixed, schedulable,
+                                 // or not yet known.
+  };
+
   Zone* zone_;
   Graph* graph_;
   Schedule* schedule_;
-  NodeVector branches_;
-  NodeVector calls_;
-  NodeVector deopts_;
-  NodeVector returns_;
-  NodeVector loops_and_merges_;
-  BasicBlockVector node_block_placement_;
-  IntVector unscheduled_uses_;
   NodeVectorVector scheduled_nodes_;
   NodeVector schedule_root_nodes_;
-  IntVector schedule_early_rpo_index_;
+  ZoneVector<SchedulerData> node_data_;
+  bool has_floating_control_;
+
+  Scheduler(Zone* zone, Graph* graph, Schedule* schedule);
+
+  SchedulerData DefaultSchedulerData();
+
+  SchedulerData* GetData(Node* node) {
+    DCHECK(node->id() < static_cast<int>(node_data_.size()));
+    return &node_data_[node->id()];
+  }
+
+  void BuildCFG();
+
+  Placement GetPlacement(Node* node);
 
   int GetRPONumber(BasicBlock* block) {
     DCHECK(block->rpo_number_ >= 0 &&
@@ -49,22 +72,10 @@ class Scheduler {
     return block->rpo_number_;
   }
 
-  void PrepareAuxiliaryNodeData();
-  void PrepareAuxiliaryBlockData();
-
-  friend class CreateBlockVisitor;
-  void CreateBlocks();
-
-  void WireBlocks();
-
-  void AddPredecessorsForLoopsAndMerges();
-  void AddSuccessorsForBranches();
-  void AddSuccessorsForReturns();
-  void AddSuccessorsForCalls();
-  void AddSuccessorsForDeopts();
-
   void GenerateImmediateDominatorTree();
   BasicBlock* GetCommonDominator(BasicBlock* b1, BasicBlock* b2);
+
+  friend class CFGBuilder;
 
   friend class ScheduleEarlyNodeVisitor;
   void ScheduleEarly();
@@ -74,6 +85,10 @@ class Scheduler {
 
   friend class ScheduleLateNodeVisitor;
   void ScheduleLate();
+
+  bool ConnectFloatingControl();
+
+  void ConnectFloatingControlSubgraph(BasicBlock* block, Node* node);
 };
 }
 }

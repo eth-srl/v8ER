@@ -6,6 +6,7 @@
 
 #include "src/base/platform/elapsed-timer.h"
 #include "src/compiler/ast-graph-builder.h"
+#include "src/compiler/change-lowering.h"
 #include "src/compiler/code-generator.h"
 #include "src/compiler/graph-replay.h"
 #include "src/compiler/graph-visualizer.h"
@@ -13,7 +14,9 @@
 #include "src/compiler/instruction-selector.h"
 #include "src/compiler/js-context-specialization.h"
 #include "src/compiler/js-generic-lowering.h"
+#include "src/compiler/js-inlining.h"
 #include "src/compiler/js-typed-lowering.h"
+#include "src/compiler/phi-reducer.h"
 #include "src/compiler/register-allocator.h"
 #include "src/compiler/schedule.h"
 #include "src/compiler/scheduler.h"
@@ -22,6 +25,7 @@
 #include "src/compiler/verifier.h"
 #include "src/hydrogen.h"
 #include "src/ostreams.h"
+#include "src/utils.h"
 
 namespace v8 {
 namespace internal {
@@ -71,11 +75,40 @@ class PhaseStats {
 };
 
 
+static inline bool VerifyGraphs() {
+#ifdef DEBUG
+  return true;
+#else
+  return FLAG_turbo_verify;
+#endif
+}
+
+
 void Pipeline::VerifyAndPrintGraph(Graph* graph, const char* phase) {
   if (FLAG_trace_turbo) {
+    char buffer[256];
+    Vector<char> filename(buffer, sizeof(buffer));
+    if (!info_->shared_info().is_null()) {
+      SmartArrayPointer<char> functionname =
+          info_->shared_info()->DebugName()->ToCString();
+      if (strlen(functionname.get()) > 0) {
+        SNPrintF(filename, "turbo-%s-%s.dot", functionname.get(), phase);
+      } else {
+        SNPrintF(filename, "turbo-%p-%s.dot", static_cast<void*>(info_), phase);
+      }
+    } else {
+      SNPrintF(filename, "turbo-none-%s.dot", phase);
+    }
+    std::replace(filename.start(), filename.start() + filename.length(), ' ',
+                 '_');
+    FILE* file = base::OS::FOpen(filename.start(), "w+");
+    OFStream of(file);
+    of << AsDOT(*graph);
+    fclose(file);
+
     OFStream os(stdout);
-    os << "-- " << phase << " graph -----------------------------------\n"
-       << AsDOT(*graph);
+    os << "-- " << phase << " graph printed to file " << filename.start()
+       << "\n";
   }
   if (VerifyGraphs()) Verifier::Run(graph);
 }
@@ -85,16 +118,25 @@ class AstGraphBuilderWithPositions : public AstGraphBuilder {
  public:
   explicit AstGraphBuilderWithPositions(CompilationInfo* info, JSGraph* jsgraph,
                                         SourcePositionTable* source_positions)
-      : AstGraphBuilder(info, jsgraph, source_positions) {}
+      : AstGraphBuilder(info, jsgraph), source_positions_(source_positions) {}
+
+  bool CreateGraph() {
+    SourcePositionTable::Scope pos(source_positions_,
+                                   SourcePosition::Unknown());
+    return AstGraphBuilder::CreateGraph();
+  }
 
 #define DEF_VISIT(type)                                               \
   virtual void Visit##type(type* node) V8_OVERRIDE {                  \
-    SourcePositionTable::Scope pos(source_positions(),                \
+    SourcePositionTable::Scope pos(source_positions_,                 \
                                    SourcePosition(node->position())); \
     AstGraphBuilder::Visit##type(node);                               \
   }
   AST_NODE_LIST(DEF_VISIT)
 #undef DEF_VISIT
+
+ private:
+  SourcePositionTable* source_positions_;
 };
 
 
@@ -135,16 +177,35 @@ Handle<Code> Pipeline::GenerateCode() {
     graph_builder.CreateGraph();
     context_node = graph_builder.GetFunctionContext();
   }
+  {
+    PhaseStats phi_reducer_stats(info(), PhaseStats::CREATE_GRAPH,
+                                 "phi reduction");
+    PhiReducer phi_reducer;
+    GraphReducer graph_reducer(&graph);
+    graph_reducer.AddReducer(&phi_reducer);
+    graph_reducer.ReduceGraph();
+    // TODO(mstarzinger): Running reducer once ought to be enough for everyone.
+    graph_reducer.ReduceGraph();
+    graph_reducer.ReduceGraph();
+  }
 
   VerifyAndPrintGraph(&graph, "Initial untyped");
 
-  if (FLAG_context_specialization) {
-    SourcePositionTable::Scope pos_(&source_positions,
-                                    SourcePosition::Unknown());
+  if (info()->is_context_specializing()) {
+    SourcePositionTable::Scope pos(&source_positions,
+                                   SourcePosition::Unknown());
     // Specialize the code to the context as aggressively as possible.
     JSContextSpecializer spec(info(), &jsgraph, context_node);
     spec.SpecializeToContext();
     VerifyAndPrintGraph(&graph, "Context specialized");
+  }
+
+  if (info()->is_inlining_enabled()) {
+    SourcePositionTable::Scope pos(&source_positions,
+                                   SourcePosition::Unknown());
+    JSInliner inliner(info(), &jsgraph);
+    inliner.Inline();
+    VerifyAndPrintGraph(&graph, "Inlined");
   }
 
   // Print a replay of the initial graph.
@@ -164,10 +225,40 @@ Handle<Code> Pipeline::GenerateCode() {
       // Lower JSOperators where we can determine types.
       PhaseStats lowering_stats(info(), PhaseStats::CREATE_GRAPH,
                                 "typed lowering");
-      JSTypedLowering lowering(&jsgraph, &source_positions);
-      lowering.LowerAllNodes();
+      SourcePositionTable::Scope pos(&source_positions,
+                                     SourcePosition::Unknown());
+      JSTypedLowering lowering(&jsgraph);
+      GraphReducer graph_reducer(&graph);
+      graph_reducer.AddReducer(&lowering);
+      graph_reducer.ReduceGraph();
 
       VerifyAndPrintGraph(&graph, "Lowered typed");
+    }
+    {
+      // Lower simplified operators and insert changes.
+      PhaseStats lowering_stats(info(), PhaseStats::CREATE_GRAPH,
+                                "simplified lowering");
+      SourcePositionTable::Scope pos(&source_positions,
+                                     SourcePosition::Unknown());
+      SimplifiedLowering lowering(&jsgraph);
+      lowering.LowerAllNodes();
+
+      VerifyAndPrintGraph(&graph, "Lowered simplified");
+    }
+    {
+      // Lower changes that have been inserted before.
+      PhaseStats lowering_stats(info(), PhaseStats::CREATE_GRAPH,
+                                "change lowering");
+      SourcePositionTable::Scope pos(&source_positions,
+                                     SourcePosition::Unknown());
+      Linkage linkage(info());
+      MachineOperatorBuilder machine(zone());
+      ChangeLowering lowering(&jsgraph, &linkage, &machine);
+      GraphReducer graph_reducer(&graph);
+      graph_reducer.AddReducer(&lowering);
+      graph_reducer.ReduceGraph();
+
+      VerifyAndPrintGraph(&graph, "Lowered changes");
     }
   }
 
@@ -177,18 +268,20 @@ Handle<Code> Pipeline::GenerateCode() {
       // Lower any remaining generic JSOperators.
       PhaseStats lowering_stats(info(), PhaseStats::CREATE_GRAPH,
                                 "generic lowering");
+      SourcePositionTable::Scope pos(&source_positions,
+                                     SourcePosition::Unknown());
       MachineOperatorBuilder machine(zone());
-      JSGenericLowering lowering(info(), &jsgraph, &machine, &source_positions);
-      lowering.LowerAllNodes();
+      JSGenericLowering lowering(info(), &jsgraph, &machine);
+      GraphReducer graph_reducer(&graph);
+      graph_reducer.AddReducer(&lowering);
+      graph_reducer.ReduceGraph();
 
       VerifyAndPrintGraph(&graph, "Lowered generic");
     }
 
-    // Compute a schedule.
-    Schedule* schedule = ComputeSchedule(&graph);
-    TraceSchedule(schedule);
-
     {
+      // Compute a schedule.
+      Schedule* schedule = ComputeSchedule(&graph);
       // Generate optimized code.
       PhaseStats codegen_stats(info(), PhaseStats::CODEGEN, "codegen");
       Linkage linkage(info());
@@ -213,16 +306,18 @@ Handle<Code> Pipeline::GenerateCode() {
 
 
 Schedule* Pipeline::ComputeSchedule(Graph* graph) {
-  Scheduler scheduler(zone());
   PhaseStats schedule_stats(info(), PhaseStats::CODEGEN, "scheduling");
-  return scheduler.NewSchedule(graph);
+  Schedule* schedule = Scheduler::ComputeSchedule(graph);
+  TraceSchedule(schedule);
+  if (VerifyGraphs()) ScheduleVerifier::Run(schedule);
+  return schedule;
 }
 
 
 Handle<Code> Pipeline::GenerateCodeForMachineGraph(Linkage* linkage,
                                                    Graph* graph,
                                                    Schedule* schedule) {
-  CHECK(SupportedTarget());
+  CHECK(SupportedBackend());
   if (schedule == NULL) {
     VerifyAndPrintGraph(graph, "Machine");
     schedule = ComputeSchedule(graph);
@@ -248,7 +343,7 @@ Handle<Code> Pipeline::GenerateCode(Linkage* linkage, Graph* graph,
   DCHECK_NOT_NULL(graph);
   DCHECK_NOT_NULL(linkage);
   DCHECK_NOT_NULL(schedule);
-  DCHECK(SupportedTarget());
+  CHECK(SupportedBackend());
 
   InstructionSequence sequence(linkage, graph, schedule);
 

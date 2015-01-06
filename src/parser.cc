@@ -341,6 +341,25 @@ class TargetScope BASE_EMBEDDED {
 // ----------------------------------------------------------------------------
 // Implementation of Parser
 
+class ParserTraits::Checkpoint
+    : public ParserBase<ParserTraits>::CheckpointBase {
+ public:
+  explicit Checkpoint(ParserBase<ParserTraits>* parser)
+      : CheckpointBase(parser), parser_(parser) {
+    saved_ast_node_id_gen_ = *parser_->ast_node_id_gen_;
+  }
+
+  void Restore() {
+    CheckpointBase::Restore();
+    *parser_->ast_node_id_gen_ = saved_ast_node_id_gen_;
+  }
+
+ private:
+  ParserBase<ParserTraits>* parser_;
+  AstNode::IdGen saved_ast_node_id_gen_;
+};
+
+
 bool ParserTraits::IsEvalOrArguments(const AstRawString* identifier) const {
   return identifier == parser_->ast_value_factory_->eval_string() ||
          identifier == parser_->ast_value_factory_->arguments_string();
@@ -609,6 +628,15 @@ const AstRawString* ParserTraits::GetSymbol(Scanner* scanner) {
 }
 
 
+const AstRawString* ParserTraits::GetNumberAsSymbol(Scanner* scanner) {
+  double double_value = parser_->scanner()->DoubleValue();
+  char array[100];
+  const char* string =
+      DoubleToCString(double_value, Vector<char>(array, arraysize(array)));
+  return ast_value_factory()->GetOneByteString(string);
+}
+
+
 const AstRawString* ParserTraits::GetNextSymbol(Scanner* scanner) {
   return parser_->scanner()->NextSymbol(parser_->ast_value_factory_);
 }
@@ -619,6 +647,12 @@ Expression* ParserTraits::ThisExpression(
   return factory->NewVariableProxy(scope->receiver(), pos);
 }
 
+Expression* ParserTraits::SuperReference(
+    Scope* scope, AstNodeFactory<AstConstructionVisitor>* factory, int pos) {
+  return factory->NewSuperReference(
+      ThisExpression(scope, factory, pos)->AsVariableProxy(),
+      pos);
+}
 
 Literal* ParserTraits::ExpressionFromLiteral(
     Token::Value token, int pos,
@@ -706,9 +740,9 @@ FunctionLiteral* ParserTraits::ParseFunctionLiteral(
 
 
 Parser::Parser(CompilationInfo* info)
-    : ParserBase<ParserTraits>(&scanner_,
-                               info->isolate()->stack_guard()->real_climit(),
-                               info->extension(), NULL, info->zone(), this),
+    : ParserBase<ParserTraits>(
+          &scanner_, info->isolate()->stack_guard()->real_climit(),
+          info->extension(), NULL, info->zone(), info->ast_node_id_gen(), this),
       isolate_(info->isolate()),
       script_(info->script()),
       scanner_(isolate_->unicode_cache()),
@@ -723,15 +757,14 @@ Parser::Parser(CompilationInfo* info)
       pending_error_arg_(NULL),
       pending_error_char_arg_(NULL) {
   DCHECK(!script_.is_null());
-  isolate_->set_ast_node_id(0);
   set_allow_harmony_scoping(!info->is_native() && FLAG_harmony_scoping);
   set_allow_modules(!info->is_native() && FLAG_harmony_modules);
   set_allow_natives_syntax(FLAG_allow_natives_syntax || info->is_native());
   set_allow_lazy(false);  // Must be explicitly enabled.
   set_allow_generators(FLAG_harmony_generators);
-  set_allow_for_of(FLAG_harmony_iteration);
   set_allow_arrow_functions(FLAG_harmony_arrow_functions);
   set_allow_harmony_numeric_literals(FLAG_harmony_numeric_literals);
+  set_allow_classes(FLAG_harmony_classes);
   for (int feature = 0; feature < v8::Isolate::kUseCounterFeatureCount;
        ++feature) {
     use_counts_[feature] = 0;
@@ -835,7 +868,7 @@ FunctionLiteral* Parser::DoParseProgram(CompilationInfo* info,
 
     // Enters 'scope'.
     FunctionState function_state(&function_state_, &scope_, scope, zone(),
-                                 ast_value_factory_);
+                                 ast_value_factory_, info->ast_node_id_gen());
 
     scope_->SetStrictMode(info->strict_mode());
     ZoneList<Statement*>* body = new(zone()) ZoneList<Statement*>(16, zone());
@@ -877,7 +910,7 @@ FunctionLiteral* Parser::DoParseProgram(CompilationInfo* info,
       result->set_ast_properties(factory()->visitor()->ast_properties());
       result->set_dont_optimize_reason(
           factory()->visitor()->dont_optimize_reason());
-      result->set_next_ast_node_id(isolate()->ast_node_id());
+      result->set_next_ast_node_id(ast_node_id_gen()->id());
     } else if (stack_overflow()) {
       isolate()->StackOverflow();
     } else {
@@ -954,7 +987,7 @@ FunctionLiteral* Parser::ParseLazy(Utf16CharacterStream* source) {
     }
     original_scope_ = scope;
     FunctionState function_state(&function_state_, &scope_, scope, zone(),
-                                 ast_value_factory_);
+                                 ast_value_factory_, info()->ast_node_id_gen());
     DCHECK(scope->strict_mode() == SLOPPY || info()->strict_mode() == STRICT);
     DCHECK(info()->strict_mode() == shared_info->strict_mode());
     scope->SetStrictMode(shared_info->strict_mode());
@@ -2760,8 +2793,7 @@ bool Parser::CheckInOrOf(bool accept_OF,
   if (Check(Token::IN)) {
     *visit_mode = ForEachStatement::ENUMERATE;
     return true;
-  } else if (allow_for_of() && accept_OF &&
-             CheckContextualKeyword(CStrVector("of"))) {
+  } else if (accept_OF && CheckContextualKeyword(CStrVector("of"))) {
     *visit_mode = ForEachStatement::ITERATE;
     return true;
   }
@@ -3419,7 +3451,7 @@ FunctionLiteral* Parser::ParseFunctionLiteral(
   // Parse function body.
   {
     FunctionState function_state(&function_state_, &scope_, scope, zone(),
-                                 ast_value_factory_);
+                                 ast_value_factory_, info()->ast_node_id_gen());
     scope_->SetScopeName(function_name);
 
     if (is_generator) {
@@ -3469,10 +3501,12 @@ FunctionLiteral* Parser::ParseFunctionLiteral(
       }
 
       Variable* var = scope_->DeclareParameter(param_name, VAR);
-      // TODO(sigurds) Mark every parameter as maybe assigned. This is a
-      // conservative approximation necessary to account for parameters
-      // that are assigned via the arguments array.
-      var->set_maybe_assigned();
+      if (scope->strict_mode() == SLOPPY) {
+        // TODO(sigurds) Mark every parameter as maybe assigned. This is a
+        // conservative approximation necessary to account for parameters
+        // that are assigned via the arguments array.
+        var->set_maybe_assigned();
+      }
 
       num_parameters++;
       if (num_parameters > Code::kMaxArguments) {
@@ -3578,7 +3612,7 @@ FunctionLiteral* Parser::ParseFunctionLiteral(
     }
     ast_properties = *factory()->visitor()->ast_properties();
     dont_optimize_reason = factory()->visitor()->dont_optimize_reason();
-    next_ast_node_id = isolate()->ast_node_id();
+    next_ast_node_id = ast_node_id_gen()->id();
 
     if (allow_harmony_scoping() && strict_mode() == STRICT) {
       CheckConflictingVarDeclarations(scope, CHECK_OK);
@@ -3743,10 +3777,10 @@ PreParser::PreParseResult Parser::ParseLazyFunctionBodyWithPreParser(
     reusable_preparser_->set_allow_natives_syntax(allow_natives_syntax());
     reusable_preparser_->set_allow_lazy(true);
     reusable_preparser_->set_allow_generators(allow_generators());
-    reusable_preparser_->set_allow_for_of(allow_for_of());
     reusable_preparser_->set_allow_arrow_functions(allow_arrow_functions());
     reusable_preparser_->set_allow_harmony_numeric_literals(
         allow_harmony_numeric_literals());
+    reusable_preparser_->set_allow_classes(allow_classes());
   }
   PreParser::PreParseResult result =
       reusable_preparser_->PreParseLazyFunction(strict_mode(),

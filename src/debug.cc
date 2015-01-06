@@ -16,14 +16,11 @@
 #include "src/execution.h"
 #include "src/full-codegen.h"
 #include "src/global-handles.h"
-#include "src/ic.h"
-#include "src/ic-inl.h"
 #include "src/isolate-inl.h"
 #include "src/list.h"
 #include "src/log.h"
 #include "src/messages.h"
 #include "src/natives.h"
-#include "src/stub-cache.h"
 
 #include "include/v8-debug.h"
 
@@ -568,7 +565,6 @@ void Debug::ThreadInit() {
   // TODO(isolates): frames_are_dropped_?
   thread_local_.current_debug_scope_ = NULL;
   thread_local_.restarter_frame_function_pointer_ = NULL;
-  thread_local_.promise_on_stack_ = NULL;
 }
 
 
@@ -855,9 +851,6 @@ void Debug::Unload() {
   ClearAllBreakPoints();
   ClearStepping();
 
-  // Match unmatched PromiseHandlePrologue calls.
-  while (thread_local_.promise_on_stack_) PromiseHandleEpilogue();
-
   // Return debugger is not loaded.
   if (!is_loaded()) return;
 
@@ -1058,7 +1051,7 @@ bool Debug::CheckBreakPoint(Handle<Object> break_point_object) {
   Handle<Object> result;
   if (!Execution::TryCall(check_break_point,
                           isolate_->js_builtins_object(),
-                          ARRAY_SIZE(argv),
+                          arraysize(argv),
                           argv).ToHandle(&result)) {
     return false;
   }
@@ -1272,63 +1265,14 @@ bool Debug::IsBreakOnException(ExceptionBreakType type) {
 }
 
 
-PromiseOnStack::PromiseOnStack(Isolate* isolate,
-                                      PromiseOnStack* prev,
-                                      Handle<JSFunction> getter)
-    : isolate_(isolate), prev_(prev) {
-  handler_ = StackHandler::FromAddress(
-      Isolate::handler(isolate->thread_local_top()));
-  getter_ = Handle<JSFunction>::cast(
-      isolate->global_handles()->Create(*getter));
-}
-
-
-PromiseOnStack::~PromiseOnStack() {
-  isolate_->global_handles()->Destroy(Handle<Object>::cast(getter_).location());
-}
-
-
-void Debug::PromiseHandlePrologue(Handle<JSFunction> promise_getter) {
-  PromiseOnStack* prev = thread_local_.promise_on_stack_;
-  thread_local_.promise_on_stack_ =
-      new PromiseOnStack(isolate_, prev, promise_getter);
-}
-
-
-void Debug::PromiseHandleEpilogue() {
-  if (thread_local_.promise_on_stack_ == NULL) return;
-  PromiseOnStack* prev = thread_local_.promise_on_stack_->prev();
-  delete thread_local_.promise_on_stack_;
-  thread_local_.promise_on_stack_ = prev;
-}
-
-
-Handle<Object> Debug::GetPromiseForUncaughtException() {
-  Handle<Object> undefined = isolate_->factory()->undefined_value();
-  if (thread_local_.promise_on_stack_ == NULL) return undefined;
-  Handle<JSFunction> promise_getter = thread_local_.promise_on_stack_->getter();
-  StackHandler* promise_catch = thread_local_.promise_on_stack_->handler();
-  // Find the top-most try-catch handler.
-  StackHandler* handler = StackHandler::FromAddress(
-      Isolate::handler(isolate_->thread_local_top()));
-  while (handler != NULL && !handler->is_catch()) {
-    handler = handler->next();
-  }
-#ifdef DEBUG
-  // Make sure that our promise catch handler is in the list of handlers,
-  // even if it's not the top-most try-catch handler.
-  StackHandler* temp = handler;
-  while (temp != promise_catch && !temp->is_catch()) {
-    temp = temp->next();
-    CHECK(temp != NULL);
-  }
-#endif  // DEBUG
-
-  if (handler == promise_catch) {
-    return Execution::Call(
-        isolate_, promise_getter, undefined, 0, NULL).ToHandleChecked();
-  }
-  return undefined;
+bool Debug::PromiseHasRejectHandler(Handle<JSObject> promise) {
+  Handle<JSFunction> fun = Handle<JSFunction>::cast(
+      JSObject::GetDataProperty(isolate_->js_builtins_object(),
+                                isolate_->factory()->NewStringFromStaticAscii(
+                                    "PromiseHasRejectHandler")));
+  Handle<Object> result =
+      Execution::Call(isolate_, fun, promise, 0, NULL).ToHandleChecked();
+  return result->IsTrue();
 }
 
 
@@ -2322,7 +2266,7 @@ void Debug::SetAfterBreakTarget(JavaScriptFrame* frame) {
   // Find the call address in the running code. This address holds the call to
   // either a DebugBreakXXX or to the debug break return entry code if the
   // break point is still active after processing the break point.
-  Address addr = frame->pc() - Assembler::kPatchDebugBreakSlotReturnOffset;
+  Address addr = Assembler::break_address_from_return_address(frame->pc());
 
   // Check if the location is at JS exit or debug break slot.
   bool at_js_return = false;
@@ -2413,7 +2357,7 @@ bool Debug::IsBreakAtReturn(JavaScriptFrame* frame) {
 #endif
 
   // Find the call address in the running code.
-  Address addr = frame->pc() - Assembler::kPatchDebugBreakSlotReturnOffset;
+  Address addr = Assembler::break_address_from_return_address(frame->pc());
 
   // Check if the location is at JS return.
   RelocIterator it(debug_info->code());
@@ -2514,7 +2458,7 @@ MaybeHandle<Object> Debug::MakeJSObject(const char* constructor_name,
 MaybeHandle<Object> Debug::MakeExecutionState() {
   // Create the execution state object.
   Handle<Object> argv[] = { isolate_->factory()->NewNumberFromInt(break_id()) };
-  return MakeJSObject("MakeExecutionState", ARRAY_SIZE(argv), argv);
+  return MakeJSObject("MakeExecutionState", arraysize(argv), argv);
 }
 
 
@@ -2522,7 +2466,7 @@ MaybeHandle<Object> Debug::MakeBreakEvent(Handle<Object> break_points_hit) {
   // Create the new break event object.
   Handle<Object> argv[] = { isolate_->factory()->NewNumberFromInt(break_id()),
                             break_points_hit };
-  return MakeJSObject("MakeBreakEvent", ARRAY_SIZE(argv), argv);
+  return MakeJSObject("MakeBreakEvent", arraysize(argv), argv);
 }
 
 
@@ -2534,7 +2478,7 @@ MaybeHandle<Object> Debug::MakeExceptionEvent(Handle<Object> exception,
                             exception,
                             isolate_->factory()->ToBoolean(uncaught),
                             promise };
-  return MakeJSObject("MakeExceptionEvent", ARRAY_SIZE(argv), argv);
+  return MakeJSObject("MakeExceptionEvent", arraysize(argv), argv);
 }
 
 
@@ -2544,31 +2488,43 @@ MaybeHandle<Object> Debug::MakeCompileEvent(Handle<Script> script,
   Handle<Object> script_wrapper = Script::GetWrapper(script);
   Handle<Object> argv[] = { script_wrapper,
                             isolate_->factory()->NewNumberFromInt(type) };
-  return MakeJSObject("MakeCompileEvent", ARRAY_SIZE(argv), argv);
+  return MakeJSObject("MakeCompileEvent", arraysize(argv), argv);
 }
 
 
 MaybeHandle<Object> Debug::MakePromiseEvent(Handle<JSObject> event_data) {
   // Create the promise event object.
   Handle<Object> argv[] = { event_data };
-  return MakeJSObject("MakePromiseEvent", ARRAY_SIZE(argv), argv);
+  return MakeJSObject("MakePromiseEvent", arraysize(argv), argv);
 }
 
 
 MaybeHandle<Object> Debug::MakeAsyncTaskEvent(Handle<JSObject> task_event) {
   // Create the async task event object.
   Handle<Object> argv[] = { task_event };
-  return MakeJSObject("MakeAsyncTaskEvent", ARRAY_SIZE(argv), argv);
+  return MakeJSObject("MakeAsyncTaskEvent", arraysize(argv), argv);
 }
 
 
-void Debug::OnException(Handle<Object> exception, bool uncaught) {
+void Debug::OnThrow(Handle<Object> exception, bool uncaught) {
   if (in_debug_scope() || ignore_events()) return;
-
   HandleScope scope(isolate_);
-  Handle<Object> promise = GetPromiseForUncaughtException();
-  uncaught |= !promise->IsUndefined();
+  OnException(exception, uncaught, isolate_->GetPromiseOnStackOnThrow());
+}
 
+
+void Debug::OnPromiseReject(Handle<JSObject> promise, Handle<Object> value) {
+  if (in_debug_scope() || ignore_events()) return;
+  HandleScope scope(isolate_);
+  OnException(value, false, promise);
+}
+
+
+void Debug::OnException(Handle<Object> exception, bool uncaught,
+                        Handle<Object> promise) {
+  if (promise->IsJSObject()) {
+    uncaught |= !PromiseHasRejectHandler(Handle<JSObject>::cast(promise));
+  }
   // Bail out if exception breaks are not active
   if (uncaught) {
     // Uncaught exceptions are reported by either flags.
@@ -2692,7 +2648,7 @@ void Debug::OnAfterCompile(Handle<Script> script) {
   Handle<Object> argv[] = { wrapper };
   if (Execution::TryCall(Handle<JSFunction>::cast(update_script_break_points),
                          isolate_->js_builtins_object(),
-                         ARRAY_SIZE(argv),
+                         arraysize(argv),
                          argv).is_null()) {
     return;
   }
@@ -2809,7 +2765,7 @@ void Debug::CallEventCallback(v8::DebugEvent event,
                               event_listener_data_ };
     Handle<JSReceiver> global(isolate_->global_proxy());
     Execution::TryCall(Handle<JSFunction>::cast(event_listener_),
-                       global, ARRAY_SIZE(argv), argv);
+                       global, arraysize(argv), argv);
   }
 }
 
@@ -3048,7 +3004,7 @@ MaybeHandle<Object> Debug::Call(Handle<JSFunction> fun, Handle<Object> data) {
       isolate_,
       fun,
       Handle<Object>(debug_context()->global_proxy(), isolate_),
-      ARRAY_SIZE(argv),
+      arraysize(argv),
       argv);
 }
 

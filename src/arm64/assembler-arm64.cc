@@ -227,7 +227,7 @@ bool AreAliased(const CPURegister& reg1, const CPURegister& reg2,
 
   const CPURegister regs[] = {reg1, reg2, reg3, reg4, reg5, reg6, reg7, reg8};
 
-  for (unsigned i = 0; i < ARRAY_SIZE(regs); i++) {
+  for (unsigned i = 0; i < arraysize(regs); i++) {
     if (regs[i].IsRegister()) {
       number_of_valid_regs++;
       unique_regs |= regs[i].Bit();
@@ -2503,6 +2503,12 @@ bool Assembler::IsImmLSScaled(ptrdiff_t offset, LSDataSize size) {
 }
 
 
+bool Assembler::IsImmLSPair(ptrdiff_t offset, LSDataSize size) {
+  bool offset_is_size_multiple = (((offset >> size) << size) == offset);
+  return offset_is_size_multiple && is_int7(offset >> size);
+}
+
+
 // Test if a given value can be encoded in the immediate field of a logical
 // instruction.
 // If it can be encoded, the function returns true, and values pointed to by n,
@@ -2658,7 +2664,7 @@ bool Assembler::IsImmLogical(uint64_t value,
   int multiplier_idx = CountLeadingZeros(d, kXRegSizeInBits) - 57;
   // Ensure that the index to the multipliers array is within bounds.
   DCHECK((multiplier_idx >= 0) &&
-         (static_cast<size_t>(multiplier_idx) < ARRAY_SIZE(multipliers)));
+         (static_cast<size_t>(multiplier_idx) < arraysize(multipliers)));
   uint64_t multiplier = multipliers[multiplier_idx];
   uint64_t candidate = (b - a) * multiplier;
 
@@ -2771,9 +2777,7 @@ void Assembler::GrowBuffer() {
 
   // Compute new buffer size.
   CodeDesc desc;  // the new buffer
-  if (buffer_size_ < 4 * KB) {
-    desc.buffer_size = 4 * KB;
-  } else if (buffer_size_ < 1 * MB) {
+  if (buffer_size_ < 1 * MB) {
     desc.buffer_size = 2 * buffer_size_;
   } else {
     desc.buffer_size = buffer_size_ + 1 * MB;

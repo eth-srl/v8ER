@@ -31,8 +31,7 @@
 #else
 #define V8_TURBOFAN_BACKEND 0
 #endif
-#if V8_TURBOFAN_BACKEND && !V8_TARGET_ARCH_ARM64 && \
-    !(V8_OS_WIN && V8_TARGET_ARCH_X64)
+#if V8_TURBOFAN_BACKEND && !(V8_OS_WIN && V8_TARGET_ARCH_X64)
 #define V8_TURBOFAN_TARGET 1
 #else
 #define V8_TURBOFAN_TARGET 0
@@ -446,7 +445,11 @@ enum InlineCacheState {
   // A generic handler is installed and no extra typefeedback is recorded.
   GENERIC,
   // Special state for debug break or step in prepare stubs.
-  DEBUG_STUB
+  DEBUG_STUB,
+  // Type-vector-based ICs have a default state, with the full calculation
+  // of IC state only determined by a look at the IC and the typevector
+  // together.
+  DEFAULT
 };
 
 
@@ -607,8 +610,12 @@ enum CpuFeature {
     MOVW_MOVT_IMMEDIATE_LOADS,
     VFP32DREGS,
     NEON,
-    // MIPS
+    // MIPS, MIPS64
     FPU,
+    FP64FPU,
+    MIPSr1,
+    MIPSr2,
+    MIPSr6,
     // ARM64
     ALWAYS_ALIGN_CSP,
     NUMBER_OF_CPU_FEATURES

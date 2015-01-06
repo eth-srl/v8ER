@@ -5,6 +5,8 @@
 #ifndef V8_HEAP_GC_TRACER_H_
 #define V8_HEAP_GC_TRACER_H_
 
+#include "src/base/platform/platform.h"
+
 namespace v8 {
 namespace internal {
 
@@ -81,9 +83,9 @@ class RingBuffer {
 // GCTracer collects and prints ONE line after each garbage collector
 // invocation IFF --trace_gc is used.
 // TODO(ernstm): Unit tests.
-class GCTracer BASE_EMBEDDED {
+class GCTracer {
  public:
-  class Scope BASE_EMBEDDED {
+  class Scope {
    public:
     enum ScopeId {
       EXTERNAL,
@@ -171,6 +173,9 @@ class GCTracer BASE_EMBEDDED {
     // after the current GC.
     intptr_t end_holes_size;
 
+    // Size of new space objects in constructor.
+    intptr_t new_space_object_size;
+
     // Number of incremental marking steps since creation of tracer.
     // (value at start of event)
     int cumulative_incremental_marking_steps;
@@ -196,6 +201,15 @@ class GCTracer BASE_EMBEDDED {
     // - last event for SCAVENGER events
     // - last MARK_COMPACTOR event for MARK_COMPACTOR events
     double incremental_marking_duration;
+
+    // Cumulative pure duration of incremental marking steps since creation of
+    // tracer. (value at start of event)
+    double cumulative_pure_incremental_marking_duration;
+
+    // Duration of pure incremental marking steps since
+    // - last event for SCAVENGER events
+    // - last MARK_COMPACTOR event for MARK_COMPACTOR events
+    double pure_incremental_marking_duration;
 
     // Longest incremental marking step since start of marking.
     // (value at start of event)
@@ -271,9 +285,17 @@ class GCTracer BASE_EMBEDDED {
   // Returns 0 if no incremental marking round has been completed.
   double MaxIncrementalMarkingDuration() const;
 
-  // Compute the average incremental marking speed in bytes/second. Returns 0 if
-  // no events have been recorded.
+  // Compute the average incremental marking speed in bytes/millisecond.
+  // Returns 0 if no events have been recorded.
   intptr_t IncrementalMarkingSpeedInBytesPerMillisecond() const;
+
+  // Compute the average scavenge speed in bytes/millisecond.
+  // Returns 0 if no events have been recorded.
+  intptr_t ScavengeSpeedInBytesPerMillisecond() const;
+
+  // Compute the max mark-sweep speed in bytes/millisecond.
+  // Returns 0 if no events have been recorded.
+  intptr_t MarkCompactSpeedInBytesPerMillisecond() const;
 
  private:
   // Print one detailed trace line in name=value format.
@@ -318,6 +340,10 @@ class GCTracer BASE_EMBEDDED {
 
   // Cumulative duration of incremental marking steps since creation of tracer.
   double cumulative_incremental_marking_duration_;
+
+  // Cumulative duration of pure incremental marking steps since creation of
+  // tracer.
+  double cumulative_pure_incremental_marking_duration_;
 
   // Longest incremental marking step since start of marking.
   double longest_incremental_marking_step_;

@@ -32,6 +32,12 @@ int isfinite(double value);
 namespace v8 {
 namespace internal {
 
+class PreParserTraits::Checkpoint
+    : public ParserBase<PreParserTraits>::CheckpointBase {
+ public:
+  explicit Checkpoint(ParserBase<PreParserTraits>* parser)
+      : ParserBase<PreParserTraits>::CheckpointBase(parser) {}
+};
 
 void PreParserTraits::ReportMessageAt(Scanner::Location location,
                                       const char* message,
@@ -72,6 +78,11 @@ PreParserIdentifier PreParserTraits::GetSymbol(Scanner* scanner) {
   if (scanner->UnescapedLiteralMatches("arguments", 9)) {
     return PreParserIdentifier::Arguments();
   }
+  return PreParserIdentifier::Default();
+}
+
+
+PreParserIdentifier PreParserTraits::GetNumberAsSymbol(Scanner* scanner) {
   return PreParserIdentifier::Default();
 }
 
@@ -653,8 +664,7 @@ PreParser::Statement PreParser::ParseWhileStatement(bool* ok) {
 
 bool PreParser::CheckInOrOf(bool accept_OF) {
   if (Check(Token::IN) ||
-      (allow_for_of() && accept_OF &&
-       CheckContextualKeyword(CStrVector("of")))) {
+      (accept_OF && CheckContextualKeyword(CStrVector("of")))) {
     return true;
   }
   return false;

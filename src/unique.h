@@ -138,6 +138,9 @@ template <class T>
 class PrintableUnique : public Unique<T> {
  public:
   // TODO(titzer): make private and introduce a uniqueness scope.
+  PrintableUnique() : string_("null") {}
+
+  // TODO(titzer): make private and introduce a uniqueness scope.
   explicit PrintableUnique(Zone* zone, Handle<T> handle) : Unique<T>(handle) {
     InitializeString(zone);
   }
@@ -174,7 +177,7 @@ class PrintableUnique : public Unique<T> {
     return PrintableUnique<T>(zone, reinterpret_cast<Address>(*handle), handle);
   }
 
-  const char* string() { return string_; }
+  const char* string() const { return string_; }
 
  private:
   const char* string_;

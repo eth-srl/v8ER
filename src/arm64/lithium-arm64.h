@@ -452,7 +452,7 @@ class LDrop V8_FINAL : public LTemplateInstruction<0, 0, 0> {
 
 class LDummy V8_FINAL : public LTemplateInstruction<1, 0, 0> {
  public:
-  explicit LDummy() { }
+  LDummy() {}
   DECLARE_CONCRETE_INSTRUCTION(Dummy, "dummy")
 };
 
@@ -943,7 +943,7 @@ class LCheckInstanceType V8_FINAL : public LTemplateInstruction<0, 1, 1> {
 
 class LCheckMaps V8_FINAL : public LTemplateInstruction<0, 1, 1> {
  public:
-  LCheckMaps(LOperand* value = NULL, LOperand* temp = NULL) {
+  explicit LCheckMaps(LOperand* value = NULL, LOperand* temp = NULL) {
     inputs_[0] = value;
     temps_[0] = temp;
   }
@@ -2733,19 +2733,17 @@ class LShiftI V8_FINAL : public LTemplateInstruction<1, 2, 0> {
 };
 
 
-class LShiftS V8_FINAL : public LTemplateInstruction<1, 2, 1> {
+class LShiftS V8_FINAL : public LTemplateInstruction<1, 2, 0> {
  public:
-  LShiftS(Token::Value op, LOperand* left, LOperand* right, LOperand* temp,
-          bool can_deopt) : op_(op), can_deopt_(can_deopt) {
+  LShiftS(Token::Value op, LOperand* left, LOperand* right, bool can_deopt)
+      : op_(op), can_deopt_(can_deopt) {
     inputs_[0] = left;
     inputs_[1] = right;
-    temps_[0] = temp;
   }
 
   Token::Value op() const { return op_; }
   LOperand* left() { return inputs_[0]; }
   LOperand* right() { return inputs_[1]; }
-  LOperand* temp() { return temps_[0]; }
   bool can_deopt() const { return can_deopt_; }
 
   DECLARE_CONCRETE_INSTRUCTION(ShiftS, "shift-s")

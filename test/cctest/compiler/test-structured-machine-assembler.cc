@@ -50,7 +50,7 @@ TEST(RunVariable) {
 
 
 TEST(RunSimpleIf) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   int32_t constant = 0xc4a3e3a6;
   {
@@ -66,7 +66,7 @@ TEST(RunSimpleIf) {
 
 
 TEST(RunSimpleIfVariable) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   int32_t constant = 0xdb6f20c2;
   Variable var = m.NewVariable(m.Int32Constant(constant));
@@ -83,7 +83,7 @@ TEST(RunSimpleIfVariable) {
 
 
 TEST(RunSimpleElse) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   int32_t constant = 0xfc5eadf4;
   {
@@ -99,7 +99,7 @@ TEST(RunSimpleElse) {
 
 
 TEST(RunSimpleIfElse) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   int32_t constant = 0xaa9c8cd3;
   {
@@ -116,7 +116,7 @@ TEST(RunSimpleIfElse) {
 
 
 TEST(RunSimpleIfElseVariable) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   int32_t constant = 0x67b6f39c;
   Variable var = m.NewVariable(m.Int32Constant(constant));
@@ -135,7 +135,7 @@ TEST(RunSimpleIfElseVariable) {
 
 
 TEST(RunSimpleIfNoThenElse) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   int32_t constant = 0xd5e550ed;
   {
@@ -150,7 +150,7 @@ TEST(RunSimpleIfNoThenElse) {
 
 
 TEST(RunSimpleConjunctionVariable) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   int32_t constant = 0xf8fb9ec6;
   Variable var = m.NewVariable(m.Int32Constant(constant));
@@ -171,7 +171,7 @@ TEST(RunSimpleConjunctionVariable) {
 
 
 TEST(RunSimpleDisjunctionVariable) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   int32_t constant = 0x118f6ffc;
   Variable var = m.NewVariable(m.Int32Constant(constant));
@@ -192,7 +192,7 @@ TEST(RunSimpleDisjunctionVariable) {
 
 
 TEST(RunIfElse) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   {
     IfBuilder cond(&m);
@@ -225,7 +225,7 @@ static IfBuilderBranchType all_branch_types[] = {
 
 static void RunIfBuilderDisjunction(size_t max, IfBuilderBranchType then_type,
                                     IfBuilderBranchType else_type) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   std::vector<int32_t> inputs = ValueHelper::int32_vector();
   std::vector<int32_t>::const_iterator i = inputs.begin();
@@ -279,8 +279,8 @@ static void RunIfBuilderDisjunction(size_t max, IfBuilderBranchType then_type,
 TEST(RunIfBuilderDisjunction) {
   size_t len = ValueHelper::int32_vector().size() - 1;
   size_t max = len > 10 ? 10 : len - 1;
-  for (size_t i = 0; i < ARRAY_SIZE(all_branch_types); i++) {
-    for (size_t j = 0; j < ARRAY_SIZE(all_branch_types); j++) {
+  for (size_t i = 0; i < arraysize(all_branch_types); i++) {
+    for (size_t j = 0; j < arraysize(all_branch_types); j++) {
       for (size_t size = 1; size < max; size++) {
         RunIfBuilderDisjunction(size, all_branch_types[i], all_branch_types[j]);
       }
@@ -292,7 +292,7 @@ TEST(RunIfBuilderDisjunction) {
 
 static void RunIfBuilderConjunction(size_t max, IfBuilderBranchType then_type,
                                     IfBuilderBranchType else_type) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   std::vector<int32_t> inputs = ValueHelper::int32_vector();
   std::vector<int32_t>::const_iterator i = inputs.begin();
@@ -345,8 +345,8 @@ static void RunIfBuilderConjunction(size_t max, IfBuilderBranchType then_type,
 TEST(RunIfBuilderConjunction) {
   size_t len = ValueHelper::int32_vector().size() - 1;
   size_t max = len > 10 ? 10 : len - 1;
-  for (size_t i = 0; i < ARRAY_SIZE(all_branch_types); i++) {
-    for (size_t j = 0; j < ARRAY_SIZE(all_branch_types); j++) {
+  for (size_t i = 0; i < arraysize(all_branch_types); i++) {
+    for (size_t j = 0; j < arraysize(all_branch_types); j++) {
       for (size_t size = 1; size < max; size++) {
         RunIfBuilderConjunction(size, all_branch_types[i], all_branch_types[j]);
       }
@@ -358,7 +358,7 @@ TEST(RunIfBuilderConjunction) {
 
 static void RunDisjunctionVariables(int disjunctions, bool explicit_then,
                                     bool explicit_else) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   int32_t constant = 0x65a09535;
 
@@ -412,7 +412,7 @@ TEST(RunDisjunctionVariables) {
 
 static void RunConjunctionVariables(int conjunctions, bool explicit_then,
                                     bool explicit_else) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   int32_t constant = 0x2c7f4b45;
   Node* cmp_val = m.Int32Constant(constant);
@@ -464,7 +464,7 @@ TEST(RunConjunctionVariables) {
 
 
 TEST(RunSimpleNestedIf) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32, kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32, kMachInt32);
   const size_t NUM_VALUES = 7;
   std::vector<int32_t> inputs = ValueHelper::int32_vector();
   CHECK(inputs.size() >= NUM_VALUES);
@@ -599,7 +599,7 @@ TEST(RunCountToTenAcc) {
 
 
 TEST(RunSimpleNestedLoop) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   Node* zero = m.Int32Constant(0);
   Node* one = m.Int32Constant(1);
@@ -640,7 +640,7 @@ TEST(RunSimpleNestedLoop) {
 
 
 TEST(RunFib) {
-  StructuredMachineAssemblerTester<int32_t> m(kMachineWord32);
+  StructuredMachineAssemblerTester<int32_t> m(kMachInt32);
 
   // Constants.
   Node* zero = m.Int32Constant(0);
@@ -683,7 +683,7 @@ TEST(RunFib) {
   m.Return(res.Get());
 
   int32_t values[] = {0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144};
-  for (size_t i = 0; i < ARRAY_SIZE(values); i++) {
+  for (size_t i = 0; i < arraysize(values); i++) {
     CHECK_EQ(values[i], m.Call(static_cast<int32_t>(i)));
   }
 }
@@ -878,9 +878,8 @@ TEST(RunSimpleExpressionVariable1) {
 class QuicksortHelper : public StructuredMachineAssemblerTester<int32_t> {
  public:
   QuicksortHelper()
-      : StructuredMachineAssemblerTester<int32_t>(
-            MachineOperatorBuilder::pointer_rep(), kMachineWord32,
-            MachineOperatorBuilder::pointer_rep(), kMachineWord32),
+      : StructuredMachineAssemblerTester<int32_t>(kMachPtr, kMachInt32,
+                                                  kMachPtr, kMachInt32),
         input_(NULL),
         stack_limit_(NULL),
         one_(Int32Constant(1)),
@@ -894,7 +893,7 @@ class QuicksortHelper : public StructuredMachineAssemblerTester<int32_t> {
     int32_t stack_space[20];
     // Do call.
     int32_t return_val = Call(input, input_length, stack_space,
-                              static_cast<int32_t>(ARRAY_SIZE(stack_space)));
+                              static_cast<int32_t>(arraysize(stack_space)));
     // Ran out of stack space.
     if (return_val != 0) return return_val;
     // Check sorted.
@@ -910,13 +909,13 @@ class QuicksortHelper : public StructuredMachineAssemblerTester<int32_t> {
   void Inc32(const Variable& var) { var.Set(Int32Add(var.Get(), one_)); }
   Node* Index(Node* index) { return Word32Shl(index, Int32Constant(2)); }
   Node* ArrayLoad(Node* index) {
-    return Load(kMachineWord32, input_, Index(index));
+    return Load(kMachInt32, input_, Index(index));
   }
   void Swap(Node* a_index, Node* b_index) {
     Node* a = ArrayLoad(a_index);
     Node* b = ArrayLoad(b_index);
-    Store(kMachineWord32, input_, Index(a_index), b);
-    Store(kMachineWord32, input_, Index(b_index), a);
+    Store(kMachInt32, input_, Index(a_index), b);
+    Store(kMachInt32, input_, Index(b_index), a);
   }
   void AddToCallStack(const Variable& fp, Node* left, Node* right) {
     {
@@ -925,8 +924,8 @@ class QuicksortHelper : public StructuredMachineAssemblerTester<int32_t> {
       cond.If(IntPtrLessThanOrEqual(fp.Get(), stack_limit_)).Then();
       Return(Int32Constant(-1));
     }
-    Store(kMachineWord32, fp.Get(), left_offset_, left);
-    Store(kMachineWord32, fp.Get(), right_offset_, right);
+    Store(kMachInt32, fp.Get(), left_offset_, left);
+    Store(kMachInt32, fp.Get(), right_offset_, right);
     fp.Set(IntPtrAdd(fp.Get(), ConvertInt32ToIntPtr(stack_frame_size_)));
   }
   void Build() {
@@ -960,8 +959,8 @@ class QuicksortHelper : public StructuredMachineAssemblerTester<int32_t> {
         cond.If(Int32LessThanOrEqual(Int32Sub(right.Get(), one_), left.Get()))
             .Then();
         fp.Set(IntPtrSub(fp.Get(), ConvertInt32ToIntPtr(stack_frame_size_)));
-        left.Set(Load(kMachineWord32, fp.Get(), left_offset_));
-        right.Set(Load(kMachineWord32, fp.Get(), right_offset_));
+        left.Set(Load(kMachInt32, fp.Get(), left_offset_));
+        right.Set(Load(kMachInt32, fp.Get(), right_offset_));
         outermost.Continue();
       }
       // Partition.
@@ -1018,7 +1017,7 @@ class QuicksortHelper : public StructuredMachineAssemblerTester<int32_t> {
 TEST(RunSimpleQuicksort) {
   QuicksortHelper m;
   int32_t inputs[] = {9, 7, 1, 8, 11};
-  CHECK_EQ(0, m.DoCall(inputs, ARRAY_SIZE(inputs)));
+  CHECK_EQ(0, m.DoCall(inputs, arraysize(inputs)));
 }
 
 

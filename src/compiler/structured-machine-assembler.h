@@ -63,7 +63,7 @@ class StructuredMachineAssembler
 
   StructuredMachineAssembler(
       Graph* graph, MachineCallDescriptorBuilder* call_descriptor_builder,
-      MachineRepresentation word = MachineOperatorBuilder::pointer_rep());
+      MachineType word = kMachPtr);
   virtual ~StructuredMachineAssembler() {}
 
   Isolate* isolate() const { return zone()->isolate(); }
@@ -76,7 +76,7 @@ class StructuredMachineAssembler
   int parameter_count() const {
     return call_descriptor_builder_->parameter_count();
   }
-  const MachineRepresentation* parameter_types() const {
+  const MachineType* parameter_types() const {
     return call_descriptor_builder_->parameter_types();
   }
 
@@ -101,8 +101,7 @@ class StructuredMachineAssembler
  private:
   bool ScheduleValid() { return schedule_ != NULL; }
 
-  typedef std::vector<Environment*, zone_allocator<Environment*> >
-      EnvironmentVector;
+  typedef ZoneVector<Environment*> EnvironmentVector;
 
   NodeVector* CurrentVars() { return &current_environment_->variables_; }
   Node*& VariableAt(Environment* environment, int offset);
@@ -123,10 +122,6 @@ class StructuredMachineAssembler
   Environment* CopyForLoopHeader(Environment* environment);
   void MergeBackEdgesToLoopHeader(Environment* header,
                                   EnvironmentVector* environments);
-
-  typedef std::vector<MachineRepresentation,
-                      zone_allocator<MachineRepresentation> >
-      RepresentationVector;
 
   Schedule* schedule_;
   MachineOperatorBuilder machine_;
@@ -215,12 +210,10 @@ class StructuredMachineAssembler::IfBuilder {
     int pending_else_size_;
   };
 
-  typedef std::vector<ExpressionState, zone_allocator<ExpressionState> >
-      ExpressionStates;
-  typedef std::vector<UnresolvedBranch*, zone_allocator<UnresolvedBranch*> >
-      PendingMergeStack;
+  typedef ZoneVector<ExpressionState> ExpressionStates;
+  typedef ZoneVector<UnresolvedBranch*> PendingMergeStack;
   struct IfClause;
-  typedef std::vector<IfClause*, zone_allocator<IfClause*> > IfClauses;
+  typedef ZoneVector<IfClause*> IfClauses;
 
   struct PendingMergeStackRange {
     PendingMergeStack* merge_stack_;

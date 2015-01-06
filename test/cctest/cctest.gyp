@@ -44,6 +44,7 @@
       ],
       'sources': [  ### gcmole(all) ###
         '<(generated_file)',
+        'compiler/c-signature.h',
         'compiler/codegen-tester.cc',
         'compiler/codegen-tester.h',
         'compiler/function-tester.h',
@@ -57,7 +58,6 @@
         'compiler/test-codegen-deopt.cc',
         'compiler/test-gap-resolver.cc',
         'compiler/test-graph-reducer.cc',
-        'compiler/test-instruction-selector.cc',
         'compiler/test-instruction.cc',
         'compiler/test-js-context-specialization.cc',
         'compiler/test-js-constant-cache.cc',
@@ -72,6 +72,7 @@
         'compiler/test-pipeline.cc',
         'compiler/test-representation-change.cc',
         'compiler/test-run-deopt.cc',
+        'compiler/test-run-inlining.cc',
         'compiler/test-run-intrinsics.cc',
         'compiler/test-run-jsbranches.cc',
         'compiler/test-run-jscalls.cc',
@@ -100,10 +101,8 @@
         'test-checks.cc',
         'test-circular-queue.cc',
         'test-compiler.cc',
-        'test-condition-variable.cc',
         'test-constantpool.cc',
         'test-conversions.cc',
-        'test-cpu.cc',
         'test-cpu-profiler.cc',
         'test-dataflow.cc',
         'test-date.cc',
@@ -137,19 +136,16 @@
         'test-microtask-delivery.cc',
         'test-mark-compact.cc',
         'test-mementos.cc',
-        'test-mutex.cc',
         'test-object-observe.cc',
         'test-ordered-hash-table.cc',
         'test-ostreams.cc',
         'test-parsing.cc',
         'test-platform.cc',
-        'test-platform-tls.cc',
         'test-profile-generator.cc',
         'test-random-number-generator.cc',
         'test-regexp.cc',
         'test-reloc-info.cc',
         'test-representation.cc',
-        'test-semaphore.cc',
         'test-serialize.cc',
         'test-spaces.cc',
         'test-strings.cc',
@@ -157,10 +153,10 @@
         'test-strtod.cc',
         'test-thread-termination.cc',
         'test-threads.cc',
-        'test-time.cc',
         'test-types.cc',
         'test-unbound-queue.cc',
         'test-unique.cc',
+        'test-unscopables-hidden-prototype.cc',
         'test-utils.cc',
         'test-version.cc',
         'test-weakmaps.cc',
@@ -171,11 +167,9 @@
       'conditions': [
         ['v8_target_arch=="ia32"', {
           'sources': [  ### gcmole(arch:ia32) ###
-            'compiler/test-instruction-selector-ia32.cc',
             'test-assembler-ia32.cc',
             'test-code-stubs.cc',
             'test-code-stubs-ia32.cc',
-            'test-cpu-ia32.cc',
             'test-disasm-ia32.cc',
             'test-macro-assembler-ia32.cc',
             'test-log-stack-tracer.cc'
@@ -186,7 +180,6 @@
             'test-assembler-x64.cc',
             'test-code-stubs.cc',
             'test-code-stubs-x64.cc',
-            'test-cpu-x64.cc',
             'test-disasm-x64.cc',
             'test-macro-assembler-x64.cc',
             'test-log-stack-tracer.cc'
@@ -194,7 +187,6 @@
         }],
         ['v8_target_arch=="arm"', {
           'sources': [  ### gcmole(arch:arm) ###
-            'compiler/test-instruction-selector-arm.cc',
             'test-assembler-arm.cc',
             'test-code-stubs.cc',
             'test-code-stubs-arm.cc',
@@ -237,7 +229,6 @@
             'test-assembler-x87.cc',
             'test-code-stubs.cc',
             'test-code-stubs-x87.cc',
-            'test-cpu-x87.cc',
             'test-disasm-x87.cc',
             'test-macro-assembler-x87.cc',
             'test-log-stack-tracer.cc'
@@ -246,11 +237,6 @@
         [ 'OS=="linux" or OS=="qnx"', {
           'sources': [
             'test-platform-linux.cc',
-          ],
-        }],
-        [ 'OS=="mac"', {
-          'sources': [
-            'test-platform-macos.cc',
           ],
         }],
         [ 'OS=="win"', {

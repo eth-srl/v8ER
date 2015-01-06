@@ -32,29 +32,29 @@ class GraphBuilder {
 
   Node* NewNode(Operator* op, Node* n1, Node* n2) {
     Node* buffer[] = {n1, n2};
-    return MakeNode(op, ARRAY_SIZE(buffer), buffer);
+    return MakeNode(op, arraysize(buffer), buffer);
   }
 
   Node* NewNode(Operator* op, Node* n1, Node* n2, Node* n3) {
     Node* buffer[] = {n1, n2, n3};
-    return MakeNode(op, ARRAY_SIZE(buffer), buffer);
+    return MakeNode(op, arraysize(buffer), buffer);
   }
 
   Node* NewNode(Operator* op, Node* n1, Node* n2, Node* n3, Node* n4) {
     Node* buffer[] = {n1, n2, n3, n4};
-    return MakeNode(op, ARRAY_SIZE(buffer), buffer);
+    return MakeNode(op, arraysize(buffer), buffer);
   }
 
   Node* NewNode(Operator* op, Node* n1, Node* n2, Node* n3, Node* n4,
                 Node* n5) {
     Node* buffer[] = {n1, n2, n3, n4, n5};
-    return MakeNode(op, ARRAY_SIZE(buffer), buffer);
+    return MakeNode(op, arraysize(buffer), buffer);
   }
 
   Node* NewNode(Operator* op, Node* n1, Node* n2, Node* n3, Node* n4, Node* n5,
                 Node* n6) {
     Node* nodes[] = {n1, n2, n3, n4, n5, n6};
-    return MakeNode(op, ARRAY_SIZE(nodes), nodes);
+    return MakeNode(op, arraysize(nodes), nodes);
   }
 
   Node* NewNode(Operator* op, int value_input_count, Node** value_inputs) {
@@ -109,7 +109,7 @@ class StructuredGraphBuilder : public GraphBuilder {
   virtual Node* MakeNode(Operator* op, int value_input_count,
                          Node** value_inputs);
 
-  Environment* environment_internal() const { return environment_; }
+  Environment* environment() const { return environment_; }
   void set_environment(Environment* env) { environment_ = env; }
 
   Node* current_context() const { return current_context_; }
@@ -134,12 +134,6 @@ class StructuredGraphBuilder : public GraphBuilder {
   // Support for control flow builders. The concrete type of the environment
   // depends on the graph builder, but environments themselves are not virtual.
   virtual Environment* CopyEnvironment(Environment* env);
-
-  // Helper when creating node that depends on control.
-  Node* GetControlDependency();
-
-  // Helper when creating node that updates control.
-  void UpdateControlDependency(Node* new_control);
 
   // Helper to indicate a node exits the function body.
   void UpdateControlDependencyToLeaveFunction(Node* exit);
