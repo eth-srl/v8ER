@@ -16,8 +16,7 @@ namespace compiler {
 
 class SimplifiedLowering {
  public:
-  explicit SimplifiedLowering(JSGraph* jsgraph)
-      : jsgraph_(jsgraph), machine_(jsgraph->zone()) {}
+  explicit SimplifiedLowering(JSGraph* jsgraph) : jsgraph_(jsgraph) {}
   virtual ~SimplifiedLowering() {}
 
   void LowerAllNodes();
@@ -27,16 +26,20 @@ class SimplifiedLowering {
   void DoStoreField(Node* node);
   void DoLoadElement(Node* node);
   void DoStoreElement(Node* node);
+  void DoStringAdd(Node* node);
+  void DoStringEqual(Node* node);
+  void DoStringLessThan(Node* node);
+  void DoStringLessThanOrEqual(Node* node);
 
  private:
   JSGraph* jsgraph_;
-  MachineOperatorBuilder machine_;
 
   Node* SmiTag(Node* node);
   Node* IsTagged(Node* node);
   Node* Untag(Node* node);
   Node* OffsetMinusTagConstant(int32_t offset);
   Node* ComputeIndex(const ElementAccess& access, Node* index);
+  Node* StringComparison(Node* node, bool requires_ordering);
 
   friend class RepresentationSelector;
 
@@ -44,7 +47,7 @@ class SimplifiedLowering {
   JSGraph* jsgraph() { return jsgraph_; }
   Graph* graph() { return jsgraph()->graph(); }
   CommonOperatorBuilder* common() { return jsgraph()->common(); }
-  MachineOperatorBuilder* machine() { return &machine_; }
+  MachineOperatorBuilder* machine() { return jsgraph()->machine(); }
 };
 
 }  // namespace compiler

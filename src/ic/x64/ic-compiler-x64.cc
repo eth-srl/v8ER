@@ -6,6 +6,7 @@
 
 #if V8_TARGET_ARCH_X64
 
+#include "src/ic/ic.h"
 #include "src/ic/ic-compiler.h"
 
 namespace v8 {
@@ -17,14 +18,14 @@ namespace internal {
 void PropertyICCompiler::GenerateRuntimeSetProperty(MacroAssembler* masm,
                                                     StrictMode strict_mode) {
   // Return address is on the stack.
-  DCHECK(!rbx.is(StoreConvention::ReceiverRegister()) &&
-         !rbx.is(StoreConvention::NameRegister()) &&
-         !rbx.is(StoreConvention::ValueRegister()));
+  DCHECK(!rbx.is(StoreDescriptor::ReceiverRegister()) &&
+         !rbx.is(StoreDescriptor::NameRegister()) &&
+         !rbx.is(StoreDescriptor::ValueRegister()));
 
   __ PopReturnAddressTo(rbx);
-  __ Push(StoreConvention::ReceiverRegister());
-  __ Push(StoreConvention::NameRegister());
-  __ Push(StoreConvention::ValueRegister());
+  __ Push(StoreDescriptor::ReceiverRegister());
+  __ Push(StoreDescriptor::NameRegister());
+  __ Push(StoreDescriptor::ValueRegister());
   __ Push(Smi::FromInt(strict_mode));
   __ PushReturnAddressFrom(rbx);
 
@@ -81,7 +82,11 @@ Handle<Code> PropertyICCompiler::CompilePolymorphic(TypeHandleList* types,
     // In case we are compiling an IC for dictionary loads and stores, just
     // check whether the name is unique.
     if (name.is_identical_to(isolate()->factory()->normal_ic_symbol())) {
-      __ JumpIfNotUniqueName(this->name(), &miss);
+      Register tmp = scratch1();
+      __ JumpIfSmi(this->name(), &miss);
+      __ movp(tmp, FieldOperand(this->name(), HeapObject::kMapOffset));
+      __ movzxbp(tmp, FieldOperand(tmp, Map::kInstanceTypeOffset));
+      __ JumpIfNotUniqueNameInstanceType(tmp, &miss);
     } else {
       __ Cmp(this->name(), name);
       __ j(not_equal, &miss);
@@ -95,7 +100,7 @@ Handle<Code> PropertyICCompiler::CompilePolymorphic(TypeHandleList* types,
   // Polymorphic keyed stores may use the map register
   Register map_reg = scratch1();
   DCHECK(kind() != Code::KEYED_STORE_IC ||
-         map_reg.is(StoreConvention::MapRegister()));
+         map_reg.is(ElementTransitionAndStoreDescriptor::MapRegister()));
   __ movp(map_reg, FieldOperand(receiver(), HeapObject::kMapOffset));
   int receiver_count = types->length();
   int number_of_handled_maps = 0;

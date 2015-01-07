@@ -276,54 +276,10 @@ void NamedLoadHandlerCompiler::GenerateLoadViaGetter(
 }
 
 
-void ElementHandlerCompiler::GenerateLoadDictionaryElement(
-    MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- rcx    : key
-  //  -- rdx    : receiver
-  //  -- rsp[0] : return address
-  // -----------------------------------
-  DCHECK(rdx.is(LoadConvention::ReceiverRegister()));
-  DCHECK(rcx.is(LoadConvention::NameRegister()));
-  Label slow, miss;
-
-  // This stub is meant to be tail-jumped to, the receiver must already
-  // have been verified by the caller to not be a smi.
-
-  __ JumpIfNotSmi(rcx, &miss);
-  __ SmiToInteger32(rbx, rcx);
-  __ movp(rax, FieldOperand(rdx, JSObject::kElementsOffset));
-
-  // Check whether the elements is a number dictionary.
-  // rdx: receiver
-  // rcx: key
-  // rbx: key as untagged int32
-  // rax: elements
-  __ LoadFromNumberDictionary(&slow, rax, rcx, rbx, r9, rdi, rax);
-  __ ret(0);
-
-  __ bind(&slow);
-  // ----------- S t a t e -------------
-  //  -- rcx    : key
-  //  -- rdx    : receiver
-  //  -- rsp[0] : return address
-  // -----------------------------------
-  TailCallBuiltin(masm, Builtins::kKeyedLoadIC_Slow);
-
-  __ bind(&miss);
-  // ----------- S t a t e -------------
-  //  -- rcx    : key
-  //  -- rdx    : receiver
-  //  -- rsp[0] : return address
-  // -----------------------------------
-  TailCallBuiltin(masm, Builtins::kKeyedLoadIC_Miss);
-}
-
-
 static void StoreIC_PushArgs(MacroAssembler* masm) {
-  Register receiver = StoreConvention::ReceiverRegister();
-  Register name = StoreConvention::NameRegister();
-  Register value = StoreConvention::ValueRegister();
+  Register receiver = StoreDescriptor::ReceiverRegister();
+  Register name = StoreDescriptor::NameRegister();
+  Register value = StoreDescriptor::ValueRegister();
 
   DCHECK(!rbx.is(receiver) && !rbx.is(name) && !rbx.is(value));
 
@@ -704,7 +660,7 @@ void NamedLoadHandlerCompiler::GenerateLoadCallback(
   __ PushReturnAddressFrom(scratch4());
 
   // Abi for CallApiGetter
-  Register api_function_address = r8;
+  Register api_function_address = ApiGetterDescriptor::function_address();
   Address getter_address = v8::ToCData<Address>(callback->getter());
   __ Move(api_function_address, getter_address, RelocInfo::EXTERNAL_REFERENCE);
 
@@ -738,8 +694,7 @@ void NamedLoadHandlerCompiler::GenerateLoadInterceptorWithFollowup(
       !holder().is_identical_to(it->GetHolder<JSObject>());
   bool must_preserve_receiver_reg =
       !receiver().is(holder_reg) &&
-      (it->property_kind() == LookupIterator::ACCESSOR ||
-       must_perform_prototype_check);
+      (it->state() == LookupIterator::ACCESSOR || must_perform_prototype_check);
 
   // Save necessary data before invoking an interceptor.
   // Requires a frame to make GC aware of pushed pointers.
@@ -839,7 +794,7 @@ Handle<Code> NamedStoreHandlerCompiler::CompileStoreInterceptor(
 
 
 Register NamedStoreHandlerCompiler::value() {
-  return StoreConvention::ValueRegister();
+  return StoreDescriptor::ValueRegister();
 }
 
 
@@ -849,7 +804,7 @@ Handle<Code> NamedLoadHandlerCompiler::CompileLoadGlobal(
   FrontendHeader(receiver(), name, &miss);
 
   // Get the value from the cell.
-  Register result = StoreConvention::ValueRegister();
+  Register result = StoreDescriptor::ValueRegister();
   __ Move(result, cell);
   __ movp(result, FieldOperand(result, PropertyCell::kValueOffset));
 

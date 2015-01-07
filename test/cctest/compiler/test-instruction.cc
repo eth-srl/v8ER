@@ -9,6 +9,7 @@
 #include "src/compiler/common-operator.h"
 #include "src/compiler/graph.h"
 #include "src/compiler/instruction.h"
+#include "src/compiler/linkage.h"
 #include "src/compiler/machine-operator.h"
 #include "src/compiler/node.h"
 #include "src/compiler/operator.h"
@@ -32,7 +33,6 @@ class InstructionTester : public HandleAndZoneScope {
         info(static_cast<HydrogenCodeStub*>(NULL), main_isolate()),
         linkage(&info),
         common(zone()),
-        machine(zone()),
         code(NULL) {}
 
   ~InstructionTester() { delete code; }

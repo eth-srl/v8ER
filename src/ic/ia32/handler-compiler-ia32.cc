@@ -8,57 +8,12 @@
 
 #include "src/ic/call-optimization.h"
 #include "src/ic/handler-compiler.h"
+#include "src/ic/ic.h"
 
 namespace v8 {
 namespace internal {
 
 #define __ ACCESS_MASM(masm)
-
-
-void ElementHandlerCompiler::GenerateLoadDictionaryElement(
-    MacroAssembler* masm) {
-  // ----------- S t a t e -------------
-  //  -- ecx    : key
-  //  -- edx    : receiver
-  //  -- esp[0] : return address
-  // -----------------------------------
-  DCHECK(edx.is(LoadConvention::ReceiverRegister()));
-  DCHECK(ecx.is(LoadConvention::NameRegister()));
-  Label slow, miss;
-
-  // This stub is meant to be tail-jumped to, the receiver must already
-  // have been verified by the caller to not be a smi.
-  __ JumpIfNotSmi(ecx, &miss);
-  __ mov(ebx, ecx);
-  __ SmiUntag(ebx);
-  __ mov(eax, FieldOperand(edx, JSObject::kElementsOffset));
-
-  // Push receiver on the stack to free up a register for the dictionary
-  // probing.
-  __ push(edx);
-  __ LoadFromNumberDictionary(&slow, eax, ecx, ebx, edx, edi, eax);
-  // Pop receiver before returning.
-  __ pop(edx);
-  __ ret(0);
-
-  __ bind(&slow);
-  __ pop(edx);
-
-  // ----------- S t a t e -------------
-  //  -- ecx    : key
-  //  -- edx    : receiver
-  //  -- esp[0] : return address
-  // -----------------------------------
-  TailCallBuiltin(masm, Builtins::kKeyedLoadIC_Slow);
-
-  __ bind(&miss);
-  // ----------- S t a t e -------------
-  //  -- ecx    : key
-  //  -- edx    : receiver
-  //  -- esp[0] : return address
-  // -----------------------------------
-  TailCallBuiltin(masm, Builtins::kKeyedLoadIC_Miss);
-}
 
 
 void NamedLoadHandlerCompiler::GenerateLoadViaGetter(
@@ -327,9 +282,9 @@ static void CompileCallLoadPropertyWithInterceptor(
 
 
 static void StoreIC_PushArgs(MacroAssembler* masm) {
-  Register receiver = StoreConvention::ReceiverRegister();
-  Register name = StoreConvention::NameRegister();
-  Register value = StoreConvention::ValueRegister();
+  Register receiver = StoreDescriptor::ReceiverRegister();
+  Register name = StoreDescriptor::NameRegister();
+  Register value = StoreDescriptor::ValueRegister();
 
   DCHECK(!ebx.is(receiver) && !ebx.is(name) && !ebx.is(value));
 
@@ -711,7 +666,7 @@ void NamedLoadHandlerCompiler::GenerateLoadCallback(
   __ push(scratch3());  // Restore return address.
 
   // Abi for CallApiGetter
-  Register getter_address = edx;
+  Register getter_address = ApiGetterDescriptor::function_address();
   Address function_address = v8::ToCData<Address>(callback->getter());
   __ mov(getter_address, Immediate(function_address));
 
@@ -745,8 +700,7 @@ void NamedLoadHandlerCompiler::GenerateLoadInterceptorWithFollowup(
       !holder().is_identical_to(it->GetHolder<JSObject>());
   bool must_preserve_receiver_reg =
       !receiver().is(holder_reg) &&
-      (it->property_kind() == LookupIterator::ACCESSOR ||
-       must_perform_prototype_check);
+      (it->state() == LookupIterator::ACCESSOR || must_perform_prototype_check);
 
   // Save necessary data before invoking an interceptor.
   // Requires a frame to make GC aware of pushed pointers.
@@ -777,9 +731,9 @@ void NamedLoadHandlerCompiler::GenerateLoadInterceptorWithFollowup(
     // Clobber registers when generating debug-code to provoke errors.
     __ bind(&interceptor_failed);
     if (FLAG_debug_code) {
-      __ mov(receiver(), Immediate(BitCast<int32_t>(kZapValue)));
-      __ mov(holder_reg, Immediate(BitCast<int32_t>(kZapValue)));
-      __ mov(this->name(), Immediate(BitCast<int32_t>(kZapValue)));
+      __ mov(receiver(), Immediate(bit_cast<int32_t>(kZapValue)));
+      __ mov(holder_reg, Immediate(bit_cast<int32_t>(kZapValue)));
+      __ mov(this->name(), Immediate(bit_cast<int32_t>(kZapValue)));
     }
 
     __ pop(this->name());
@@ -853,7 +807,7 @@ Handle<Code> NamedStoreHandlerCompiler::CompileStoreInterceptor(
 
 
 Register NamedStoreHandlerCompiler::value() {
-  return StoreConvention::ValueRegister();
+  return StoreDescriptor::ValueRegister();
 }
 
 
@@ -863,7 +817,7 @@ Handle<Code> NamedLoadHandlerCompiler::CompileLoadGlobal(
 
   FrontendHeader(receiver(), name, &miss);
   // Get the value from the cell.
-  Register result = StoreConvention::ValueRegister();
+  Register result = StoreDescriptor::ValueRegister();
   if (masm()->serializer_enabled()) {
     __ mov(result, Immediate(cell));
     __ mov(result, FieldOperand(result, PropertyCell::kValueOffset));

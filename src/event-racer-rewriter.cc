@@ -52,7 +52,7 @@ FunctionLiteral *EventRacerRewriter::make_fn(Scope *scope,
     FunctionLiteral::ANONYMOUS_EXPRESSION,
     FunctionLiteral::kIsFunction,
     FunctionLiteral::kIsParenthesized,
-    FunctionLiteral::kNormalFunction,
+    FunctionKind::kNormalFunction,
     pos);
   fn->set_next_ast_node_id(ast_node_id);
   return fn;
@@ -1263,7 +1263,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
 }
 
 Yield* EventRacerRewriter::doVisit(Yield *op) {
-  if (op->yield_kind() == Yield::SUSPEND || op->yield_kind() == Yield::FINAL)
+  if (op->yield_kind() == Yield::kSuspend || op->yield_kind() == Yield::kFinal)
     rewrite(this, op->expression_);
   return op;
 }
@@ -1663,6 +1663,16 @@ void AstSlotCounter::VisitFunctionLiteral(FunctionLiteral *fn) {
   fn->set_ast_properties(&props);
 
   end_function();
+}
+
+void AstSlotCounter::VisitClassLiteral(ClassLiteral *cls) {
+  add_node();
+  traverse(this, cls->constructor());
+  if (cls->properties()) {
+    ZoneList<ClassLiteral::Property *> &ps = *cls->properties();
+    for (int i = 0; i < ps.length(); ++i)
+      traverse(this, ps[i]->value());
+  }
 }
 
 AstSlotCounter::FunctionState AstSlotCounter::FunctionState::guard;

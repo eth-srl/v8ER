@@ -5,7 +5,9 @@
 #ifndef V8_COMPILER_MACHINE_TYPE_H_
 #define V8_COMPILER_MACHINE_TYPE_H_
 
+#include "src/base/bits.h"
 #include "src/globals.h"
+#include "src/zone.h"
 
 namespace v8 {
 namespace internal {
@@ -34,7 +36,22 @@ enum MachineType {
   kTypeInt64 = 1 << 11,
   kTypeUint64 = 1 << 12,
   kTypeNumber = 1 << 13,
-  kTypeAny = 1 << 14
+  kTypeAny = 1 << 14,
+
+  // Machine types.
+  kMachNone = 0,
+  kMachFloat32 = kRepFloat32 | kTypeNumber,
+  kMachFloat64 = kRepFloat64 | kTypeNumber,
+  kMachInt8 = kRepWord8 | kTypeInt32,
+  kMachUint8 = kRepWord8 | kTypeUint32,
+  kMachInt16 = kRepWord16 | kTypeInt32,
+  kMachUint16 = kRepWord16 | kTypeUint32,
+  kMachInt32 = kRepWord32 | kTypeInt32,
+  kMachUint32 = kRepWord32 | kTypeUint32,
+  kMachInt64 = kRepWord64 | kTypeInt64,
+  kMachUint64 = kRepWord64 | kTypeUint64,
+  kMachPtr = (kPointerSize == 4) ? kRepWord32 : kRepWord64,
+  kMachAnyTagged = kRepTagged | kTypeAny
 };
 
 OStream& operator<<(OStream& os, const MachineType& type);
@@ -49,30 +66,6 @@ const MachineTypeUnion kTypeMask = kTypeBool | kTypeInt32 | kTypeUint32 |
                                    kTypeInt64 | kTypeUint64 | kTypeNumber |
                                    kTypeAny;
 
-const MachineType kMachNone = static_cast<MachineType>(0);
-const MachineType kMachFloat32 =
-    static_cast<MachineType>(kRepFloat32 | kTypeNumber);
-const MachineType kMachFloat64 =
-    static_cast<MachineType>(kRepFloat64 | kTypeNumber);
-const MachineType kMachInt8 = static_cast<MachineType>(kRepWord8 | kTypeInt32);
-const MachineType kMachUint8 =
-    static_cast<MachineType>(kRepWord8 | kTypeUint32);
-const MachineType kMachInt16 =
-    static_cast<MachineType>(kRepWord16 | kTypeInt32);
-const MachineType kMachUint16 =
-    static_cast<MachineType>(kRepWord16 | kTypeUint32);
-const MachineType kMachInt32 =
-    static_cast<MachineType>(kRepWord32 | kTypeInt32);
-const MachineType kMachUint32 =
-    static_cast<MachineType>(kRepWord32 | kTypeUint32);
-const MachineType kMachInt64 =
-    static_cast<MachineType>(kRepWord64 | kTypeInt64);
-const MachineType kMachUint64 =
-    static_cast<MachineType>(kRepWord64 | kTypeUint64);
-const MachineType kMachPtr = kPointerSize == 4 ? kRepWord32 : kRepWord64;
-const MachineType kMachAnyTagged =
-    static_cast<MachineType>(kRepTagged | kTypeAny);
-
 // Gets only the type of the given type.
 inline MachineType TypeOf(MachineType machine_type) {
   int result = machine_type & kTypeMask;
@@ -82,7 +75,7 @@ inline MachineType TypeOf(MachineType machine_type) {
 // Gets only the representation of the given type.
 inline MachineType RepresentationOf(MachineType machine_type) {
   int result = machine_type & kRepMask;
-  CHECK(IsPowerOf2(result));
+  CHECK(base::bits::IsPowerOfTwo32(result));
   return static_cast<MachineType>(result);
 }
 
@@ -108,32 +101,71 @@ inline int ElementSizeOf(MachineType machine_type) {
   }
 }
 
-// Describes the inputs and outputs of a function or call in terms of machine
-// types.
-class MachineSignature {
+// Describes the inputs and outputs of a function or call.
+template <typename T>
+class Signature : public ZoneObject {
  public:
-  MachineSignature(uint8_t return_count, uint16_t param_count,
-                   MachineType* reps)
-      : return_count_(return_count), param_count_(param_count), reps_(reps) {}
+  Signature(size_t return_count, size_t parameter_count, T* reps)
+      : return_count_(return_count),
+        parameter_count_(parameter_count),
+        reps_(reps) {}
 
-  int GetReturnCount() const { return return_count_; }
-  int GetParamCount() const { return param_count_; }
+  size_t return_count() const { return return_count_; }
+  size_t parameter_count() const { return parameter_count_; }
 
-  MachineType GetParameterType(int index) const {
-    DCHECK(index >= 0 && index < param_count_);
+  T GetParam(size_t index) const {
+    DCHECK(index < parameter_count_);
     return reps_[return_count_ + index];
   }
 
-  MachineType GetReturnType(int index = 0) const {
-    DCHECK(index >= 0 && index < return_count_);
+  T GetReturn(size_t index = 0) const {
+    DCHECK(index < return_count_);
     return reps_[index];
   }
 
+  // For incrementally building signatures.
+  class Builder {
+   public:
+    Builder(Zone* zone, size_t return_count, size_t parameter_count)
+        : return_count_(return_count),
+          parameter_count_(parameter_count),
+          zone_(zone),
+          rcursor_(0),
+          pcursor_(0),
+          buffer_(zone->NewArray<T>(
+              static_cast<int>(return_count + parameter_count))) {}
+
+    const size_t return_count_;
+    const size_t parameter_count_;
+
+    void AddReturn(T val) {
+      DCHECK(rcursor_ < return_count_);
+      buffer_[rcursor_++] = val;
+    }
+    void AddParam(T val) {
+      DCHECK(pcursor_ < parameter_count_);
+      buffer_[return_count_ + pcursor_++] = val;
+    }
+    Signature<T>* Build() {
+      DCHECK(rcursor_ == return_count_);
+      DCHECK(pcursor_ == parameter_count_);
+      return new (zone_) Signature<T>(return_count_, parameter_count_, buffer_);
+    }
+
+   private:
+    Zone* zone_;
+    size_t rcursor_;
+    size_t pcursor_;
+    T* buffer_;
+  };
+
  protected:
-  uint8_t return_count_;
-  uint16_t param_count_;
-  MachineType* reps_;
+  size_t return_count_;
+  size_t parameter_count_;
+  T* reps_;
 };
+
+typedef Signature<MachineType> MachineSignature;
 }  // namespace compiler
 }  // namespace internal
 }  // namespace v8

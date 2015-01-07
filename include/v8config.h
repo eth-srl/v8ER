@@ -179,6 +179,8 @@
 //  V8_HAS_BUILTIN_CTZ                  - __builtin_ctz() supported
 //  V8_HAS_BUILTIN_EXPECT               - __builtin_expect() supported
 //  V8_HAS_BUILTIN_POPCOUNT             - __builtin_popcount() supported
+//  V8_HAS_BUILTIN_SADD_OVERFLOW        - __builtin_sadd_overflow() supported
+//  V8_HAS_BUILTIN_SSUB_OVERFLOW        - __builtin_ssub_overflow() supported
 //  V8_HAS_DECLSPEC_ALIGN               - __declspec(align(n)) supported
 //  V8_HAS_DECLSPEC_DEPRECATED          - __declspec(deprecated) supported
 //  V8_HAS_DECLSPEC_NOINLINE            - __declspec(noinline) supported
@@ -213,6 +215,8 @@
 # define V8_HAS_BUILTIN_CTZ (__has_builtin(__builtin_ctz))
 # define V8_HAS_BUILTIN_EXPECT (__has_builtin(__builtin_expect))
 # define V8_HAS_BUILTIN_POPCOUNT (__has_builtin(__builtin_popcount))
+# define V8_HAS_BUILTIN_SADD_OVERFLOW (__has_builtin(__builtin_sadd_overflow))
+# define V8_HAS_BUILTIN_SSUB_OVERFLOW (__has_builtin(__builtin_ssub_overflow))
 
 # define V8_HAS_CXX11_ALIGNAS (__has_feature(cxx_alignas))
 # define V8_HAS_CXX11_STATIC_ASSERT (__has_feature(cxx_static_assert))
@@ -330,24 +334,6 @@ declarator __attribute__((deprecated))
 #endif
 
 
-// A macro to mark variables or types as unused, avoiding compiler warnings.
-#if V8_HAS_ATTRIBUTE_UNUSED
-# define V8_UNUSED __attribute__((unused))
-#else
-# define V8_UNUSED
-#endif
-
-
-// Annotate a function indicating the caller must examine the return value.
-// Use like:
-//   int foo() V8_WARN_UNUSED_RESULT;
-#if V8_HAS_ATTRIBUTE_WARN_UNUSED_RESULT
-# define V8_WARN_UNUSED_RESULT __attribute__((warn_unused_result))
-#else
-# define V8_WARN_UNUSED_RESULT /* NOT SUPPORTED */
-#endif
-
-
 // A macro to provide the compiler with branch prediction information.
 #if V8_HAS_BUILTIN_EXPECT
 # define V8_UNLIKELY(condition) (__builtin_expect(!!(condition), 0))
@@ -375,33 +361,6 @@ declarator __attribute__((deprecated))
 # define V8_DELETE = delete
 #else
 # define V8_DELETE /* NOT SUPPORTED */
-#endif
-
-
-// Annotate a virtual method indicating it must be overriding a virtual
-// method in the parent class.
-// Use like:
-//   virtual void bar() V8_OVERRIDE;
-#if V8_HAS_CXX11_OVERRIDE
-# define V8_OVERRIDE override
-#else
-# define V8_OVERRIDE /* NOT SUPPORTED */
-#endif
-
-
-// Annotate a virtual method indicating that subclasses must not override it,
-// or annotate a class to indicate that it cannot be subclassed.
-// Use like:
-//   class B V8_FINAL : public A {};
-//   virtual void bar() V8_FINAL;
-#if V8_HAS_CXX11_FINAL
-# define V8_FINAL final
-#elif V8_HAS___FINAL
-# define V8_FINAL __final
-#elif V8_HAS_SEALED
-# define V8_FINAL sealed
-#else
-# define V8_FINAL /* NOT SUPPORTED */
 #endif
 
 

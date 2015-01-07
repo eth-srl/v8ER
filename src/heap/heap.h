@@ -74,34 +74,34 @@ namespace internal {
   V(Smi, hash_seed, HashSeed)                                                  \
   V(Map, symbol_map, SymbolMap)                                                \
   V(Map, string_map, StringMap)                                                \
-  V(Map, ascii_string_map, AsciiStringMap)                                     \
+  V(Map, one_byte_string_map, OneByteStringMap)                                \
   V(Map, cons_string_map, ConsStringMap)                                       \
-  V(Map, cons_ascii_string_map, ConsAsciiStringMap)                            \
+  V(Map, cons_one_byte_string_map, ConsOneByteStringMap)                       \
   V(Map, sliced_string_map, SlicedStringMap)                                   \
-  V(Map, sliced_ascii_string_map, SlicedAsciiStringMap)                        \
+  V(Map, sliced_one_byte_string_map, SlicedOneByteStringMap)                   \
   V(Map, external_string_map, ExternalStringMap)                               \
   V(Map, external_string_with_one_byte_data_map,                               \
     ExternalStringWithOneByteDataMap)                                          \
-  V(Map, external_ascii_string_map, ExternalAsciiStringMap)                    \
+  V(Map, external_one_byte_string_map, ExternalOneByteStringMap)               \
   V(Map, short_external_string_map, ShortExternalStringMap)                    \
   V(Map, short_external_string_with_one_byte_data_map,                         \
     ShortExternalStringWithOneByteDataMap)                                     \
   V(Map, internalized_string_map, InternalizedStringMap)                       \
-  V(Map, ascii_internalized_string_map, AsciiInternalizedStringMap)            \
+  V(Map, one_byte_internalized_string_map, OneByteInternalizedStringMap)       \
   V(Map, external_internalized_string_map, ExternalInternalizedStringMap)      \
   V(Map, external_internalized_string_with_one_byte_data_map,                  \
     ExternalInternalizedStringWithOneByteDataMap)                              \
-  V(Map, external_ascii_internalized_string_map,                               \
-    ExternalAsciiInternalizedStringMap)                                        \
+  V(Map, external_one_byte_internalized_string_map,                            \
+    ExternalOneByteInternalizedStringMap)                                      \
   V(Map, short_external_internalized_string_map,                               \
     ShortExternalInternalizedStringMap)                                        \
   V(Map, short_external_internalized_string_with_one_byte_data_map,            \
     ShortExternalInternalizedStringWithOneByteDataMap)                         \
-  V(Map, short_external_ascii_internalized_string_map,                         \
-    ShortExternalAsciiInternalizedStringMap)                                   \
-  V(Map, short_external_ascii_string_map, ShortExternalAsciiStringMap)         \
+  V(Map, short_external_one_byte_internalized_string_map,                      \
+    ShortExternalOneByteInternalizedStringMap)                                 \
+  V(Map, short_external_one_byte_string_map, ShortExternalOneByteStringMap)    \
   V(Map, undetectable_string_map, UndetectableStringMap)                       \
-  V(Map, undetectable_ascii_string_map, UndetectableAsciiStringMap)            \
+  V(Map, undetectable_one_byte_string_map, UndetectableOneByteStringMap)       \
   V(Map, external_int8_array_map, ExternalInt8ArrayMap)                        \
   V(Map, external_uint8_array_map, ExternalUint8ArrayMap)                      \
   V(Map, external_int16_array_map, ExternalInt16ArrayMap)                      \
@@ -287,6 +287,8 @@ namespace internal {
   V(global_string, "global")                                       \
   V(ignore_case_string, "ignoreCase")                              \
   V(multiline_string, "multiline")                                 \
+  V(sticky_string, "sticky")                                       \
+  V(harmony_regexps_string, "harmony_regexps")                     \
   V(input_string, "input")                                         \
   V(index_string, "index")                                         \
   V(last_index_string, "lastIndex")                                \
@@ -383,18 +385,11 @@ class PromotionQueue {
     emergency_stack_ = NULL;
   }
 
-  inline void ActivateGuardIfOnTheSamePage();
-
   Page* GetHeadPage() {
     return Page::FromAllocationTop(reinterpret_cast<Address>(rear_));
   }
 
   void SetNewLimit(Address limit) {
-    if (!guard_) {
-      return;
-    }
-
-    DCHECK(GetHeadPage() == Page::FromAllocationTop(limit));
     limit_ = reinterpret_cast<intptr_t*>(limit);
 
     if (limit_ <= rear_) {
@@ -450,8 +445,6 @@ class PromotionQueue {
   intptr_t* front_;
   intptr_t* rear_;
   intptr_t* limit_;
-
-  bool guard_;
 
   static const int kEntrySizeInWords = 2;
 
@@ -1703,9 +1696,9 @@ class Heap {
                                    Object* filler);
 
   // Allocate and partially initializes a String.  There are two String
-  // encodings: ASCII and two byte.  These functions allocate a string of the
-  // given length and set its map and length fields.  The characters of the
-  // string are uninitialized.
+  // encodings: one-byte and two-byte.  These functions allocate a string of
+  // the given length and set its map and length fields.  The characters of
+  // the string are uninitialized.
   MUST_USE_RESULT AllocationResult
       AllocateRawOneByteString(int length, PretenureFlag pretenure);
   MUST_USE_RESULT AllocationResult
@@ -1757,7 +1750,7 @@ class Heap {
 
 
   // Computes a single character string where the character has code.
-  // A cache is used for ASCII codes.
+  // A cache is used for one-byte (Latin1) codes.
   MUST_USE_RESULT AllocationResult
       LookupSingleCharacterStringFromCode(uint16_t code);
 
@@ -2028,6 +2021,7 @@ class Heap {
   int gc_callbacks_depth_;
 
   friend class AlwaysAllocateScope;
+  friend class Deserializer;
   friend class Factory;
   friend class GCCallbacksScope;
   friend class GCTracer;

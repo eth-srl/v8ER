@@ -12,25 +12,21 @@
 namespace v8 {
 namespace internal {
 
-class LookupIterator V8_FINAL BASE_EMBEDDED {
+class LookupIterator FINAL BASE_EMBEDDED {
  public:
   enum Configuration {
     // Configuration bits.
-    kAccessCheck = 1 << 0,
-    kHidden = 1 << 1,
-    kInterceptor = 1 << 2,
-    kPrototypeChain = 1 << 3,
+    kHidden = 1 << 0,
+    kInterceptor = 1 << 1,
+    kPrototypeChain = 1 << 2,
 
     // Convience combinations of bits.
-    OWN_PROPERTY = 0,
-    OWN_SKIP_INTERCEPTOR = kAccessCheck,
-    OWN = kAccessCheck | kInterceptor,
-    HIDDEN_PROPERTY = kHidden,
-    HIDDEN_SKIP_INTERCEPTOR = kAccessCheck | kHidden,
-    HIDDEN = kAccessCheck | kHidden | kInterceptor,
-    PROTOTYPE_CHAIN_PROPERTY = kHidden | kPrototypeChain,
-    PROTOTYPE_CHAIN_SKIP_INTERCEPTOR = kAccessCheck | kHidden | kPrototypeChain,
-    PROTOTYPE_CHAIN = kAccessCheck | kHidden | kPrototypeChain | kInterceptor
+    OWN_SKIP_INTERCEPTOR = 0,
+    OWN = kInterceptor,
+    HIDDEN_SKIP_INTERCEPTOR = kHidden,
+    HIDDEN = kHidden | kInterceptor,
+    PROTOTYPE_CHAIN_SKIP_INTERCEPTOR = kHidden | kPrototypeChain,
+    PROTOTYPE_CHAIN = kHidden | kPrototypeChain | kInterceptor
   };
 
   enum State {
@@ -38,37 +34,25 @@ class LookupIterator V8_FINAL BASE_EMBEDDED {
     INTERCEPTOR,
     JSPROXY,
     NOT_FOUND,
-    PROPERTY,
+    ACCESSOR,
+    DATA,
     TRANSITION,
     // Set state_ to BEFORE_PROPERTY to ensure that the next lookup will be a
     // PROPERTY lookup.
     BEFORE_PROPERTY = INTERCEPTOR
   };
 
-  enum PropertyKind {
-    DATA,
-    ACCESSOR
-  };
-
-  enum PropertyEncoding {
-    DICTIONARY,
-    DESCRIPTOR
-  };
-
   LookupIterator(Handle<Object> receiver, Handle<Name> name,
                  Configuration configuration = PROTOTYPE_CHAIN)
       : configuration_(ComputeConfiguration(configuration, name)),
         state_(NOT_FOUND),
-        property_kind_(DATA),
-        property_encoding_(DESCRIPTOR),
         property_details_(NONE, NORMAL, Representation::None()),
         isolate_(name->GetIsolate()),
         name_(name),
-        maybe_receiver_(receiver),
+        receiver_(receiver),
         number_(DescriptorArray::kNotFound) {
-    Handle<JSReceiver> root = GetRoot();
-    holder_map_ = handle(root->map(), isolate_);
-    maybe_holder_ = root;
+    holder_ = GetRoot();
+    holder_map_ = handle(holder_->map(), isolate_);
     Next();
   }
 
@@ -77,14 +61,12 @@ class LookupIterator V8_FINAL BASE_EMBEDDED {
                  Configuration configuration = PROTOTYPE_CHAIN)
       : configuration_(ComputeConfiguration(configuration, name)),
         state_(NOT_FOUND),
-        property_kind_(DATA),
-        property_encoding_(DESCRIPTOR),
         property_details_(NONE, NORMAL, Representation::None()),
         isolate_(name->GetIsolate()),
         name_(name),
         holder_map_(holder->map(), isolate_),
-        maybe_receiver_(receiver),
-        maybe_holder_(holder),
+        receiver_(receiver),
+        holder_(holder),
         number_(DescriptorArray::kNotFound) {
     Next();
   }
@@ -101,11 +83,9 @@ class LookupIterator V8_FINAL BASE_EMBEDDED {
   }
 
   Factory* factory() const { return isolate_->factory(); }
-  Handle<Object> GetReceiver() const {
-    return maybe_receiver_.ToHandleChecked();
-  }
+  Handle<Object> GetReceiver() const { return receiver_; }
   Handle<JSObject> GetStoreTarget() const;
-  Handle<Map> holder_map() const { return holder_map_; }
+  bool is_dictionary_holder() const { return holder_map_->is_dictionary_map(); }
   Handle<Map> transition_map() const {
     DCHECK_EQ(TRANSITION, state_);
     return transition_map_;
@@ -113,7 +93,7 @@ class LookupIterator V8_FINAL BASE_EMBEDDED {
   template <class T>
   Handle<T> GetHolder() const {
     DCHECK(IsFound());
-    return Handle<T>::cast(maybe_holder_.ToHandleChecked());
+    return Handle<T>::cast(holder_);
   }
   Handle<JSReceiver> GetRoot() const;
   bool HolderIsReceiverOrHiddenPrototype() const;
@@ -122,10 +102,6 @@ class LookupIterator V8_FINAL BASE_EMBEDDED {
   bool HasAccess(v8::AccessType access_type) const;
 
   /* PROPERTY */
-  // HasProperty needs to be called before any of the other PROPERTY methods
-  // below can be used. It ensures that we are able to provide a definite
-  // answer, and loads extra information about the property.
-  bool HasProperty();
   void PrepareForDataProperty(Handle<Object> value);
   void PrepareTransitionToDataProperty(Handle<Object> value,
                                        PropertyAttributes attributes,
@@ -135,7 +111,6 @@ class LookupIterator V8_FINAL BASE_EMBEDDED {
         state_ == TRANSITION && transition_map()->GetBackPointer()->IsMap();
     if (cacheable) {
       property_details_ = transition_map_->GetLastDescriptorDetails();
-      LoadPropertyKind();
       has_property_ = true;
     }
     return cacheable;
@@ -146,14 +121,6 @@ class LookupIterator V8_FINAL BASE_EMBEDDED {
   void TransitionToAccessorProperty(AccessorComponent component,
                                     Handle<Object> accessor,
                                     PropertyAttributes attributes);
-  PropertyKind property_kind() const {
-    DCHECK(has_property_);
-    return property_kind_;
-  }
-  PropertyEncoding property_encoding() const {
-    DCHECK(has_property_);
-    return property_encoding_;
-  }
   PropertyDetails property_details() const {
     DCHECK(has_property_);
     return property_details_;
@@ -177,23 +144,12 @@ class LookupIterator V8_FINAL BASE_EMBEDDED {
   Handle<Map> GetReceiverMap() const;
 
   MUST_USE_RESULT inline JSReceiver* NextHolder(Map* map);
-  inline State LookupInHolder(Map* map);
+  inline State LookupInHolder(Map* map, JSReceiver* holder);
   Handle<Object> FetchValue() const;
   void ReloadPropertyInformation();
-  void LoadPropertyKind();
 
   bool IsBootstrapping() const;
 
-  // Methods that fetch data from the holder ensure they always have a holder.
-  // This means the receiver needs to be present as opposed to just the receiver
-  // map. Other objects in the prototype chain are transitively guaranteed to be
-  // present via the receiver map.
-  bool is_guaranteed_to_have_holder() const {
-    return !maybe_receiver_.is_null();
-  }
-  bool check_access_check() const {
-    return (configuration_ & kAccessCheck) != 0;
-  }
   bool check_hidden() const { return (configuration_ & kHidden) != 0; }
   bool check_interceptor() const {
     return !IsBootstrapping() && (configuration_ & kInterceptor) != 0;
@@ -203,12 +159,12 @@ class LookupIterator V8_FINAL BASE_EMBEDDED {
   }
   int descriptor_number() const {
     DCHECK(has_property_);
-    DCHECK_EQ(DESCRIPTOR, property_encoding_);
+    DCHECK(!holder_map_->is_dictionary_map());
     return number_;
   }
   int dictionary_entry() const {
     DCHECK(has_property_);
-    DCHECK_EQ(DICTIONARY, property_encoding_);
+    DCHECK(holder_map_->is_dictionary_map());
     return number_;
   }
 
@@ -226,15 +182,13 @@ class LookupIterator V8_FINAL BASE_EMBEDDED {
   Configuration configuration_;
   State state_;
   bool has_property_;
-  PropertyKind property_kind_;
-  PropertyEncoding property_encoding_;
   PropertyDetails property_details_;
   Isolate* isolate_;
   Handle<Name> name_;
   Handle<Map> holder_map_;
   Handle<Map> transition_map_;
-  MaybeHandle<Object> maybe_receiver_;
-  MaybeHandle<JSReceiver> maybe_holder_;
+  Handle<Object> receiver_;
+  Handle<JSReceiver> holder_;
 
   int number_;
 };

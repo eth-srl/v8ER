@@ -19,12 +19,10 @@ CodeGenerator::CodeGenerator(InstructionSequence* code)
       masm_(code->zone()->isolate(), NULL, 0),
       resolver_(this),
       safepoints_(code->zone()),
-      lazy_deoptimization_entries_(code->zone()),
       deoptimization_states_(code->zone()),
       deoptimization_literals_(code->zone()),
-      translations_(code->zone()) {
-  deoptimization_states_.resize(code->GetDeoptimizationEntryCount(), NULL);
-}
+      translations_(code->zone()),
+      last_lazy_deopt_pc_(0) {}
 
 
 Handle<Code> CodeGenerator::GenerateCode() {
@@ -51,7 +49,14 @@ Handle<Code> CodeGenerator::GenerateCode() {
 
   FinishCode(masm());
 
-  UpdateSafepointsWithDeoptimizationPc();
+  // Ensure there is space for lazy deopt.
+  if (!info->IsStub()) {
+    int target_offset = masm()->pc_offset() + Deoptimizer::patch_size();
+    while (masm()->pc_offset() < target_offset) {
+      masm()->nop();
+    }
+  }
+
   safepoints()->Emit(masm(), frame()->GetSpillSlotCount());
 
   // TODO(titzer): what are the right code flags here?
@@ -75,10 +80,9 @@ Handle<Code> CodeGenerator::GenerateCode() {
 }
 
 
-Safepoint::Id CodeGenerator::RecordSafepoint(PointerMap* pointers,
-                                             Safepoint::Kind kind,
-                                             int arguments,
-                                             Safepoint::DeoptMode deopt_mode) {
+void CodeGenerator::RecordSafepoint(PointerMap* pointers, Safepoint::Kind kind,
+                                    int arguments,
+                                    Safepoint::DeoptMode deopt_mode) {
   const ZoneList<InstructionOperand*>* operands =
       pointers->GetNormalizedOperands();
   Safepoint safepoint =
@@ -92,7 +96,6 @@ Safepoint::Id CodeGenerator::RecordSafepoint(PointerMap* pointers,
       safepoint.DefinePointerRegister(reg, zone());
     }
   }
-  return safepoint.id();
 }
 
 
@@ -173,23 +176,10 @@ void CodeGenerator::AssembleGap(GapInstruction* instr) {
 }
 
 
-void CodeGenerator::UpdateSafepointsWithDeoptimizationPc() {
-  int patch_count = static_cast<int>(lazy_deoptimization_entries_.size());
-  for (int i = 0; i < patch_count; ++i) {
-    LazyDeoptimizationEntry entry = lazy_deoptimization_entries_[i];
-    // TODO(jarin) make sure that there is no code (other than nops)
-    // between the call position and the continuation position.
-    safepoints()->SetDeoptimizationPc(entry.safepoint_id(),
-                                      entry.deoptimization()->pos());
-  }
-}
-
-
 void CodeGenerator::PopulateDeoptimizationData(Handle<Code> code_object) {
   CompilationInfo* info = linkage()->info();
-  int deopt_count = code()->GetDeoptimizationEntryCount();
-  int patch_count = static_cast<int>(lazy_deoptimization_entries_.size());
-  if (patch_count == 0 && deopt_count == 0) return;
+  int deopt_count = static_cast<int>(deoptimization_states_.size());
+  if (deopt_count == 0) return;
   Handle<DeoptimizationInputData> data =
       DeoptimizationInputData::New(isolate(), deopt_count, TENURED);
 
@@ -226,13 +216,13 @@ void CodeGenerator::PopulateDeoptimizationData(Handle<Code> code_object) {
 
   // Populate deoptimization entries.
   for (int i = 0; i < deopt_count; i++) {
-    FrameStateDescriptor* descriptor = code()->GetDeoptimizationEntry(i);
-    data->SetAstId(i, descriptor->bailout_id());
+    DeoptimizationState* deoptimization_state = deoptimization_states_[i];
+    data->SetAstId(i, deoptimization_state->bailout_id());
     CHECK_NE(NULL, deoptimization_states_[i]);
     data->SetTranslationIndex(
-        i, Smi::FromInt(deoptimization_states_[i]->translation_id_));
+        i, Smi::FromInt(deoptimization_states_[i]->translation_id()));
     data->SetArgumentsStackHeight(i, Smi::FromInt(0));
-    data->SetPc(i, Smi::FromInt(-1));
+    data->SetPc(i, Smi::FromInt(deoptimization_state->pc_offset()));
   }
 
   code_object->set_deoptimization_data(*data);
@@ -240,61 +230,51 @@ void CodeGenerator::PopulateDeoptimizationData(Handle<Code> code_object) {
 
 
 void CodeGenerator::AddSafepointAndDeopt(Instruction* instr) {
-  CallDescriptor::DeoptimizationSupport deopt =
-      static_cast<CallDescriptor::DeoptimizationSupport>(
-          MiscField::decode(instr->opcode()));
+  CallDescriptor::Flags flags(MiscField::decode(instr->opcode()));
 
-  bool needs_frame_state = (deopt & CallDescriptor::kNeedsFrameState) != 0;
+  bool needs_frame_state = (flags & CallDescriptor::kNeedsFrameState);
 
-  Safepoint::Id safepoint_id = RecordSafepoint(
+  RecordSafepoint(
       instr->pointer_map(), Safepoint::kSimple, 0,
       needs_frame_state ? Safepoint::kLazyDeopt : Safepoint::kNoLazyDeopt);
 
-  if ((deopt & CallDescriptor::kLazyDeoptimization) != 0) {
-    RecordLazyDeoptimizationEntry(instr, safepoint_id);
+  if (flags & CallDescriptor::kNeedsNopAfterCall) {
+    AddNopForSmiCodeInlining();
   }
 
   if (needs_frame_state) {
+    MarkLazyDeoptSite();
     // If the frame state is present, it starts at argument 1
     // (just after the code address).
     InstructionOperandConverter converter(this, instr);
     // Deoptimization info starts at argument 1
-    int frame_state_offset = 1;
-    int deoptimization_id = BuildTranslation(instr, frame_state_offset);
+    size_t frame_state_offset = 1;
+    FrameStateDescriptor* descriptor =
+        GetFrameStateDescriptor(instr, frame_state_offset);
+    int pc_offset = masm()->pc_offset();
+    int deopt_state_id = BuildTranslation(instr, pc_offset, frame_state_offset,
+                                          descriptor->state_combine());
+    // If the pre-call frame state differs from the post-call one, produce the
+    // pre-call frame state, too.
+    // TODO(jarin) We might want to avoid building the pre-call frame state
+    // because it is only used to get locals and arguments (by the debugger and
+    // f.arguments), and those are the same in the pre-call and post-call
+    // states.
+    if (descriptor->state_combine() != kIgnoreOutput) {
+      deopt_state_id =
+          BuildTranslation(instr, -1, frame_state_offset, kIgnoreOutput);
+    }
 #if DEBUG
     // Make sure all the values live in stack slots or they are immediates.
     // (The values should not live in register because registers are clobbered
     // by calls.)
-    FrameStateDescriptor* descriptor =
-        code()->GetDeoptimizationEntry(deoptimization_id);
-    for (int i = 0; i < descriptor->size(); i++) {
+    for (size_t i = 0; i < descriptor->size(); i++) {
       InstructionOperand* op = instr->InputAt(frame_state_offset + 1 + i);
       CHECK(op->IsStackSlot() || op->IsImmediate());
     }
 #endif
-    safepoints()->RecordLazyDeoptimizationIndex(deoptimization_id);
+    safepoints()->RecordLazyDeoptimizationIndex(deopt_state_id);
   }
-}
-
-
-void CodeGenerator::RecordLazyDeoptimizationEntry(Instruction* instr,
-                                                  Safepoint::Id safepoint_id) {
-  InstructionOperandConverter i(this, instr);
-
-  Label after_call;
-  masm()->bind(&after_call);
-
-  // The continuation and deoptimization are the last two inputs:
-  BasicBlock* cont_block =
-      i.InputBlock(static_cast<int>(instr->InputCount()) - 2);
-  BasicBlock* deopt_block =
-      i.InputBlock(static_cast<int>(instr->InputCount()) - 1);
-
-  Label* cont_label = code_->GetLabel(cont_block);
-  Label* deopt_label = code_->GetLabel(deopt_block);
-
-  lazy_deoptimization_entries_.push_back(LazyDeoptimizationEntry(
-      after_call.pos(), cont_label, deopt_label, safepoint_id));
 }
 
 
@@ -308,29 +288,79 @@ int CodeGenerator::DefineDeoptimizationLiteral(Handle<Object> literal) {
 }
 
 
-int CodeGenerator::BuildTranslation(Instruction* instr,
-                                    int frame_state_offset) {
+FrameStateDescriptor* CodeGenerator::GetFrameStateDescriptor(
+    Instruction* instr, size_t frame_state_offset) {
   InstructionOperandConverter i(this, instr);
-  int deoptimization_id = i.InputInt32(frame_state_offset);
-  frame_state_offset++;
+  InstructionSequence::StateId state_id = InstructionSequence::StateId::FromInt(
+      i.InputInt32(static_cast<int>(frame_state_offset)));
+  return code()->GetFrameStateDescriptor(state_id);
+}
 
-  // We should build translation only once.
-  DCHECK_EQ(NULL, deoptimization_states_[deoptimization_id]);
 
-  FrameStateDescriptor* descriptor =
-      code()->GetDeoptimizationEntry(deoptimization_id);
-  Translation translation(&translations_, 1, 1, zone());
-  translation.BeginJSFrame(descriptor->bailout_id(),
-                           Translation::kSelfLiteralId,
-                           descriptor->size() - descriptor->parameters_count());
-
-  for (int i = 0; i < descriptor->size(); i++) {
-    AddTranslationForOperand(&translation, instr,
-                             instr->InputAt(i + frame_state_offset));
+void CodeGenerator::BuildTranslationForFrameStateDescriptor(
+    FrameStateDescriptor* descriptor, Instruction* instr,
+    Translation* translation, size_t frame_state_offset,
+    OutputFrameStateCombine state_combine) {
+  // Outer-most state must be added to translation first.
+  if (descriptor->outer_state() != NULL) {
+    BuildTranslationForFrameStateDescriptor(descriptor->outer_state(), instr,
+                                            translation, frame_state_offset,
+                                            kIgnoreOutput);
   }
 
-  deoptimization_states_[deoptimization_id] =
-      new (zone()) DeoptimizationState(translation.index());
+  int id = Translation::kSelfLiteralId;
+  if (!descriptor->jsfunction().is_null()) {
+    id = DefineDeoptimizationLiteral(
+        Handle<Object>::cast(descriptor->jsfunction().ToHandleChecked()));
+  }
+
+  switch (descriptor->type()) {
+    case JS_FRAME:
+      translation->BeginJSFrame(
+          descriptor->bailout_id(), id,
+          static_cast<unsigned int>(descriptor->GetHeight(state_combine)));
+      break;
+    case ARGUMENTS_ADAPTOR:
+      translation->BeginArgumentsAdaptorFrame(
+          id, static_cast<unsigned int>(descriptor->parameters_count()));
+      break;
+  }
+
+  frame_state_offset += descriptor->outer_state()->GetTotalSize();
+  for (size_t i = 0; i < descriptor->size(); i++) {
+    AddTranslationForOperand(
+        translation, instr,
+        instr->InputAt(static_cast<int>(frame_state_offset + i)));
+  }
+
+  switch (state_combine) {
+    case kPushOutput:
+      DCHECK(instr->OutputCount() == 1);
+      AddTranslationForOperand(translation, instr, instr->OutputAt(0));
+      break;
+    case kIgnoreOutput:
+      break;
+  }
+}
+
+
+int CodeGenerator::BuildTranslation(Instruction* instr, int pc_offset,
+                                    size_t frame_state_offset,
+                                    OutputFrameStateCombine state_combine) {
+  FrameStateDescriptor* descriptor =
+      GetFrameStateDescriptor(instr, frame_state_offset);
+  frame_state_offset++;
+
+  Translation translation(
+      &translations_, static_cast<int>(descriptor->GetFrameCount()),
+      static_cast<int>(descriptor->GetJSFrameCount()), zone());
+  BuildTranslationForFrameStateDescriptor(descriptor, instr, &translation,
+                                          frame_state_offset, state_combine);
+
+  int deoptimization_id = static_cast<int>(deoptimization_states_.size());
+
+  deoptimization_states_.push_back(new (zone()) DeoptimizationState(
+      descriptor->bailout_id(), translation.index(), pc_offset));
 
   return deoptimization_id;
 }
@@ -359,8 +389,7 @@ void CodeGenerator::AddTranslationForOperand(Translation* translation,
             isolate()->factory()->NewNumberFromInt(constant.ToInt32());
         break;
       case Constant::kFloat64:
-        constant_object =
-            isolate()->factory()->NewHeapNumber(constant.ToFloat64());
+        constant_object = isolate()->factory()->NewNumber(constant.ToFloat64());
         break;
       case Constant::kHeapObject:
         constant_object = constant.ToHeapObject();
@@ -373,6 +402,11 @@ void CodeGenerator::AddTranslationForOperand(Translation* translation,
   } else {
     UNREACHABLE();
   }
+}
+
+
+void CodeGenerator::MarkLazyDeoptSite() {
+  last_lazy_deopt_pc_ = masm()->pc_offset();
 }
 
 #if !V8_TURBOFAN_BACKEND
@@ -390,6 +424,11 @@ void CodeGenerator::AssembleArchBranch(Instruction* instr,
 
 void CodeGenerator::AssembleArchBoolean(Instruction* instr,
                                         FlagsCondition condition) {
+  UNIMPLEMENTED();
+}
+
+
+void CodeGenerator::AssembleDeoptimizerCall(int deoptimization_id) {
   UNIMPLEMENTED();
 }
 

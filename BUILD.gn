@@ -25,7 +25,7 @@ v8_random_seed = "314159265"
 # Configurations
 #
 config("internal_config") {
-  visibility = ":*"  # Only targets in this file can depend on this.
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
   include_dirs = [ "." ]
 
@@ -38,7 +38,7 @@ config("internal_config") {
 }
 
 config("internal_config_base") {
-  visibility = ":*"  # Only targets in this file can depend on this.
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
   include_dirs = [ "." ]
 }
@@ -56,7 +56,7 @@ config("external_config") {
 }
 
 config("features") {
-  visibility = ":*"  # Only targets in this file can depend on this.
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
   defines = []
 
@@ -118,7 +118,7 @@ config("features") {
 }
 
 config("toolchain") {
-  visibility = ":*"  # Only targets in this file can depend on this.
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
   defines = []
   cflags = []
@@ -167,7 +167,7 @@ config("toolchain") {
 #
 
 action("js2c") {
-  visibility = ":*"  # Only targets in this file can depend on this.
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
   script = "tools/js2c.py"
 
@@ -190,6 +190,7 @@ action("js2c") {
     "src/regexp.js",
     "src/arraybuffer.js",
     "src/typedarray.js",
+    "src/generator.js",
     "src/object-observe.js",
     "src/collection.js",
     "src/weak-collection.js",
@@ -229,7 +230,7 @@ action("js2c") {
 }
 
 action("js2c_experimental") {
-  visibility = ":*"  # Only targets in this file can depend on this.
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
   script = "tools/js2c.py"
 
@@ -267,7 +268,7 @@ action("js2c_experimental") {
 
 if (v8_use_external_startup_data) {
   action("natives_blob") {
-    visibility = ":*"  # Only targets in this file can depend on this.
+    visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
     deps = [
       ":js2c",
@@ -290,7 +291,7 @@ if (v8_use_external_startup_data) {
 }
 
 action("postmortem-metadata") {
-  visibility = ":*"  # Only targets in this file can depend on this.
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
   script = "tools/gen-postmortem-metadata.py"
 
@@ -309,7 +310,7 @@ action("postmortem-metadata") {
 }
 
 action("run_mksnapshot") {
-  visibility = ":*"  # Only targets in this file can depend on this.
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
   deps = [ ":mksnapshot($host_toolchain)" ]
 
@@ -347,7 +348,7 @@ action("run_mksnapshot") {
 #
 
 source_set("v8_nosnapshot") {
-  visibility = ":*"  # Only targets in this file can depend on this.
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
   deps = [
     ":js2c",
@@ -368,7 +369,7 @@ source_set("v8_nosnapshot") {
 }
 
 source_set("v8_snapshot") {
-  visibility = ":*"  # Only targets in this file can depend on this.
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
   deps = [
     ":js2c",
@@ -391,7 +392,7 @@ source_set("v8_snapshot") {
 
 if (v8_use_external_startup_data) {
   source_set("v8_external_snapshot") {
-    visibility = ":*"  # Only targets in this file can depend on this.
+    visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
     deps = [
       ":js2c",
@@ -413,7 +414,7 @@ if (v8_use_external_startup_data) {
 }
 
 source_set("v8_base") {
-  visibility = ":*"  # Only targets in this file can depend on this.
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
   sources = [
     "src/accessors.cc",
@@ -436,6 +437,12 @@ source_set("v8_base") {
     "src/ast-value-factory.h",
     "src/ast.cc",
     "src/ast.h",
+    "src/background-parsing-task.cc",
+    "src/background-parsing-task.h",
+    "src/bailout-reason.cc",
+    "src/bailout-reason.h",
+    "src/basic-block-profiler.cc",
+    "src/basic-block-profiler.h",
     "src/bignum-dtoa.cc",
     "src/bignum-dtoa.h",
     "src/bignum.cc",
@@ -453,6 +460,8 @@ source_set("v8_base") {
     "src/checks.h",
     "src/circular-queue-inl.h",
     "src/circular-queue.h",
+    "src/code-factory.cc",
+    "src/code-factory.h",
     "src/code-stubs.cc",
     "src/code-stubs.h",
     "src/code-stubs-hydrogen.cc",
@@ -461,14 +470,19 @@ source_set("v8_base") {
     "src/codegen.h",
     "src/compilation-cache.cc",
     "src/compilation-cache.h",
+    "src/compiler/access-builder.cc",
+    "src/compiler/access-builder.h",
     "src/compiler/ast-graph-builder.cc",
     "src/compiler/ast-graph-builder.h",
+    "src/compiler/basic-block-instrumentor.cc",
+    "src/compiler/basic-block-instrumentor.h",
     "src/compiler/change-lowering.cc",
     "src/compiler/change-lowering.h",
     "src/compiler/code-generator-impl.h",
     "src/compiler/code-generator.cc",
     "src/compiler/code-generator.h",
     "src/compiler/common-node-cache.h",
+    "src/compiler/common-operator.cc",
     "src/compiler/common-operator.h",
     "src/compiler/control-builders.cc",
     "src/compiler/control-builders.h",
@@ -497,6 +511,8 @@ source_set("v8_base") {
     "src/compiler/instruction-selector.h",
     "src/compiler/instruction.cc",
     "src/compiler/instruction.h",
+    "src/compiler/js-builtin-reducer.cc",
+    "src/compiler/js-builtin-reducer.h",
     "src/compiler/js-context-specialization.cc",
     "src/compiler/js-context-specialization.h",
     "src/compiler/js-generic-lowering.cc",
@@ -511,9 +527,9 @@ source_set("v8_base") {
     "src/compiler/linkage-impl.h",
     "src/compiler/linkage.cc",
     "src/compiler/linkage.h",
-    "src/compiler/machine-node-factory.h",
     "src/compiler/machine-operator-reducer.cc",
     "src/compiler/machine-operator-reducer.h",
+    "src/compiler/machine-operator.cc",
     "src/compiler/machine-operator.h",
     "src/compiler/machine-type.cc",
     "src/compiler/machine-type.h",
@@ -529,6 +545,7 @@ source_set("v8_base") {
     "src/compiler/opcodes.h",
     "src/compiler/operator-properties-inl.h",
     "src/compiler/operator-properties.h",
+    "src/compiler/operator.cc",
     "src/compiler/operator.h",
     "src/compiler/phi-reducer.h",
     "src/compiler/pipeline.cc",
@@ -544,16 +561,16 @@ source_set("v8_base") {
     "src/compiler/scheduler.h",
     "src/compiler/simplified-lowering.cc",
     "src/compiler/simplified-lowering.h",
-    "src/compiler/simplified-node-factory.h",
     "src/compiler/simplified-operator-reducer.cc",
     "src/compiler/simplified-operator-reducer.h",
+    "src/compiler/simplified-operator.cc",
     "src/compiler/simplified-operator.h",
     "src/compiler/source-position.cc",
     "src/compiler/source-position.h",
-    "src/compiler/structured-machine-assembler.cc",
-    "src/compiler/structured-machine-assembler.h",
     "src/compiler/typer.cc",
     "src/compiler/typer.h",
+    "src/compiler/value-numbering-reducer.cc",
+    "src/compiler/value-numbering-reducer.h",
     "src/compiler/verifier.cc",
     "src/compiler/verifier.h",
     "src/compiler.cc",
@@ -725,15 +742,18 @@ source_set("v8_base") {
     "src/ic/handler-compiler.cc",
     "src/ic/handler-compiler.h",
     "src/ic/ic-inl.h",
+    "src/ic/ic-state.cc",
+    "src/ic/ic-state.h",
     "src/ic/ic.cc",
     "src/ic/ic.h",
     "src/ic/ic-compiler.cc",
     "src/ic/ic-compiler.h",
-    "src/ic/ic-conventions.h",
     "src/ic/stub-cache.cc",
     "src/ic/stub-cache.h",
     "src/interface.cc",
     "src/interface.h",
+    "src/interface-descriptors.cc",
+    "src/interface-descriptors.h",
     "src/interpreter-irregexp.cc",
     "src/interpreter-irregexp.h",
     "src/isolate.cc",
@@ -807,8 +827,21 @@ source_set("v8_base") {
     "src/rewriter.h",
     "src/runtime-profiler.cc",
     "src/runtime-profiler.h",
-    "src/runtime.cc",
-    "src/runtime.h",
+    "src/runtime/runtime-collections.cc",
+    "src/runtime/runtime-compiler.cc",
+    "src/runtime/runtime-i18n.cc",
+    "src/runtime/runtime-json.cc",
+    "src/runtime/runtime-maths.cc",
+    "src/runtime/runtime-numbers.cc",
+    "src/runtime/runtime-regexp.cc",
+    "src/runtime/runtime-strings.cc",
+    "src/runtime/runtime-test.cc",
+    "src/runtime/runtime-typedarray.cc",
+    "src/runtime/runtime-uri.cc",
+    "src/runtime/runtime-utils.h",
+    "src/runtime/runtime.cc",
+    "src/runtime/runtime.h",
+    "src/runtime/string-builder.h",
     "src/safepoint-table.cc",
     "src/safepoint-table.h",
     "src/sampler.cc",
@@ -839,6 +872,9 @@ source_set("v8_base") {
     "src/transitions-inl.h",
     "src/transitions.cc",
     "src/transitions.h",
+    "src/type-feedback-vector-inl.h",
+    "src/type-feedback-vector.cc",
+    "src/type-feedback-vector.h",
     "src/type-info.cc",
     "src/type-info.h",
     "src/types-inl.h",
@@ -891,6 +927,7 @@ source_set("v8_base") {
       "src/ia32/frames-ia32.cc",
       "src/ia32/frames-ia32.h",
       "src/ia32/full-codegen-ia32.cc",
+      "src/ia32/interface-descriptors-ia32.cc",
       "src/ia32/lithium-codegen-ia32.cc",
       "src/ia32/lithium-codegen-ia32.h",
       "src/ia32/lithium-gap-resolver-ia32.cc",
@@ -906,8 +943,7 @@ source_set("v8_base") {
       "src/compiler/ia32/instruction-selector-ia32.cc",
       "src/compiler/ia32/linkage-ia32.cc",
       "src/ic/ia32/ic-ia32.cc",
-      "src/ic/ia32/ic-conventions-ia32.cc",
-      "src/ic/ia32/handler-ia32.cc",
+      "src/ic/ia32/ic-compiler-ia32.cc",
       "src/ic/ia32/stub-cache-ia32.cc",
     ]
   } else if (v8_target_arch == "x64") {
@@ -927,6 +963,7 @@ source_set("v8_base") {
       "src/x64/frames-x64.cc",
       "src/x64/frames-x64.h",
       "src/x64/full-codegen-x64.cc",
+      "src/x64/interface-descriptors-x64.cc",
       "src/x64/lithium-codegen-x64.cc",
       "src/x64/lithium-codegen-x64.h",
       "src/x64/lithium-gap-resolver-x64.cc",
@@ -945,7 +982,6 @@ source_set("v8_base") {
       "src/ic/x64/handler-compiler-x64.cc",
       "src/ic/x64/ic-x64.cc",
       "src/ic/x64/ic-compiler-x64.cc",
-      "src/ic/x64/ic-conventions-x64.cc",
       "src/ic/x64/stub-cache-x64.cc",
     ]
   } else if (v8_target_arch == "arm") {
@@ -967,6 +1003,8 @@ source_set("v8_base") {
       "src/arm/frames-arm.cc",
       "src/arm/frames-arm.h",
       "src/arm/full-codegen-arm.cc",
+      "src/arm/interface-descriptors-arm.cc",
+      "src/arm/interface-descriptors-arm.h",
       "src/arm/lithium-arm.cc",
       "src/arm/lithium-arm.h",
       "src/arm/lithium-codegen-arm.cc",
@@ -986,7 +1024,6 @@ source_set("v8_base") {
       "src/ic/arm/handler-compiler-arm.cc",
       "src/ic/arm/ic-arm.cc",
       "src/ic/arm/ic-compiler-arm.cc",
-      "src/ic/arm/ic-conventions-arm.cc",
       "src/ic/arm/stub-cache-arm.cc",
     ]
   } else if (v8_target_arch == "arm64") {
@@ -1015,6 +1052,8 @@ source_set("v8_base") {
       "src/arm64/instructions-arm64.h",
       "src/arm64/instrument-arm64.cc",
       "src/arm64/instrument-arm64.h",
+      "src/arm64/interface-descriptors-arm64.cc",
+      "src/arm64/interface-descriptors-arm64.h",
       "src/arm64/lithium-arm64.cc",
       "src/arm64/lithium-arm64.h",
       "src/arm64/lithium-codegen-arm64.cc",
@@ -1038,7 +1077,6 @@ source_set("v8_base") {
       "src/ic/arm64/handler-compiler-arm64.cc",
       "src/ic/arm64/ic-arm64.cc",
       "src/ic/arm64/ic-compiler-arm64.cc",
-      "src/ic/arm64/ic-conventions-arm64.cc",
       "src/ic/arm64/stub-cache-arm64.cc",
     ]
   } else if (v8_target_arch == "mipsel") {
@@ -1060,6 +1098,7 @@ source_set("v8_base") {
       "src/mips/frames-mips.cc",
       "src/mips/frames-mips.h",
       "src/mips/full-codegen-mips.cc",
+      "src/mips/interface-descriptors-mips.cc",
       "src/mips/lithium-codegen-mips.cc",
       "src/mips/lithium-codegen-mips.h",
       "src/mips/lithium-gap-resolver-mips.cc",
@@ -1075,7 +1114,6 @@ source_set("v8_base") {
       "src/ic/mips/handler-compiler-mips.cc",
       "src/ic/mips/ic-mips.cc",
       "src/ic/mips/ic-compiler-mips.cc",
-      "src/ic/mips/ic-conventions-mips.cc",
       "src/ic/mips/stub-cache-mips.cc",
     ]
   } else if (v8_target_arch == "mips64el") {
@@ -1097,6 +1135,7 @@ source_set("v8_base") {
       "src/mips64/frames-mips64.cc",
       "src/mips64/frames-mips64.h",
       "src/mips64/full-codegen-mips64.cc",
+      "src/mips64/interface-descriptors-mips64.cc",
       "src/mips64/lithium-codegen-mips64.cc",
       "src/mips64/lithium-codegen-mips64.h",
       "src/mips64/lithium-gap-resolver-mips64.cc",
@@ -1112,7 +1151,6 @@ source_set("v8_base") {
       "src/ic/mips64/handler-compiler-mips64.cc",
       "src/ic/mips64/ic-mips64.cc",
       "src/ic/mips64/ic-compiler-mips64.cc",
-      "src/ic/mips64/ic-conventions-mips64.cc",
       "src/ic/mips64/stub-cache-mips64.cc",
     ]
   }
@@ -1121,9 +1159,18 @@ source_set("v8_base") {
   configs += [ "//build/config/compiler:no_chromium_code" ]
   configs += [ ":internal_config", ":features", ":toolchain" ]
 
+  if (!is_debug) {
+    configs -= [ "//build/config/compiler:optimize" ]
+    configs += [ "//build/config/compiler:optimize_max" ]
+  }
+
   defines = []
   deps = [ ":v8_libbase" ]
 
+  if (is_win) {
+    # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+    cflags = [ "/wd4267" ]
+  }
   if (is_linux) {
     if (v8_compress_startup_data == "bz2") {
       libs += [ "bz2" ]
@@ -1151,7 +1198,7 @@ source_set("v8_base") {
 }
 
 source_set("v8_libbase") {
-  visibility = ":*"  # Only targets in this file can depend on this.
+  visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
   sources = [
     "src/base/atomicops.h",
@@ -1164,10 +1211,13 @@ source_set("v8_libbase") {
     "src/base/atomicops_internals_x86_gcc.cc",
     "src/base/atomicops_internals_x86_gcc.h",
     "src/base/atomicops_internals_x86_msvc.h",
+    "src/base/bits.cc",
     "src/base/bits.h",
     "src/base/build_config.h",
     "src/base/cpu.cc",
     "src/base/cpu.h",
+    "src/base/division-by-constant.cc",
+    "src/base/division-by-constant.h",
     "src/base/flags.h",
     "src/base/lazy-instance.h",
     "src/base/logging.cc",
@@ -1198,6 +1248,11 @@ source_set("v8_libbase") {
   configs -= [ "//build/config/compiler:chromium_code" ]
   configs += [ "//build/config/compiler:no_chromium_code" ]
   configs += [ ":internal_config_base", ":features", ":toolchain" ]
+
+  if (!is_debug) {
+    configs -= [ "//build/config/compiler:optimize" ]
+    configs += [ "//build/config/compiler:optimize_max" ]
+  }
 
   defines = []
 
@@ -1262,6 +1317,11 @@ source_set("v8_libplatform") {
   configs += [ "//build/config/compiler:no_chromium_code" ]
   configs += [ ":internal_config_base", ":features", ":toolchain" ]
 
+  if (!is_debug) {
+    configs -= [ "//build/config/compiler:optimize" ]
+    configs += [ "//build/config/compiler:optimize_max" ]
+  }
+
   deps = [
     ":v8_libbase",
   ]
@@ -1273,7 +1333,7 @@ source_set("v8_libplatform") {
 
 if (current_toolchain == host_toolchain) {
   executable("mksnapshot") {
-    visibility = ":*"  # Only targets in this file can depend on this.
+    visibility = [ ":*" ]  # Only targets in this file can depend on this.
 
     sources = [
       "src/mksnapshot.cc",
@@ -1329,6 +1389,7 @@ component("v8") {
 
   direct_dependent_configs = [ ":external_config" ]
 
+  libs = []
   if (is_android && current_toolchain != host_toolchain) {
     libs += [ "log" ]
   }

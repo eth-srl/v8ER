@@ -6,6 +6,7 @@
 
 #include "src/accessors.h"
 #include "src/api.h"
+#include "src/base/bits.h"
 #include "src/base/once.h"
 #include "src/base/utils/random-number-generator.h"
 #include "src/bootstrapper.h"
@@ -922,9 +923,12 @@ void Heap::ReserveSpace(int* sizes, Address* locations_out) {
   static const int kThreshold = 20;
   while (gc_performed && counter++ < kThreshold) {
     gc_performed = false;
-    DCHECK(NEW_SPACE == FIRST_PAGED_SPACE - 1);
-    for (int space = NEW_SPACE; space <= LAST_PAGED_SPACE; space++) {
-      if (sizes[space] != 0) {
+    for (int space = NEW_SPACE; space < Serializer::kNumberOfSpaces; space++) {
+      if (sizes[space] == 0) continue;
+      bool perform_gc = false;
+      if (space == LO_SPACE) {
+        perform_gc = !lo_space()->CanAllocateSize(sizes[space]);
+      } else {
         AllocationResult allocation;
         if (space == NEW_SPACE) {
           allocation = new_space()->AllocateRaw(sizes[space]);
@@ -932,23 +936,27 @@ void Heap::ReserveSpace(int* sizes, Address* locations_out) {
           allocation = paged_space(space)->AllocateRaw(sizes[space]);
         }
         FreeListNode* node;
-        if (!allocation.To(&node)) {
-          if (space == NEW_SPACE) {
-            Heap::CollectGarbage(NEW_SPACE,
-                                 "failed to reserve space in the new space");
-          } else {
-            AbortIncrementalMarkingAndCollectGarbage(
-                this, static_cast<AllocationSpace>(space),
-                "failed to reserve space in paged space");
-          }
-          gc_performed = true;
-          break;
-        } else {
+        if (allocation.To(&node)) {
           // Mark with a free list node, in case we have a GC before
           // deserializing.
           node->set_size(this, sizes[space]);
+          DCHECK(space < Serializer::kNumberOfPreallocatedSpaces);
           locations_out[space] = node->address();
+        } else {
+          perform_gc = true;
         }
+      }
+      if (perform_gc) {
+        if (space == NEW_SPACE) {
+          Heap::CollectGarbage(NEW_SPACE,
+                               "failed to reserve space in the new space");
+        } else {
+          AbortIncrementalMarkingAndCollectGarbage(
+              this, static_cast<AllocationSpace>(space),
+              "failed to reserve space in paged or large object space");
+        }
+        gc_performed = true;
+        break;  // Abort for-loop over spaces and retry.
       }
     }
   }
@@ -1281,8 +1289,8 @@ static void VerifyNonPointerSpacePointers(Heap* heap) {
 
 
 void Heap::CheckNewSpaceExpansionCriteria() {
-  if (new_space_.Capacity() < new_space_.MaximumCapacity() &&
-      survived_since_last_expansion_ > new_space_.Capacity()) {
+  if (new_space_.TotalCapacity() < new_space_.MaximumCapacity() &&
+      survived_since_last_expansion_ > new_space_.TotalCapacity()) {
     // Grow the size of new space if there is room to grow, enough data
     // has survived scavenge since the last expansion and we are not in
     // high promotion mode.
@@ -1364,7 +1372,6 @@ void PromotionQueue::Initialize() {
   front_ = rear_ =
       reinterpret_cast<intptr_t*>(heap_->new_space()->ToSpaceEnd());
   emergency_stack_ = NULL;
-  guard_ = false;
 }
 
 
@@ -1548,8 +1555,6 @@ void Heap::Scavenge() {
   LOG(isolate_, ResourceEvent("scavenge", "end"));
 
   gc_state_ = NOT_IN_GC;
-
-  gc_idle_time_handler_.NotifyScavenge();
 }
 
 
@@ -1962,14 +1967,15 @@ class ScavengingVisitor : public StaticVisitorBase {
 
     HeapObject* target = NULL;  // Initialization to please compiler.
     if (allocation.To(&target)) {
+      // Order is important here: Set the promotion limit before storing a
+      // filler for double alignment or migrating the object. Otherwise we
+      // may end up overwriting promotion queue entries when we migrate the
+      // object.
+      heap->promotion_queue()->SetNewLimit(heap->new_space()->top());
+
       if (alignment != kObjectAlignment) {
         target = EnsureDoubleAligned(heap, target, allocation_size);
       }
-
-      // Order is important here: Set the promotion limit before migrating
-      // the object. Otherwise we may end up overwriting promotion queue
-      // entries when we migrate the object.
-      heap->promotion_queue()->SetNewLimit(heap->new_space()->top());
 
       // Order is important: slot might be inside of the target if target
       // was allocated over a dead object and slot comes from the store
@@ -2063,7 +2069,10 @@ class ScavengingVisitor : public StaticVisitorBase {
     ObjectEvacuationStrategy<POINTER_OBJECT>::template VisitSpecialized<
         JSFunction::kSize>(map, slot, object);
 
-    HeapObject* target = *slot;
+    MapWord map_word = object->map_word();
+    DCHECK(map_word.IsForwardingAddress());
+    HeapObject* target = map_word.ToForwardingAddress();
+
     MarkBit mark_bit = Marking::MarkBitFrom(target);
     if (Marking::IsBlack(mark_bit)) {
       // This object is black and it might not be rescanned by marker.
@@ -2516,8 +2525,8 @@ bool Heap::CreateInitialMaps() {
     ALLOCATE_VARSIZE_MAP(STRING_TYPE, undetectable_string)
     undetectable_string_map()->set_is_undetectable();
 
-    ALLOCATE_VARSIZE_MAP(ASCII_STRING_TYPE, undetectable_ascii_string);
-    undetectable_ascii_string_map()->set_is_undetectable();
+    ALLOCATE_VARSIZE_MAP(ONE_BYTE_STRING_TYPE, undetectable_one_byte_string);
+    undetectable_one_byte_string_map()->set_is_undetectable();
 
     ALLOCATE_VARSIZE_MAP(FIXED_DOUBLE_ARRAY_TYPE, fixed_double_array)
     ALLOCATE_VARSIZE_MAP(BYTE_ARRAY_TYPE, byte_array)
@@ -2690,13 +2699,13 @@ void Heap::CreateApiObjects() {
 
 
 void Heap::CreateJSEntryStub() {
-  JSEntryStub stub(isolate());
+  JSEntryStub stub(isolate(), StackFrame::ENTRY);
   set_js_entry_code(*stub.GetCode());
 }
 
 
 void Heap::CreateJSConstructEntryStub() {
-  JSConstructEntryStub stub(isolate());
+  JSEntryStub stub(isolate(), StackFrame::ENTRY_CONSTRUCT);
   set_js_construct_entry_code(*stub.GetCode());
 }
 
@@ -2859,17 +2868,17 @@ void Heap::CreateInitialObjects() {
   // Number of queued microtasks stored in Isolate::pending_microtask_count().
   set_microtask_queue(empty_fixed_array());
 
-  set_detailed_stack_trace_symbol(*factory->NewPrivateSymbol());
-  set_elements_transition_symbol(*factory->NewPrivateSymbol());
-  set_frozen_symbol(*factory->NewPrivateSymbol());
-  set_megamorphic_symbol(*factory->NewPrivateSymbol());
-  set_premonomorphic_symbol(*factory->NewPrivateSymbol());
-  set_generic_symbol(*factory->NewPrivateSymbol());
-  set_nonexistent_symbol(*factory->NewPrivateSymbol());
-  set_normal_ic_symbol(*factory->NewPrivateSymbol());
-  set_observed_symbol(*factory->NewPrivateSymbol());
-  set_stack_trace_symbol(*factory->NewPrivateSymbol());
-  set_uninitialized_symbol(*factory->NewPrivateSymbol());
+  set_detailed_stack_trace_symbol(*factory->NewPrivateOwnSymbol());
+  set_elements_transition_symbol(*factory->NewPrivateOwnSymbol());
+  set_frozen_symbol(*factory->NewPrivateOwnSymbol());
+  set_megamorphic_symbol(*factory->NewPrivateOwnSymbol());
+  set_premonomorphic_symbol(*factory->NewPrivateOwnSymbol());
+  set_generic_symbol(*factory->NewPrivateOwnSymbol());
+  set_nonexistent_symbol(*factory->NewPrivateOwnSymbol());
+  set_normal_ic_symbol(*factory->NewPrivateOwnSymbol());
+  set_observed_symbol(*factory->NewPrivateOwnSymbol());
+  set_stack_trace_symbol(*factory->NewPrivateOwnSymbol());
+  set_uninitialized_symbol(*factory->NewPrivateOwnSymbol());
   set_home_object_symbol(*factory->NewPrivateOwnSymbol());
 
   Handle<SeededNumberDictionary> slow_element_dictionary =
@@ -3761,7 +3770,7 @@ AllocationResult Heap::CopyJSObject(JSObject* source, AllocationSite* site) {
 
 static inline void WriteOneByteData(Vector<const char> vector, uint8_t* chars,
                                     int len) {
-  // Only works for ascii.
+  // Only works for one byte strings.
   DCHECK(vector.length() == len);
   MemCopy(chars, vector.start(), len);
 }
@@ -3816,7 +3825,7 @@ AllocationResult Heap::AllocateInternalizedStringImpl(T t, int chars,
   DCHECK_LE(0, chars);
   DCHECK_GE(String::kMaxLength, chars);
   if (is_one_byte) {
-    map = ascii_internalized_string_map();
+    map = one_byte_internalized_string_map();
     size = SeqOneByteString::SizeFor(chars);
   } else {
     map = internalized_string_map();
@@ -3874,7 +3883,7 @@ AllocationResult Heap::AllocateRawOneByteString(int length,
   }
 
   // Partially initialize the object.
-  result->set_map_no_write_barrier(ascii_string_map());
+  result->set_map_no_write_barrier(one_byte_string_map());
   String::cast(result)->set_length(length);
   String::cast(result)->set_hash_field(String::kEmptyHashField);
   DCHECK_EQ(size, HeapObject::cast(result)->Size());
@@ -4287,6 +4296,8 @@ bool Heap::WorthActivatingIncrementalMarking() {
 bool Heap::IdleNotification(int idle_time_in_ms) {
   // If incremental marking is off, we do not perform idle notification.
   if (!FLAG_incremental_marking) return true;
+  base::ElapsedTimer timer;
+  timer.Start();
   isolate()->counters()->gc_idle_time_allotted_in_ms()->AddSample(
       idle_time_in_ms);
   HistogramTimerScope idle_notification_scope(
@@ -4297,20 +4308,30 @@ bool Heap::IdleNotification(int idle_time_in_ms) {
   heap_state.size_of_objects = static_cast<size_t>(SizeOfObjects());
   heap_state.incremental_marking_stopped = incremental_marking()->IsStopped();
   // TODO(ulan): Start incremental marking only for large heaps.
-  heap_state.can_start_incremental_marking = true;
+  heap_state.can_start_incremental_marking =
+      incremental_marking()->ShouldActivate();
   heap_state.sweeping_in_progress =
       mark_compact_collector()->sweeping_in_progress();
   heap_state.mark_compact_speed_in_bytes_per_ms =
       static_cast<size_t>(tracer()->MarkCompactSpeedInBytesPerMillisecond());
   heap_state.incremental_marking_speed_in_bytes_per_ms = static_cast<size_t>(
       tracer()->IncrementalMarkingSpeedInBytesPerMillisecond());
+  heap_state.scavenge_speed_in_bytes_per_ms =
+      static_cast<size_t>(tracer()->ScavengeSpeedInBytesPerMillisecond());
+  heap_state.available_new_space_memory = new_space_.Available();
+  heap_state.new_space_capacity = new_space_.Capacity();
+  heap_state.new_space_allocation_throughput_in_bytes_per_ms =
+      static_cast<size_t>(
+          tracer()->NewSpaceAllocationThroughputInBytesPerMillisecond());
 
   GCIdleTimeAction action =
       gc_idle_time_handler_.Compute(idle_time_in_ms, heap_state);
 
-  contexts_disposed_ = 0;
   bool result = false;
   switch (action.type) {
+    case DONE:
+      result = true;
+      break;
     case DO_INCREMENTAL_MARKING:
       if (incremental_marking()->IsStopped()) {
         incremental_marking()->Start();
@@ -4333,10 +4354,28 @@ bool Heap::IdleNotification(int idle_time_in_ms) {
       mark_compact_collector()->EnsureSweepingCompleted();
       break;
     case DO_NOTHING:
-      result = true;
       break;
   }
 
+  int actual_time_ms = static_cast<int>(timer.Elapsed().InMilliseconds());
+  if (actual_time_ms <= idle_time_in_ms) {
+    if (action.type != DONE && action.type != DO_NOTHING) {
+      isolate()->counters()->gc_idle_time_limit_undershot()->AddSample(
+          idle_time_in_ms - actual_time_ms);
+    }
+  } else {
+    isolate()->counters()->gc_idle_time_limit_overshot()->AddSample(
+        actual_time_ms - idle_time_in_ms);
+  }
+
+  if (FLAG_trace_idle_notification) {
+    PrintF("Idle notification: requested idle time %d ms, actual time %d ms [",
+           idle_time_in_ms, actual_time_ms);
+    action.Print();
+    PrintF("]\n");
+  }
+
+  contexts_disposed_ = 0;
   return result;
 }
 
@@ -4709,7 +4748,7 @@ void Heap::IterateStrongRoots(ObjectVisitor* v, VisitMode mode) {
   v->VisitPointers(&roots_[0], &roots_[kStrongRootListLength]);
   v->Synchronize(VisitorSynchronization::kStrongRootList);
 
-  v->VisitPointer(BitCast<Object**>(&hidden_string_));
+  v->VisitPointer(bit_cast<Object**>(&hidden_string_));
   v->Synchronize(VisitorSynchronization::kInternalizedString);
 
   isolate_->bootstrapper()->Iterate(v);
@@ -4843,8 +4882,10 @@ bool Heap::ConfigureHeap(int max_semi_space_size, int max_old_space_size,
 
   // The new space size must be a power of two to support single-bit testing
   // for containment.
-  max_semi_space_size_ = RoundUpToPowerOf2(max_semi_space_size_);
-  reserved_semispace_size_ = RoundUpToPowerOf2(reserved_semispace_size_);
+  max_semi_space_size_ =
+      base::bits::RoundUpToPowerOfTwo32(max_semi_space_size_);
+  reserved_semispace_size_ =
+      base::bits::RoundUpToPowerOfTwo32(reserved_semispace_size_);
 
   if (FLAG_min_semi_space_size > 0) {
     int initial_semispace_size = FLAG_min_semi_space_size * MB;

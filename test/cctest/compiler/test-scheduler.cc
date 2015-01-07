@@ -676,12 +676,11 @@ TEST(BuildScheduleIfSplitWithEffects) {
   Graph graph(scope.main_zone());
   CommonOperatorBuilder common_builder(scope.main_zone());
   JSOperatorBuilder js_builder(scope.main_zone());
-  Operator* op;
+  const Operator* op;
 
   Handle<Object> object =
       Handle<Object>(isolate->heap()->undefined_value(), isolate);
-  PrintableUnique<Object> unique_constant =
-      PrintableUnique<Object>::CreateUninitialized(scope.main_zone(), object);
+  Unique<Object> unique_constant = Unique<Object>::CreateUninitialized(object);
 
   // Manually transcripted code for:
   // function turbo_fan_test(a, b, c, y) {
@@ -822,12 +821,11 @@ TEST(BuildScheduleSimpleLoop) {
   Graph graph(scope.main_zone());
   CommonOperatorBuilder common_builder(scope.main_zone());
   JSOperatorBuilder js_builder(scope.main_zone());
-  Operator* op;
+  const Operator* op;
 
   Handle<Object> object =
       Handle<Object>(isolate->heap()->undefined_value(), isolate);
-  PrintableUnique<Object> unique_constant =
-      PrintableUnique<Object>::CreateUninitialized(scope.main_zone(), object);
+  Unique<Object> unique_constant = Unique<Object>::CreateUninitialized(object);
 
   // Manually transcripted code for:
   // function turbo_fan_test(a, b) {
@@ -846,7 +844,7 @@ TEST(BuildScheduleSimpleLoop) {
   op = common_builder.Return();
   Node* n19 = graph.NewNode(op, nil, nil, nil);
   USE(n19);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n8 = graph.NewNode(op, nil, nil, nil);
   USE(n8);
   op = common_builder.Parameter(0);
@@ -868,7 +866,7 @@ TEST(BuildScheduleSimpleLoop) {
   Node* n12 = graph.NewNode(op, nil, nil, nil, nil, nil);
   USE(n12);
   n12->ReplaceInput(0, n8);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n9 = graph.NewNode(op, nil, nil, nil);
   USE(n9);
   op = common_builder.Parameter(0);
@@ -893,7 +891,7 @@ TEST(BuildScheduleSimpleLoop) {
   n9->ReplaceInput(2, n6);
   n12->ReplaceInput(1, n9);
   n12->ReplaceInput(2, n5);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n10 = graph.NewNode(op, nil, nil, nil);
   USE(n10);
   n10->ReplaceInput(0, n0);
@@ -935,12 +933,11 @@ TEST(BuildScheduleComplexLoops) {
   Graph graph(scope.main_zone());
   CommonOperatorBuilder common_builder(scope.main_zone());
   JSOperatorBuilder js_builder(scope.main_zone());
-  Operator* op;
+  const Operator* op;
 
   Handle<Object> object =
       Handle<Object>(isolate->heap()->undefined_value(), isolate);
-  PrintableUnique<Object> unique_constant =
-      PrintableUnique<Object>::CreateUninitialized(scope.main_zone(), object);
+  Unique<Object> unique_constant = Unique<Object>::CreateUninitialized(object);
 
   // Manually transcripted code for:
   // function turbo_fan_test(a, b, c) {
@@ -965,17 +962,17 @@ TEST(BuildScheduleComplexLoops) {
   op = common_builder.Return();
   Node* n45 = graph.NewNode(op, nil, nil, nil);
   USE(n45);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n35 = graph.NewNode(op, nil, nil, nil);
   USE(n35);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n9 = graph.NewNode(op, nil, nil, nil);
   USE(n9);
   op = common_builder.Parameter(0);
   Node* n2 = graph.NewNode(op, n0);
   USE(n2);
   n9->ReplaceInput(0, n2);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n23 = graph.NewNode(op, nil, nil, nil);
   USE(n23);
   op = js_builder.Add();
@@ -993,14 +990,14 @@ TEST(BuildScheduleComplexLoops) {
   Node* n14 = graph.NewNode(op, nil, nil, nil, nil, nil);
   USE(n14);
   n14->ReplaceInput(0, n9);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n10 = graph.NewNode(op, nil, nil, nil);
   USE(n10);
   op = common_builder.Parameter(0);
   Node* n3 = graph.NewNode(op, n0);
   USE(n3);
   n10->ReplaceInput(0, n3);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n24 = graph.NewNode(op, nil, nil, nil);
   USE(n24);
   n24->ReplaceInput(0, n10);
@@ -1028,10 +1025,10 @@ TEST(BuildScheduleComplexLoops) {
   op = js_builder.LessThan();
   Node* n27 = graph.NewNode(op, nil, nil, nil, nil, nil);
   USE(n27);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n25 = graph.NewNode(op, nil, nil, nil);
   USE(n25);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n11 = graph.NewNode(op, nil, nil, nil);
   USE(n11);
   op = common_builder.Parameter(0);
@@ -1068,7 +1065,7 @@ TEST(BuildScheduleComplexLoops) {
   n27->ReplaceInput(0, n25);
   n27->ReplaceInput(1, n24);
   n27->ReplaceInput(2, n6);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n26 = graph.NewNode(op, nil, nil, nil);
   USE(n26);
   n26->ReplaceInput(0, n20);
@@ -1089,7 +1086,7 @@ TEST(BuildScheduleComplexLoops) {
   n10->ReplaceInput(2, n7);
   n14->ReplaceInput(1, n10);
   n14->ReplaceInput(2, n6);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n12 = graph.NewNode(op, nil, nil, nil);
   USE(n12);
   n12->ReplaceInput(0, n0);
@@ -1123,7 +1120,7 @@ TEST(BuildScheduleComplexLoops) {
   Node* n39 = graph.NewNode(op, nil, nil, nil, nil, nil);
   USE(n39);
   n39->ReplaceInput(0, n35);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n36 = graph.NewNode(op, nil, nil, nil);
   USE(n36);
   n36->ReplaceInput(0, n10);
@@ -1149,7 +1146,7 @@ TEST(BuildScheduleComplexLoops) {
   n36->ReplaceInput(2, n33);
   n39->ReplaceInput(1, n36);
   n39->ReplaceInput(2, n6);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n38 = graph.NewNode(op, nil, nil, nil);
   USE(n38);
   n38->ReplaceInput(0, n14);
@@ -1183,12 +1180,11 @@ TEST(BuildScheduleBreakAndContinue) {
   Graph graph(scope.main_zone());
   CommonOperatorBuilder common_builder(scope.main_zone());
   JSOperatorBuilder js_builder(scope.main_zone());
-  Operator* op;
+  const Operator* op;
 
   Handle<Object> object =
       Handle<Object>(isolate->heap()->undefined_value(), isolate);
-  PrintableUnique<Object> unique_constant =
-      PrintableUnique<Object>::CreateUninitialized(scope.main_zone(), object);
+  Unique<Object> unique_constant = Unique<Object>::CreateUninitialized(object);
 
   // Manually transcripted code for:
   // function turbo_fan_test(a, b, c) {
@@ -1218,14 +1214,14 @@ TEST(BuildScheduleBreakAndContinue) {
   op = js_builder.Add();
   Node* n56 = graph.NewNode(op, nil, nil, nil, nil, nil);
   USE(n56);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n10 = graph.NewNode(op, nil, nil, nil);
   USE(n10);
   op = common_builder.Parameter(0);
   Node* n2 = graph.NewNode(op, n0);
   USE(n2);
   n10->ReplaceInput(0, n2);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n25 = graph.NewNode(op, nil, nil, nil);
   USE(n25);
   op = js_builder.Add();
@@ -1243,14 +1239,14 @@ TEST(BuildScheduleBreakAndContinue) {
   Node* n16 = graph.NewNode(op, nil, nil, nil, nil, nil);
   USE(n16);
   n16->ReplaceInput(0, n10);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n11 = graph.NewNode(op, nil, nil, nil);
   USE(n11);
   op = common_builder.Parameter(0);
   Node* n3 = graph.NewNode(op, n0);
   USE(n3);
   n11->ReplaceInput(0, n3);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n26 = graph.NewNode(op, nil, nil, nil);
   USE(n26);
   n26->ReplaceInput(0, n11);
@@ -1287,23 +1283,23 @@ TEST(BuildScheduleBreakAndContinue) {
   USE(n46);
   n47->ReplaceInput(1, n46);
   n47->ReplaceInput(2, n6);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n42 = graph.NewNode(op, nil, nil, nil);
   USE(n42);
   op = js_builder.LessThan();
   Node* n30 = graph.NewNode(op, nil, nil, nil, nil, nil);
   USE(n30);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n27 = graph.NewNode(op, nil, nil, nil);
   USE(n27);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n12 = graph.NewNode(op, nil, nil, nil);
   USE(n12);
   op = common_builder.Parameter(0);
   Node* n4 = graph.NewNode(op, n0);
   USE(n4);
   n12->ReplaceInput(0, n4);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n41 = graph.NewNode(op, nil, nil, nil);
   USE(n41);
   n41->ReplaceInput(0, n27);
@@ -1352,17 +1348,17 @@ TEST(BuildScheduleBreakAndContinue) {
   op = js_builder.Equal();
   Node* n37 = graph.NewNode(op, nil, nil, nil, nil, nil);
   USE(n37);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n28 = graph.NewNode(op, nil, nil, nil);
   USE(n28);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n13 = graph.NewNode(op, nil, nil, nil);
   USE(n13);
   op = common_builder.NumberConstant(0);
   Node* n7 = graph.NewNode(op);
   USE(n7);
   n13->ReplaceInput(0, n7);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n54 = graph.NewNode(op, nil, nil, nil);
   USE(n54);
   n54->ReplaceInput(0, n28);
@@ -1413,7 +1409,7 @@ TEST(BuildScheduleBreakAndContinue) {
   n30->ReplaceInput(0, n27);
   n30->ReplaceInput(1, n26);
   n30->ReplaceInput(2, n6);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n29 = graph.NewNode(op, nil, nil, nil);
   USE(n29);
   n29->ReplaceInput(0, n22);
@@ -1460,11 +1456,11 @@ TEST(BuildScheduleBreakAndContinue) {
   n11->ReplaceInput(2, n8);
   n16->ReplaceInput(1, n11);
   n16->ReplaceInput(2, n6);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n14 = graph.NewNode(op, nil, nil, nil);
   USE(n14);
   n14->ReplaceInput(0, n0);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n55 = graph.NewNode(op, nil, nil, nil);
   USE(n55);
   n55->ReplaceInput(0, n47);
@@ -1513,13 +1509,12 @@ TEST(BuildScheduleSimpleLoopWithCodeMotion) {
   Graph graph(scope.main_zone());
   CommonOperatorBuilder common_builder(scope.main_zone());
   JSOperatorBuilder js_builder(scope.main_zone());
-  MachineOperatorBuilder machine_builder(scope.main_zone());
-  Operator* op;
+  MachineOperatorBuilder machine_builder;
+  const Operator* op;
 
   Handle<Object> object =
       Handle<Object>(isolate->heap()->undefined_value(), isolate);
-  PrintableUnique<Object> unique_constant =
-      PrintableUnique<Object>::CreateUninitialized(scope.main_zone(), object);
+  Unique<Object> unique_constant = Unique<Object>::CreateUninitialized(object);
 
   // Manually transcripted code for:
   // function turbo_fan_test(a, b, c) {
@@ -1538,7 +1533,7 @@ TEST(BuildScheduleSimpleLoopWithCodeMotion) {
   op = common_builder.Return();
   Node* n21 = graph.NewNode(op, nil, nil, nil);
   USE(n21);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n9 = graph.NewNode(op, nil, nil, nil);
   USE(n9);
   op = common_builder.Parameter(0);
@@ -1552,7 +1547,7 @@ TEST(BuildScheduleSimpleLoopWithCodeMotion) {
   op = machine_builder.Int32Add();
   Node* n19 = graph.NewNode(op, nil, nil);
   USE(n19);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n10 = graph.NewNode(op, nil, nil, nil);
   USE(n10);
   op = common_builder.Parameter(0);
@@ -1582,7 +1577,7 @@ TEST(BuildScheduleSimpleLoopWithCodeMotion) {
   Node* n6 = graph.NewNode(op);
   USE(n6);
   n14->ReplaceInput(2, n6);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n12 = graph.NewNode(op, nil, nil, nil);
   USE(n12);
   n12->ReplaceInput(0, n0);
@@ -1600,7 +1595,7 @@ TEST(BuildScheduleSimpleLoopWithCodeMotion) {
   n7->ReplaceInput(1, n17);
   n10->ReplaceInput(2, n7);
   n19->ReplaceInput(0, n2);
-  op = common_builder.Phi(2);
+  op = common_builder.Phi(kMachAnyTagged, 2);
   Node* n11 = graph.NewNode(op, nil, nil, nil);
   USE(n11);
   op = common_builder.Parameter(0);
@@ -1637,142 +1632,6 @@ TEST(BuildScheduleSimpleLoopWithCodeMotion) {
 
 #if V8_TURBOFAN_TARGET
 
-// So we can get a real JS function.
-static Handle<JSFunction> Compile(const char* source) {
-  Isolate* isolate = CcTest::i_isolate();
-  Handle<String> source_code = isolate->factory()
-                                   ->NewStringFromUtf8(CStrVector(source))
-                                   .ToHandleChecked();
-  Handle<SharedFunctionInfo> shared_function = Compiler::CompileScript(
-      source_code, Handle<String>(), 0, 0, false,
-      Handle<Context>(isolate->native_context()), NULL, NULL,
-      v8::ScriptCompiler::kNoCompileOptions, NOT_NATIVES_CODE);
-  return isolate->factory()->NewFunctionFromSharedFunctionInfo(
-      shared_function, isolate->native_context());
-}
-
-
-TEST(BuildScheduleTrivialLazyDeoptCall) {
-  FLAG_turbo_deoptimization = true;
-
-  HandleAndZoneScope scope;
-  Isolate* isolate = scope.main_isolate();
-  Graph graph(scope.main_zone());
-  CommonOperatorBuilder common(scope.main_zone());
-  JSOperatorBuilder js_builder(scope.main_zone());
-
-  InitializedHandleScope handles;
-  Handle<JSFunction> function = Compile("m()");
-  CompilationInfoWithZone info(function);
-  Linkage linkage(&info);
-
-  // Manually transcribed code for:
-  // function turbo_fan_test() {
-  //   m();
-  // }
-  // where m can lazy deopt (so it has a deopt block associated with it).
-
-
-  //                  Start                                    //
-  //                    ^                                      //
-  //                    | (EC)                                 //
-  //                    |                                      //
-  //         /------> Call <--------------\                    //
-  //        /        ^    ^                \                   //
-  //       /         |    |                 \        undef     //
-  //      /          /    \                  \         ^       //
-  //  (E) |     (C) /      \  (C)             \ (E)    |       //
-  //      | Continuation  LazyDeoptimization  |        |       //
-  //      \___    ^           ^               /        |       //
-  //          \   |           |        ______/    Framestate   //
-  //    undef  \  | (VC)      | (C)   /            ^           //
-  //         \  \ |           |      /            /            //
-  //          Return    Deoptimization ----------/             //
-  //              ^           ^                                //
-  //               \         /                                 //
-  //            (C) \       / (C)                              //
-  //                 \     /                                   //
-  //                  Merge                                    //
-  //                    ^                                      //
-  //                    |                                      //
-  //                   End                                     //
-
-  Handle<Object> undef_object =
-      Handle<Object>(isolate->heap()->undefined_value(), isolate);
-  PrintableUnique<Object> undef_constant =
-      PrintableUnique<Object>::CreateUninitialized(scope.main_zone(),
-                                                   undef_object);
-
-  Node* undef_node = graph.NewNode(common.HeapConstant(undef_constant));
-
-  Node* start_node = graph.NewNode(common.Start(0));
-
-  CallDescriptor* descriptor = linkage.GetJSCallDescriptor(0);
-  Node* call_node = graph.NewNode(common.Call(descriptor),
-                                  undef_node,   // function
-                                  undef_node,   // context
-                                  start_node,   // effect
-                                  start_node);  // control
-
-  Node* cont_node = graph.NewNode(common.Continuation(), call_node);
-  Node* lazy_deopt_node = graph.NewNode(common.LazyDeoptimization(), call_node);
-
-  Node* parameters = graph.NewNode(common.StateValues(1), undef_node);
-  Node* locals = graph.NewNode(common.StateValues(0));
-  Node* stack = graph.NewNode(common.StateValues(0));
-
-  Node* state_node = graph.NewNode(common.FrameState(BailoutId(1234)),
-                                   parameters, locals, stack);
-
-  Node* return_node = graph.NewNode(common.Return(),
-                                    undef_node,  // return value
-                                    call_node,   // effect
-                                    cont_node);  // control
-  Node* deoptimization_node = graph.NewNode(common.Deoptimize(),
-                                            state_node,  // deopt environment
-                                            call_node,   // effect
-                                            lazy_deopt_node);  // control
-
-  Node* merge_node =
-      graph.NewNode(common.Merge(2), return_node, deoptimization_node);
-
-  Node* end_node = graph.NewNode(common.End(), merge_node);
-
-  graph.SetStart(start_node);
-  graph.SetEnd(end_node);
-
-  Schedule* schedule = ComputeAndVerifySchedule(12, &graph);
-
-  // Tests:
-  // Continuation and deopt have basic blocks.
-  BasicBlock* cont_block = schedule->block(cont_node);
-  BasicBlock* deopt_block = schedule->block(lazy_deopt_node);
-  BasicBlock* call_block = schedule->block(call_node);
-  CHECK_NE(NULL, cont_block);
-  CHECK_NE(NULL, deopt_block);
-  CHECK_NE(NULL, call_block);
-  // The basic blocks are different.
-  CHECK_NE(cont_block, deopt_block);
-  CHECK_NE(cont_block, call_block);
-  CHECK_NE(deopt_block, call_block);
-  // The call node finishes its own basic block.
-  CHECK_EQ(BasicBlock::kCall, call_block->control_);
-  CHECK_EQ(call_node, call_block->control_input_);
-  // The lazy deopt block is deferred.
-  CHECK(deopt_block->deferred_);
-  CHECK(!call_block->deferred_);
-  CHECK(!cont_block->deferred_);
-  // The lazy deopt block contains framestate + bailout (and nothing else).
-  CHECK_EQ(deoptimization_node, deopt_block->control_input_);
-  CHECK_EQ(5, static_cast<int>(deopt_block->nodes_.size()));
-  CHECK_EQ(lazy_deopt_node, deopt_block->nodes_[0]);
-  CHECK_EQ(IrOpcode::kStateValues, deopt_block->nodes_[1]->op()->opcode());
-  CHECK_EQ(IrOpcode::kStateValues, deopt_block->nodes_[2]->op()->opcode());
-  CHECK_EQ(IrOpcode::kStateValues, deopt_block->nodes_[3]->op()->opcode());
-  CHECK_EQ(state_node, deopt_block->nodes_[4]);
-}
-
-
 static Node* CreateDiamond(Graph* graph, CommonOperatorBuilder* common,
                            Node* cond) {
   Node* tv = graph->NewNode(common->Int32Constant(6));
@@ -1781,7 +1640,7 @@ static Node* CreateDiamond(Graph* graph, CommonOperatorBuilder* common,
   Node* t = graph->NewNode(common->IfTrue(), br);
   Node* f = graph->NewNode(common->IfFalse(), br);
   Node* m = graph->NewNode(common->Merge(2), t, f);
-  Node* phi = graph->NewNode(common->Phi(2), tv, fv, m);
+  Node* phi = graph->NewNode(common->Phi(kMachAnyTagged, 2), tv, fv, m);
   return phi;
 }
 
@@ -1809,7 +1668,7 @@ TEST(FloatingDiamond2) {
   HandleAndZoneScope scope;
   Graph graph(scope.main_zone());
   CommonOperatorBuilder common(scope.main_zone());
-  MachineOperatorBuilder machine(scope.main_zone());
+  MachineOperatorBuilder machine;
 
   Node* start = graph.NewNode(common.Start(2));
   graph.SetStart(start);
@@ -1832,7 +1691,7 @@ TEST(FloatingDiamond3) {
   HandleAndZoneScope scope;
   Graph graph(scope.main_zone());
   CommonOperatorBuilder common(scope.main_zone());
-  MachineOperatorBuilder machine(scope.main_zone());
+  MachineOperatorBuilder machine;
 
   Node* start = graph.NewNode(common.Start(2));
   graph.SetStart(start);

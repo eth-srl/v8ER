@@ -20,7 +20,7 @@
 #include "src/heap/heap.h"
 #include "src/optimizing-compiler-thread.h"
 #include "src/regexp-stack.h"
-#include "src/runtime.h"
+#include "src/runtime/runtime.h"
 #include "src/runtime-profiler.h"
 #include "src/zone.h"
 
@@ -32,11 +32,12 @@ class RandomNumberGenerator;
 
 namespace internal {
 
+class BasicBlockProfiler;
 class Bootstrapper;
-class CallInterfaceDescriptor;
+class CallInterfaceDescriptorData;
 class CodeGenerator;
 class CodeRange;
-class CodeStubInterfaceDescriptor;
+class CodeStubDescriptor;
 class CodeTracer;
 class CompilationCache;
 class ConsStringIteratorOp;
@@ -133,6 +134,22 @@ typedef ZoneList<Handle<Object> > ZoneObjectList;
 
 #define ASSIGN_RETURN_ON_EXCEPTION(isolate, dst, call, T)  \
   ASSIGN_RETURN_ON_EXCEPTION_VALUE(isolate, dst, call, MaybeHandle<T>())
+
+#define THROW_NEW_ERROR(isolate, call, T)                                    \
+  do {                                                                       \
+    Handle<Object> __error__;                                                \
+    ASSIGN_RETURN_ON_EXCEPTION(isolate, __error__, isolate->factory()->call, \
+                               T);                                           \
+    return isolate->Throw<T>(__error__);                                     \
+  } while (false)
+
+#define THROW_NEW_ERROR_RETURN_FAILURE(isolate, call)             \
+  do {                                                            \
+    Handle<Object> __error__;                                     \
+    ASSIGN_RETURN_FAILURE_ON_EXCEPTION(isolate, __error__,        \
+                                       isolate->factory()->call); \
+    return isolate->Throw(*__error__);                            \
+  } while (false)
 
 #define RETURN_ON_EXCEPTION_VALUE(isolate, call, value)            \
   do {                                                             \
@@ -451,17 +468,17 @@ class Isolate {
     kIsolateAddressCount
   };
 
+  static void InitializeOncePerProcess();
+
   // Returns the PerIsolateThreadData for the current thread (or NULL if one is
   // not currently set).
   static PerIsolateThreadData* CurrentPerIsolateThreadData() {
-    EnsureInitialized();
     return reinterpret_cast<PerIsolateThreadData*>(
         base::Thread::GetThreadLocal(per_isolate_thread_data_key_));
   }
 
   // Returns the isolate inside which the current thread is running.
   INLINE(static Isolate* Current()) {
-    EnsureInitialized();
     Isolate* isolate = reinterpret_cast<Isolate*>(
         base::Thread::GetExistingThreadLocal(isolate_key_));
     DCHECK(isolate != NULL);
@@ -469,7 +486,6 @@ class Isolate {
   }
 
   INLINE(static Isolate* UncheckedCurrent()) {
-    EnsureInitialized();
     return reinterpret_cast<Isolate*>(
         base::Thread::GetThreadLocal(isolate_key_));
   }
@@ -514,13 +530,11 @@ class Isolate {
   // Used internally for V8 threads that do not execute JavaScript but still
   // are part of the domain of an isolate (like the context switcher).
   static base::Thread::LocalStorageKey isolate_key() {
-    EnsureInitialized();
     return isolate_key_;
   }
 
   // Returns the key used to store process-wide thread IDs.
   static base::Thread::LocalStorageKey thread_id_key() {
-    EnsureInitialized();
     return thread_id_key_;
   }
 
@@ -763,7 +777,6 @@ class Isolate {
   // Return pending location if any or unfilled structure.
   MessageLocation GetMessageLocation();
   Object* ThrowIllegalOperation();
-  Object* ThrowInvalidStringLength();
 
   // Promote a scheduled exception to pending. Asserts has_scheduled_exception.
   Object* PromoteScheduledException();
@@ -1020,19 +1033,7 @@ class Isolate {
 
   bool IsFastArrayConstructorPrototypeChainIntact();
 
-  CodeStubInterfaceDescriptor*
-      code_stub_interface_descriptor(int index);
-
-  enum CallDescriptorKey {
-    KeyedCall,
-    NamedCall,
-    CallHandler,
-    ArgumentAdaptorCall,
-    ApiFunctionCall,
-    NUMBER_OF_CALL_DESCRIPTORS
-  };
-
-  CallInterfaceDescriptor* call_descriptor(CallDescriptorKey index);
+  CallInterfaceDescriptorData* call_descriptor_data(int index);
 
   void IterateDeferredHandles(ObjectVisitor* visitor);
   void LinkDeferredHandles(DeferredHandles* deferred_handles);
@@ -1108,9 +1109,12 @@ class Isolate {
   void SetUseCounterCallback(v8::Isolate::UseCounterCallback callback);
   void CountUsage(v8::Isolate::UseCounterFeature feature);
 
- private:
-  static void EnsureInitialized();
+  BasicBlockProfiler* GetOrCreateBasicBlockProfiler();
+  BasicBlockProfiler* basic_block_profiler() { return basic_block_profiler_; }
 
+  static Isolate* NewForTesting() { return new Isolate(); }
+
+ private:
   Isolate();
 
   friend struct GlobalState;
@@ -1169,8 +1173,7 @@ class Isolate {
     DISALLOW_COPY_AND_ASSIGN(EntryStackItem);
   };
 
-  // This mutex protects highest_thread_id_ and thread_data_table_.
-  static base::LazyMutex process_wide_mutex_;
+  static base::LazyMutex thread_data_table_mutex_;
 
   static base::Thread::LocalStorageKey per_isolate_thread_data_key_;
   static base::Thread::LocalStorageKey isolate_key_;
@@ -1268,8 +1271,7 @@ class Isolate {
   RegExpStack* regexp_stack_;
   DateCache* date_cache_;
   unibrow::Mapping<unibrow::Ecma262Canonicalize> interp_canonicalize_mapping_;
-  CodeStubInterfaceDescriptor* code_stub_interface_descriptors_;
-  CallInterfaceDescriptor* call_descriptors_;
+  CallInterfaceDescriptorData* call_descriptor_data_;
   base::RandomNumberGenerator* random_number_generator_;
 
   // Whether the isolate has been created for snapshotting.
@@ -1330,6 +1332,7 @@ class Isolate {
   List<CallCompletedCallback> call_completed_callbacks_;
 
   v8::Isolate::UseCounterCallback use_counter_callback_;
+  BasicBlockProfiler* basic_block_profiler_;
 
   friend class ExecutionAccess;
   friend class HandleScopeImplementer;
@@ -1488,7 +1491,7 @@ class PostponeInterruptsScope BASE_EMBEDDED {
 };
 
 
-class CodeTracer V8_FINAL : public Malloced {
+class CodeTracer FINAL : public Malloced {
  public:
   explicit CodeTracer(int isolate_id)
       : file_(NULL),

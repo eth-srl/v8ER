@@ -7,6 +7,7 @@
 
 #include "src/v8.h"
 
+#include "src/bailout-reason.h"
 #include "src/func-name-inferrer.h"
 #include "src/hashmap.h"
 #include "src/scanner.h"
@@ -46,6 +47,7 @@ namespace internal {
 //     typedef Identifier;
 //     typedef Expression;
 //     typedef FunctionLiteral;
+//     typedef ClassLiteral;
 //     typedef ObjectLiteralProperty;
 //     typedef Literal;
 //     typedef ExpressionList;
@@ -78,13 +80,13 @@ class ParserBase : public Traits {
         fni_(NULL),
         log_(log),
         mode_(PARSE_EAGERLY),  // Lazy mode must be set explicitly.
-        scanner_(scanner),
         stack_limit_(stack_limit),
+        scanner_(scanner),
         stack_overflow_(false),
         allow_lazy_(false),
         allow_natives_syntax_(false),
-        allow_generators_(false),
         allow_arrow_functions_(false),
+        allow_harmony_object_literals_(false),
         zone_(zone),
         ast_node_id_gen_(ast_node_id_gen) {}
 
@@ -92,7 +94,6 @@ class ParserBase : public Traits {
   // allowed to be parsed by this instance of the parser.
   bool allow_lazy() const { return allow_lazy_; }
   bool allow_natives_syntax() const { return allow_natives_syntax_; }
-  bool allow_generators() const { return allow_generators_; }
   bool allow_arrow_functions() const { return allow_arrow_functions_; }
   bool allow_modules() const { return scanner()->HarmonyModules(); }
   bool allow_harmony_scoping() const { return scanner()->HarmonyScoping(); }
@@ -100,12 +101,14 @@ class ParserBase : public Traits {
     return scanner()->HarmonyNumericLiterals();
   }
   bool allow_classes() const { return scanner()->HarmonyClasses(); }
+  bool allow_harmony_object_literals() const {
+    return allow_harmony_object_literals_;
+  }
 
   // Setters that determine whether certain syntactical constructs are
   // allowed to be parsed by this instance of the parser.
   void set_allow_lazy(bool allow) { allow_lazy_ = allow; }
   void set_allow_natives_syntax(bool allow) { allow_natives_syntax_ = allow; }
-  void set_allow_generators(bool allow) { allow_generators_ = allow; }
   void set_allow_arrow_functions(bool allow) { allow_arrow_functions_ = allow; }
   void set_allow_modules(bool allow) { scanner()->SetHarmonyModules(allow); }
   void set_allow_harmony_scoping(bool allow) {
@@ -114,8 +117,9 @@ class ParserBase : public Traits {
   void set_allow_harmony_numeric_literals(bool allow) {
     scanner()->SetHarmonyNumericLiterals(allow);
   }
-  void set_allow_classes(bool allow) {
-    scanner()->SetHarmonyClasses(allow);
+  void set_allow_classes(bool allow) { scanner()->SetHarmonyClasses(allow); }
+  void set_allow_harmony_object_literals(bool allow) {
+    allow_harmony_object_literals_ = allow;
   }
 
  protected:
@@ -478,8 +482,11 @@ class ParserBase : public Traits {
   ExpressionT ParsePrimaryExpression(bool* ok);
   ExpressionT ParseExpression(bool accept_IN, bool* ok);
   ExpressionT ParseArrayLiteral(bool* ok);
+  IdentifierT ParsePropertyName(bool* is_get, bool* is_set, bool* is_static,
+                                bool* ok);
   ExpressionT ParseObjectLiteral(bool* ok);
   ObjectLiteralPropertyT ParsePropertyDefinition(ObjectLiteralChecker* checker,
+                                                 bool in_class, bool is_static,
                                                  bool* ok);
   typename Traits::Type::ExpressionList ParseArguments(bool* ok);
   ExpressionT ParseAssignmentExpression(bool accept_IN, bool* ok);
@@ -495,6 +502,10 @@ class ParserBase : public Traits {
                                                 bool* ok);
   ExpressionT ParseArrowFunctionLiteral(int start_pos, ExpressionT params_ast,
                                         bool* ok);
+  ExpressionT ParseClassLiteral(IdentifierT name,
+                                Scanner::Location function_name_location,
+                                bool name_is_strict_reserved, int pos,
+                                bool* ok);
 
   // Checks if the expression is a valid reference expression (e.g., on the
   // left-hand side of assignments). Although ruled out by ECMA as early errors,
@@ -569,16 +580,16 @@ class ParserBase : public Traits {
   FuncNameInferrer* fni_;
   ParserRecorder* log_;
   Mode mode_;
+  uintptr_t stack_limit_;
 
  private:
   Scanner* scanner_;
-  uintptr_t stack_limit_;
   bool stack_overflow_;
 
   bool allow_lazy_;
   bool allow_natives_syntax_;
-  bool allow_generators_;
   bool allow_arrow_functions_;
+  bool allow_harmony_object_literals_;
 
   typename Traits::Type::Zone* zone_;  // Only used by Parser.
   AstNode::IdGen* ast_node_id_gen_;
@@ -609,10 +620,20 @@ class PreParserIdentifier {
   static PreParserIdentifier Yield() {
     return PreParserIdentifier(kYieldIdentifier);
   }
+  static PreParserIdentifier Prototype() {
+    return PreParserIdentifier(kPrototypeIdentifier);
+  }
+  static PreParserIdentifier Constructor() {
+    return PreParserIdentifier(kConstructorIdentifier);
+  }
   bool IsEval() const { return type_ == kEvalIdentifier; }
   bool IsArguments() const { return type_ == kArgumentsIdentifier; }
-  bool IsEvalOrArguments() const { return type_ >= kEvalIdentifier; }
   bool IsYield() const { return type_ == kYieldIdentifier; }
+  bool IsPrototype() const { return type_ == kPrototypeIdentifier; }
+  bool IsConstructor() const { return type_ == kConstructorIdentifier; }
+  bool IsEvalOrArguments() const {
+    return type_ == kEvalIdentifier || type_ == kArgumentsIdentifier;
+  }
   bool IsFutureReserved() const { return type_ == kFutureReservedIdentifier; }
   bool IsFutureStrictReserved() const {
     return type_ == kFutureStrictReservedIdentifier;
@@ -635,7 +656,9 @@ class PreParserIdentifier {
     kLetIdentifier,
     kYieldIdentifier,
     kEvalIdentifier,
-    kArgumentsIdentifier
+    kArgumentsIdentifier,
+    kPrototypeIdentifier,
+    kConstructorIdentifier
   };
   explicit PreParserIdentifier(Type type) : type_(type) {}
   Type type_;
@@ -925,6 +948,7 @@ class PreParserScope {
   ScopeType type() { return scope_type_; }
   StrictMode strict_mode() const { return strict_mode_; }
   void SetStrictMode(StrictMode strict_mode) { strict_mode_ = strict_mode; }
+  void SetScopeName(PreParserIdentifier name) {}
 
   // When PreParser is in use, lazy compilation is already being done,
   // things cannot get lazier than that.
@@ -969,11 +993,12 @@ class PreParserFactory {
   }
   PreParserExpression NewObjectLiteralProperty(bool is_getter,
                                                PreParserExpression value,
-                                               int pos) {
+                                               int pos, bool is_static) {
     return PreParserExpression::Default();
   }
   PreParserExpression NewObjectLiteralProperty(PreParserExpression key,
-                                               PreParserExpression value) {
+                                               PreParserExpression value,
+                                               bool is_static) {
     return PreParserExpression::Default();
   }
   PreParserExpression NewObjectLiteral(PreParserExpressionList properties,
@@ -983,7 +1008,7 @@ class PreParserFactory {
                                        int pos) {
     return PreParserExpression::Default();
   }
-  PreParserExpression NewVariableProxy(void* generator_variable) {
+  PreParserExpression NewVariableProxy(void* variable) {
     return PreParserExpression::Default();
   }
   PreParserExpression NewProperty(PreParserExpression obj,
@@ -1055,8 +1080,15 @@ class PreParserFactory {
       FunctionLiteral::ParameterFlag has_duplicate_parameters,
       FunctionLiteral::FunctionType function_type,
       FunctionLiteral::IsFunctionFlag is_function,
-      FunctionLiteral::IsParenthesizedFlag is_parenthesized,
-      FunctionLiteral::KindFlag kind, int position) {
+      FunctionLiteral::IsParenthesizedFlag is_parenthesized, FunctionKind kind,
+      int position) {
+    return PreParserExpression::Default();
+  }
+  PreParserExpression NewClassLiteral(PreParserIdentifier name,
+                                      PreParserExpression extends,
+                                      PreParserExpression constructor,
+                                      PreParserExpressionList properties,
+                                      int position) {
     return PreParserExpression::Default();
   }
 
@@ -1097,6 +1129,7 @@ class PreParserTraits {
     typedef PreParserExpression Expression;
     typedef PreParserExpression YieldExpression;
     typedef PreParserExpression FunctionLiteral;
+    typedef PreParserExpression ClassLiteral;
     typedef PreParserExpression ObjectLiteralProperty;
     typedef PreParserExpression Literal;
     typedef PreParserExpressionList ExpressionList;
@@ -1121,6 +1154,14 @@ class PreParserTraits {
   // Helper functions for recursive descent.
   static bool IsEvalOrArguments(PreParserIdentifier identifier) {
     return identifier.IsEvalOrArguments();
+  }
+
+  static bool IsPrototype(PreParserIdentifier identifier) {
+    return identifier.IsPrototype();
+  }
+
+  static bool IsConstructor(PreParserIdentifier identifier) {
+    return identifier.IsConstructor();
   }
 
   // Returns true if the expression is of type "this.foo".
@@ -1243,6 +1284,9 @@ class PreParserTraits {
   static PreParserExpression EmptyObjectLiteralProperty() {
     return PreParserExpression::Default();
   }
+  static PreParserExpression EmptyFunctionLiteral() {
+    return PreParserExpression::Default();
+  }
   static PreParserExpressionList NullExpressionList() {
     return PreParserExpressionList();
   }
@@ -1269,6 +1313,15 @@ class PreParserTraits {
   static PreParserExpression SuperReference(PreParserScope* scope,
                                             PreParserFactory* factory) {
     return PreParserExpression::Super();
+  }
+
+  static PreParserExpression ClassLiteral(PreParserIdentifier name,
+                                          PreParserExpression extends,
+                                          PreParserExpression constructor,
+                                          PreParserExpressionList properties,
+                                          int position,
+                                          PreParserFactory* factory) {
+    return PreParserExpression::Default();
   }
 
   static PreParserExpression ExpressionFromLiteral(
@@ -1332,14 +1385,10 @@ class PreParserTraits {
   // Temporary glue; these functions will move to ParserBase.
   PreParserExpression ParseV8Intrinsic(bool* ok);
   PreParserExpression ParseFunctionLiteral(
-      PreParserIdentifier name,
-      Scanner::Location function_name_location,
-      bool name_is_strict_reserved,
-      bool is_generator,
-      int function_token_position,
-      FunctionLiteral::FunctionType type,
-      FunctionLiteral::ArityRestriction arity_restriction,
-      bool* ok);
+      PreParserIdentifier name, Scanner::Location function_name_location,
+      bool name_is_strict_reserved, FunctionKind kind,
+      int function_token_position, FunctionLiteral::FunctionType type,
+      FunctionLiteral::ArityRestriction arity_restriction, bool* ok);
 
   static int next_ast_node_id(Type::Zone *) { return 0; }
 
@@ -1439,6 +1488,7 @@ class PreParser : public ParserBase<PreParserTraits> {
   SourceElements ParseSourceElements(int end_token, bool* ok);
   Statement ParseStatement(bool* ok);
   Statement ParseFunctionDeclaration(bool* ok);
+  Statement ParseClassDeclaration(bool* ok);
   Statement ParseBlock(bool* ok);
   Statement ParseVariableStatement(VariableDeclarationContext var_context,
                                    bool* ok);
@@ -1472,14 +1522,10 @@ class PreParser : public ParserBase<PreParserTraits> {
                              bool is_generator, bool* ok);
 
   Expression ParseFunctionLiteral(
-      Identifier name,
-      Scanner::Location function_name_location,
-      bool name_is_strict_reserved,
-      bool is_generator,
-      int function_token_pos,
+      Identifier name, Scanner::Location function_name_location,
+      bool name_is_strict_reserved, FunctionKind kind, int function_token_pos,
       FunctionLiteral::FunctionType function_type,
-      FunctionLiteral::ArityRestriction arity_restriction,
-      bool* ok);
+      FunctionLiteral::ArityRestriction arity_restriction, bool* ok);
   void ParseLazyFunctionLiteralBody(bool* ok);
 
   bool CheckInOrOf(bool accept_OF);
@@ -1716,6 +1762,7 @@ ParserBase<Traits>::ParsePrimaryExpression(bool* ok) {
   //   ArrayLiteral
   //   ObjectLiteral
   //   RegExpLiteral
+  //   ClassLiteral
   //   '(' Expression ')'
 
   int pos = peek_position();
@@ -1786,6 +1833,23 @@ ParserBase<Traits>::ParsePrimaryExpression(bool* ok) {
       }
       break;
 
+    case Token::CLASS: {
+      Consume(Token::CLASS);
+      int class_token_position = position();
+      IdentifierT name = this->EmptyIdentifier();
+      bool is_strict_reserved_name = false;
+      Scanner::Location class_name_location = Scanner::Location::invalid();
+      if (peek_any_identifier()) {
+        name = ParseIdentifierOrStrictReservedWord(&is_strict_reserved_name,
+                                                   CHECK_OK);
+        class_name_location = scanner()->location();
+      }
+      result = this->ParseClassLiteral(name, class_name_location,
+                                       is_strict_reserved_name,
+                                       class_token_position, CHECK_OK);
+      break;
+    }
+
     case Token::MOD:
       if (allow_natives_syntax() || extension_ != NULL) {
         result = this->ParseV8Intrinsic(CHECK_OK);
@@ -1855,86 +1919,130 @@ typename ParserBase<Traits>::ExpressionT ParserBase<Traits>::ParseArrayLiteral(
 
 
 template <class Traits>
-typename ParserBase<Traits>::ObjectLiteralPropertyT ParserBase<
-    Traits>::ParsePropertyDefinition(ObjectLiteralChecker* checker, bool* ok) {
-  LiteralT key = this->EmptyLiteral();
+typename ParserBase<Traits>::IdentifierT ParserBase<Traits>::ParsePropertyName(
+    bool* is_get, bool* is_set, bool* is_static, bool* ok) {
   Token::Value next = peek();
-  int next_pos = peek_position();
-
   switch (next) {
-    case Token::STRING: {
+    case Token::STRING:
       Consume(Token::STRING);
-      IdentifierT string = this->GetSymbol(scanner_);
-      if (fni_ != NULL) this->PushLiteralName(fni_, string);
-      uint32_t index;
-      if (this->IsArrayIndex(string, &index)) {
-        key = factory()->NewNumberLiteral(index, next_pos);
-        break;
-      }
-      key = factory()->NewStringLiteral(string, next_pos);
-      break;
-    }
-    case Token::NUMBER: {
+      return this->GetSymbol(scanner_);
+    case Token::NUMBER:
       Consume(Token::NUMBER);
-      key = this->ExpressionFromLiteral(Token::NUMBER, next_pos, scanner_,
-                                        factory());
-      break;
-    }
-    default: {
-      bool is_getter = false;
-      bool is_setter = false;
-      IdentifierT id = ParseIdentifierNameOrGetOrSet(
-          &is_getter, &is_setter, CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
-      if (fni_ != NULL) this->PushLiteralName(fni_, id);
+      return this->GetNumberAsSymbol(scanner_);
+    case Token::STATIC:
+      *is_static = true;
+      // Fall through.
+    default:
+      return ParseIdentifierNameOrGetOrSet(is_get, is_set, ok);
+  }
+  UNREACHABLE();
+  return this->EmptyIdentifier();
+}
 
-      if ((is_getter || is_setter) && peek() != Token::COLON) {
-        // Special handling of getter and setter syntax:
-        // { ... , get foo() { ... }, ... , set foo(v) { ... v ... } , ... }
-        // We have already read the "get" or "set" keyword.
-        IdentifierT name = this->EmptyIdentifier();
-        switch (peek()) {
-          case Token::STRING:
-            Consume(Token::STRING);
-            name = this->GetSymbol(scanner_);
-            break;
-          case Token::NUMBER:
-            Consume(Token::NUMBER);
-            name = this->GetNumberAsSymbol(scanner_);
-            break;
-          default:
-            name = ParseIdentifierName(
-                CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
-        }
-        // Validate the property.
-        PropertyKind type = is_getter ? kGetterProperty : kSetterProperty;
-        checker->CheckProperty(next, type,
-                               CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
-        typename Traits::Type::FunctionLiteral value =
-            this->ParseFunctionLiteral(
-                name, scanner()->location(),
-                false,  // reserved words are allowed here
-                false,  // not a generator
-                RelocInfo::kNoPosition, FunctionLiteral::ANONYMOUS_EXPRESSION,
-                is_getter ? FunctionLiteral::GETTER_ARITY
-                          : FunctionLiteral::SETTER_ARITY,
-                CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
-        return factory()->NewObjectLiteralProperty(is_getter, value, next_pos);
-      }
-      // Failed to parse as get/set property, so it's just a normal property
-      // (which might be called "get" or "set" or something else).
-      key = factory()->NewStringLiteral(id, next_pos);
+
+template <class Traits>
+typename ParserBase<Traits>::ObjectLiteralPropertyT ParserBase<
+    Traits>::ParsePropertyDefinition(ObjectLiteralChecker* checker,
+                                     bool in_class, bool is_static, bool* ok) {
+  ExpressionT value = this->EmptyExpression();
+  bool is_get = false;
+  bool is_set = false;
+  bool name_is_static = false;
+  bool is_generator = allow_harmony_object_literals_ && Check(Token::MUL);
+
+  Token::Value name_token = peek();
+  int next_pos = peek_position();
+  IdentifierT name =
+      ParsePropertyName(&is_get, &is_set, &name_is_static,
+                        CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
+
+  if (fni_ != NULL) this->PushLiteralName(fni_, name);
+
+  if (!in_class && !is_generator && peek() == Token::COLON) {
+    // PropertyDefinition : PropertyName ':' AssignmentExpression
+    checker->CheckProperty(name_token, kValueProperty,
+                           CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
+    Consume(Token::COLON);
+    value = this->ParseAssignmentExpression(
+        true, CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
+
+  } else if (is_generator ||
+             (allow_harmony_object_literals_ && peek() == Token::LPAREN)) {
+    // Concise Method
+
+    if (is_static && this->IsPrototype(name)) {
+      ReportMessageAt(scanner()->location(), "static_prototype");
+      *ok = false;
+      return this->EmptyObjectLiteralProperty();
     }
+    if (is_generator && in_class && !is_static && this->IsConstructor(name)) {
+      ReportMessageAt(scanner()->location(), "constructor_special_method");
+      *ok = false;
+      return this->EmptyObjectLiteralProperty();
+    }
+
+    checker->CheckProperty(name_token, kValueProperty,
+                           CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
+    FunctionKind kind = is_generator ? FunctionKind::kConciseGeneratorMethod
+                                     : FunctionKind::kConciseMethod;
+
+    value = this->ParseFunctionLiteral(
+        name, scanner()->location(),
+        false,  // reserved words are allowed here
+        kind, RelocInfo::kNoPosition, FunctionLiteral::ANONYMOUS_EXPRESSION,
+        FunctionLiteral::NORMAL_ARITY,
+        CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
+
+  } else if (in_class && name_is_static && !is_static) {
+    // static MethodDefinition
+    return ParsePropertyDefinition(checker, true, true, ok);
+
+  } else if (is_get || is_set) {
+    // Accessor
+    bool dont_care = false;
+    name_token = peek();
+    name = ParsePropertyName(&dont_care, &dont_care, &dont_care,
+                             CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
+
+    // Validate the property.
+    if (is_static && this->IsPrototype(name)) {
+      ReportMessageAt(scanner()->location(), "static_prototype");
+      *ok = false;
+      return this->EmptyObjectLiteralProperty();
+    } else if (in_class && !is_static && this->IsConstructor(name)) {
+      // ES6, spec draft rev 27, treats static get constructor as an error too.
+      // https://bugs.ecmascript.org/show_bug.cgi?id=3223
+      // TODO(arv): Update when bug is resolved.
+      ReportMessageAt(scanner()->location(), "constructor_special_method");
+      *ok = false;
+      return this->EmptyObjectLiteralProperty();
+    }
+    checker->CheckProperty(name_token,
+                           is_get ? kGetterProperty : kSetterProperty,
+                           CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
+
+    typename Traits::Type::FunctionLiteral value = this->ParseFunctionLiteral(
+        name, scanner()->location(),
+        false,  // reserved words are allowed here
+        FunctionKind::kNormalFunction, RelocInfo::kNoPosition,
+        FunctionLiteral::ANONYMOUS_EXPRESSION,
+        is_get ? FunctionLiteral::GETTER_ARITY : FunctionLiteral::SETTER_ARITY,
+        CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
+    return factory()->NewObjectLiteralProperty(is_get, value, next_pos,
+                                               is_static);
+  } else {
+    Token::Value next = Next();
+    ReportUnexpectedToken(next);
+    *ok = false;
+    return this->EmptyObjectLiteralProperty();
   }
 
-  // Validate the property
-  checker->CheckProperty(next, kValueProperty,
-                         CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
+  uint32_t index;
+  LiteralT key = this->IsArrayIndex(name, &index)
+                     ? factory()->NewNumberLiteral(index, next_pos)
+                     : factory()->NewStringLiteral(name, next_pos);
 
-  Expect(Token::COLON, CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
-  ExpressionT value = this->ParseAssignmentExpression(
-      true, CHECK_OK_CUSTOM(EmptyObjectLiteralProperty));
-
-  return factory()->NewObjectLiteralProperty(key, value);
+  return factory()->NewObjectLiteralProperty(key, value, is_static);
 }
 
 
@@ -1957,8 +2065,10 @@ typename ParserBase<Traits>::ExpressionT ParserBase<Traits>::ParseObjectLiteral(
   while (peek() != Token::RBRACE) {
     if (fni_ != NULL) fni_->Enter();
 
+    const bool in_class = false;
+    const bool is_static = false;
     ObjectLiteralPropertyT property =
-        this->ParsePropertyDefinition(&checker, CHECK_OK);
+        this->ParsePropertyDefinition(&checker, in_class, is_static, CHECK_OK);
 
     // Mark top-level object literals that contain function literals and
     // pretenure the literal so it can be added as a constant function
@@ -2105,9 +2215,9 @@ ParserBase<Traits>::ParseYieldExpression(bool* ok) {
   ExpressionT generator_object =
       factory()->NewVariableProxy(function_state_->generator_object_variable());
   ExpressionT expression = Traits::EmptyExpression();
-  Yield::Kind kind = Yield::SUSPEND;
+  Yield::Kind kind = Yield::kSuspend;
   if (!scanner()->HasAnyLineTerminatorBeforeNext()) {
-    if (Check(Token::MUL)) kind = Yield::DELEGATING;
+    if (Check(Token::MUL)) kind = Yield::kDelegating;
     switch (peek()) {
       case Token::EOS:
       case Token::SEMICOLON:
@@ -2119,23 +2229,23 @@ ParserBase<Traits>::ParseYieldExpression(bool* ok) {
         // The above set of tokens is the complete set of tokens that can appear
         // after an AssignmentExpression, and none of them can start an
         // AssignmentExpression.  This allows us to avoid looking for an RHS for
-        // a Yield::SUSPEND operation, given only one look-ahead token.
-        if (kind == Yield::SUSPEND)
+        // a Yield::kSuspend operation, given only one look-ahead token.
+        if (kind == Yield::kSuspend)
           break;
-        DCHECK(kind == Yield::DELEGATING);
+        DCHECK_EQ(Yield::kDelegating, kind);
         // Delegating yields require an RHS; fall through.
       default:
         expression = ParseAssignmentExpression(false, CHECK_OK);
         break;
     }
   }
-  if (kind == Yield::DELEGATING) {
+  if (kind == Yield::kDelegating) {
     // var iterator = subject[Symbol.iterator]();
     expression = this->GetIterator(expression, factory());
   }
   typename Traits::Type::YieldExpression yield =
       factory()->NewYield(generator_object, expression, kind, pos);
-  if (kind == Yield::DELEGATING) {
+  if (kind == Yield::kDelegating) {
     yield->set_index(function_state_->NextHandlerIndex());
   }
   return yield;
@@ -2407,7 +2517,7 @@ template <class Traits>
 typename ParserBase<Traits>::ExpressionT
 ParserBase<Traits>::ParseMemberExpression(bool* ok) {
   // MemberExpression ::
-  //   (PrimaryExpression | FunctionLiteral)
+  //   (PrimaryExpression | FunctionLiteral | ClassLiteral)
   //     ('[' Expression ']' | '.' Identifier | Arguments)*
 
   // The '[' Expression ']' and '.' Identifier parts are parsed by
@@ -2419,7 +2529,7 @@ ParserBase<Traits>::ParseMemberExpression(bool* ok) {
   if (peek() == Token::FUNCTION) {
     Consume(Token::FUNCTION);
     int function_token_position = position();
-    bool is_generator = allow_generators() && Check(Token::MUL);
+    bool is_generator = Check(Token::MUL);
     IdentifierT name = this->EmptyIdentifier();
     bool is_strict_reserved_name = false;
     Scanner::Location function_name_location = Scanner::Location::invalid();
@@ -2431,14 +2541,12 @@ ParserBase<Traits>::ParseMemberExpression(bool* ok) {
       function_name_location = scanner()->location();
       function_type = FunctionLiteral::NAMED_EXPRESSION;
     }
-    result = this->ParseFunctionLiteral(name,
-                                        function_name_location,
-                                        is_strict_reserved_name,
-                                        is_generator,
-                                        function_token_position,
-                                        function_type,
-                                        FunctionLiteral::NORMAL_ARITY,
-                                        CHECK_OK);
+    result = this->ParseFunctionLiteral(
+        name, function_name_location, is_strict_reserved_name,
+        is_generator ? FunctionKind::kGeneratorFunction
+                     : FunctionKind::kNormalFunction,
+        function_token_position, function_type, FunctionLiteral::NORMAL_ARITY,
+        CHECK_OK);
   } else if (peek() == Token::SUPER) {
     int beg_pos = position();
     Consume(Token::SUPER);
@@ -2601,7 +2709,7 @@ typename ParserBase<Traits>::ExpressionT ParserBase<
       materialized_literal_count, expected_property_count, handler_count,
       num_parameters, FunctionLiteral::kNoDuplicateParameters,
       FunctionLiteral::ANONYMOUS_EXPRESSION, FunctionLiteral::kIsFunction,
-      FunctionLiteral::kNotParenthesized, FunctionLiteral::kArrowFunction,
+      FunctionLiteral::kNotParenthesized, FunctionKind::kArrowFunction,
       start_pos);
 
   function_literal->set_function_token_position(start_pos);
@@ -2612,6 +2720,66 @@ typename ParserBase<Traits>::ExpressionT ParserBase<
   if (fni_ != NULL) this->InferFunctionName(fni_, function_literal);
 
   return function_literal;
+}
+
+
+template <class Traits>
+typename ParserBase<Traits>::ExpressionT ParserBase<Traits>::ParseClassLiteral(
+    IdentifierT name, Scanner::Location class_name_location,
+    bool name_is_strict_reserved, int pos, bool* ok) {
+  // All parts of a ClassDeclaration or a ClassExpression are strict code.
+  if (name_is_strict_reserved) {
+    ReportMessageAt(class_name_location, "unexpected_strict_reserved");
+    *ok = false;
+    return this->EmptyExpression();
+  }
+  if (this->IsEvalOrArguments(name)) {
+    ReportMessageAt(class_name_location, "strict_eval_arguments");
+    *ok = false;
+    return this->EmptyExpression();
+  }
+
+  // TODO(arv): Implement scopes and name binding in class body only.
+  // TODO(arv): Maybe add CLASS_SCOPE?
+  typename Traits::Type::ScopePtr extends_scope =
+      this->NewScope(scope_, BLOCK_SCOPE);
+  FunctionState extends_function_state(
+      &function_state_, &scope_, &extends_scope, zone(),
+      this->ast_value_factory(), ast_node_id_gen_);
+  scope_->SetStrictMode(STRICT);
+  scope_->SetScopeName(name);
+
+  ExpressionT extends = this->EmptyExpression();
+  if (Check(Token::EXTENDS)) {
+    extends = this->ParseLeftHandSideExpression(CHECK_OK);
+  }
+
+  ObjectLiteralChecker checker(this, STRICT);
+  typename Traits::Type::PropertyList properties =
+      this->NewPropertyList(4, zone_);
+  FunctionLiteralT constructor = this->EmptyFunctionLiteral();
+
+  Expect(Token::LBRACE, CHECK_OK);
+  while (peek() != Token::RBRACE) {
+    if (Check(Token::SEMICOLON)) continue;
+    if (fni_ != NULL) fni_->Enter();
+
+    const bool in_class = true;
+    const bool is_static = false;
+    ObjectLiteralPropertyT property =
+        this->ParsePropertyDefinition(&checker, in_class, is_static, CHECK_OK);
+
+    properties->Add(property, zone());
+
+    if (fni_ != NULL) {
+      fni_->Infer();
+      fni_->Leave();
+    }
+  }
+  Expect(Token::RBRACE, CHECK_OK);
+
+  return this->ClassLiteral(name, extends, constructor, properties, pos,
+                            factory());
 }
 
 

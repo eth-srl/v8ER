@@ -4,6 +4,7 @@
 
 #include "src/v8.h"
 
+#include "src/compiler/generic-node-inl.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/compiler/codegen-tester.h"
 #include "test/cctest/compiler/value-helper.h"
@@ -369,6 +370,8 @@ void Int32BinopInputShapeTester::RunRight(
 }
 
 
+#if V8_TURBOFAN_TARGET
+
 TEST(ParametersEqual) {
   RawMachineAssemblerTester<int32_t> m(kMachInt32, kMachInt32);
   Node* p1 = m.Parameter(1);
@@ -379,8 +382,6 @@ TEST(ParametersEqual) {
   CHECK_EQ(p1, m.Parameter(1));
 }
 
-
-#if V8_TURBOFAN_TARGET
 
 void RunSmiConstant(int32_t v) {
 // TODO(dcarney): on x64 Smis are generated with the SmiConstantRegister

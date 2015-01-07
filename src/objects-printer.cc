@@ -607,7 +607,7 @@ void Name::NamePrint(OStream& os) {  // NOLINT
 
 
 // This method is only meant to be called from gdb for debugging purposes.
-// Since the string can also be in two-byte encoding, non-ASCII characters
+// Since the string can also be in two-byte encoding, non-Latin1 characters
 // will be ignored in the output.
 char* String::ToAsciiArray() {
   // Static so that subsequent calls frees previously allocated space.
@@ -751,7 +751,7 @@ void JSArrayBuffer::JSArrayBufferPrint(OStream& os) {  // NOLINT
 void JSTypedArray::JSTypedArrayPrint(OStream& os) {  // NOLINT
   HeapObject::PrintHeader(os, "JSTypedArray");
   os << " - map = " << reinterpret_cast<void*>(map()) << "\n";
-  os << " - buffer =" << Brief(buffer());
+  os << " - buffer = " << Brief(buffer());
   os << "\n - byte_offset = " << Brief(byte_offset());
   os << "\n - byte_length = " << Brief(byte_length());
   os << "\n - length = " << Brief(length());

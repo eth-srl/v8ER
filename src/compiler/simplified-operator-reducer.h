@@ -19,31 +19,29 @@ namespace compiler {
 class JSGraph;
 class MachineOperatorBuilder;
 
-class SimplifiedOperatorReducer V8_FINAL : public Reducer {
+class SimplifiedOperatorReducer FINAL : public Reducer {
  public:
-  SimplifiedOperatorReducer(JSGraph* jsgraph, MachineOperatorBuilder* machine)
-      : jsgraph_(jsgraph), machine_(machine) {}
+  explicit SimplifiedOperatorReducer(JSGraph* jsgraph) : jsgraph_(jsgraph) {}
   virtual ~SimplifiedOperatorReducer();
 
-  virtual Reduction Reduce(Node* node) V8_OVERRIDE;
+  virtual Reduction Reduce(Node* node) OVERRIDE;
 
  private:
-  Reduction Change(Node* node, Operator* op, Node* a);
+  Reduction Change(Node* node, const Operator* op, Node* a);
   Reduction ReplaceFloat64(double value);
   Reduction ReplaceInt32(int32_t value);
   Reduction ReplaceUint32(uint32_t value) {
-    return ReplaceInt32(static_cast<int32_t>(value));
+    return ReplaceInt32(bit_cast<int32_t>(value));
   }
   Reduction ReplaceNumber(double value);
   Reduction ReplaceNumber(int32_t value);
 
   Graph* graph() const;
-  Heap* heap() const;
+  Factory* factory() const;
   JSGraph* jsgraph() const { return jsgraph_; }
-  MachineOperatorBuilder* machine() const { return machine_; }
+  MachineOperatorBuilder* machine() const;
 
   JSGraph* jsgraph_;
-  MachineOperatorBuilder* machine_;
 
   DISALLOW_COPY_AND_ASSIGN(SimplifiedOperatorReducer);
 };

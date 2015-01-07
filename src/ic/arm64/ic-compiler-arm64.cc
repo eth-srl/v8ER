@@ -6,6 +6,7 @@
 
 #if V8_TARGET_ARCH_ARM64
 
+#include "src/ic/ic.h"
 #include "src/ic/ic-compiler.h"
 
 namespace v8 {
@@ -17,8 +18,8 @@ void PropertyICCompiler::GenerateRuntimeSetProperty(MacroAssembler* masm,
                                                     StrictMode strict_mode) {
   ASM_LOCATION("PropertyICCompiler::GenerateRuntimeSetProperty");
 
-  __ Push(StoreConvention::ReceiverRegister(), StoreConvention::NameRegister(),
-          StoreConvention::ValueRegister());
+  __ Push(StoreDescriptor::ReceiverRegister(), StoreDescriptor::NameRegister(),
+          StoreDescriptor::ValueRegister());
 
   __ Mov(x10, Smi::FromInt(strict_mode));
   __ Push(x10);
@@ -44,7 +45,11 @@ Handle<Code> PropertyICCompiler::CompilePolymorphic(TypeHandleList* types,
     // In case we are compiling an IC for dictionary loads and stores, just
     // check whether the name is unique.
     if (name.is_identical_to(isolate()->factory()->normal_ic_symbol())) {
-      __ JumpIfNotUniqueName(this->name(), &miss);
+      Register tmp = scratch1();
+      __ JumpIfSmi(this->name(), &miss);
+      __ Ldr(tmp, FieldMemOperand(this->name(), HeapObject::kMapOffset));
+      __ Ldrb(tmp, FieldMemOperand(tmp, Map::kInstanceTypeOffset));
+      __ JumpIfNotUniqueNameInstanceType(tmp, &miss);
     } else {
       __ CompareAndBranch(this->name(), Operand(name), ne, &miss);
     }
@@ -57,7 +62,7 @@ Handle<Code> PropertyICCompiler::CompilePolymorphic(TypeHandleList* types,
   // Polymorphic keyed stores may use the map register
   Register map_reg = scratch1();
   DCHECK(kind() != Code::KEYED_STORE_IC ||
-         map_reg.is(StoreConvention::MapRegister()));
+         map_reg.is(ElementTransitionAndStoreDescriptor::MapRegister()));
   __ Ldr(map_reg, FieldMemOperand(receiver(), HeapObject::kMapOffset));
   int receiver_count = types->length();
   int number_of_handled_maps = 0;

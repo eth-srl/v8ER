@@ -4,6 +4,7 @@
 
 #include "src/v8.h"
 
+#include "src/base/bits.h"
 #include "src/base/platform/platform.h"
 #include "src/full-codegen.h"
 #include "src/heap/mark-compact.h"
@@ -663,7 +664,6 @@ MemoryChunk* MemoryAllocator::AllocateChunk(intptr_t reserve_area_size,
   MemoryChunk* result = MemoryChunk::Initialize(
       heap, base, chunk_size, area_start, area_end, executable, owner);
   result->set_reserved_memory(&reservation);
-  MSAN_MEMORY_IS_INITIALIZED_IN_JIT(base, chunk_size);
   return result;
 }
 
@@ -1190,7 +1190,7 @@ bool NewSpace::SetUp(int reserved_semispace_capacity,
   LOG(heap()->isolate(), NewEvent("InitialChunk", chunk_base_, chunk_size_));
 
   DCHECK(initial_semispace_capacity <= maximum_semispace_capacity);
-  DCHECK(IsPowerOf2(maximum_semispace_capacity));
+  DCHECK(base::bits::IsPowerOfTwo32(maximum_semispace_capacity));
 
   // Allocate and set up the histogram arrays if necessary.
   allocated_histogram_ = NewArray<HistogramInfo>(LAST_TYPE + 1);
@@ -1259,14 +1259,15 @@ void NewSpace::Flip() { SemiSpace::Swap(&from_space_, &to_space_); }
 
 void NewSpace::Grow() {
   // Double the semispace size but only up to maximum capacity.
-  DCHECK(Capacity() < MaximumCapacity());
-  int new_capacity = Min(MaximumCapacity(), 2 * static_cast<int>(Capacity()));
+  DCHECK(TotalCapacity() < MaximumCapacity());
+  int new_capacity =
+      Min(MaximumCapacity(), 2 * static_cast<int>(TotalCapacity()));
   if (to_space_.GrowTo(new_capacity)) {
     // Only grow from space if we managed to grow to-space.
     if (!from_space_.GrowTo(new_capacity)) {
       // If we managed to grow to-space but couldn't grow from-space,
       // attempt to shrink to-space.
-      if (!to_space_.ShrinkTo(from_space_.Capacity())) {
+      if (!to_space_.ShrinkTo(from_space_.TotalCapacity())) {
         // We are in an inconsistent state because we could not
         // commit/uncommit memory from new space.
         V8::FatalProcessOutOfMemory("Failed to grow new space.");
@@ -1278,16 +1279,16 @@ void NewSpace::Grow() {
 
 
 void NewSpace::Shrink() {
-  int new_capacity = Max(InitialCapacity(), 2 * SizeAsInt());
+  int new_capacity = Max(InitialTotalCapacity(), 2 * SizeAsInt());
   int rounded_new_capacity = RoundUp(new_capacity, Page::kPageSize);
-  if (rounded_new_capacity < Capacity() &&
+  if (rounded_new_capacity < TotalCapacity() &&
       to_space_.ShrinkTo(rounded_new_capacity)) {
     // Only shrink from-space if we managed to shrink to-space.
     from_space_.Reset();
     if (!from_space_.ShrinkTo(rounded_new_capacity)) {
       // If we managed to shrink to-space but couldn't shrink from
       // space, attempt to grow to-space again.
-      if (!to_space_.GrowTo(from_space_.Capacity())) {
+      if (!to_space_.GrowTo(from_space_.TotalCapacity())) {
         // We are in an inconsistent state because we could not
         // commit/uncommit memory from new space.
         V8::FatalProcessOutOfMemory("Failed to shrink new space.");
@@ -1359,7 +1360,6 @@ bool NewSpace::AddFreshPage() {
   Address limit = NewSpacePage::FromLimit(top)->area_end();
   if (heap()->gc_state() == Heap::SCAVENGE) {
     heap()->promotion_queue()->SetNewLimit(limit);
-    heap()->promotion_queue()->ActivateGuardIfOnTheSamePage();
   }
 
   int remaining_in_page = static_cast<int>(limit - top);
@@ -1466,9 +1466,9 @@ void SemiSpace::SetUp(Address start, int initial_capacity,
   // space is used as the marking stack. It requires contiguous memory
   // addresses.
   DCHECK(maximum_capacity >= Page::kPageSize);
-  initial_capacity_ = RoundDown(initial_capacity, Page::kPageSize);
-  capacity_ = initial_capacity;
-  maximum_capacity_ = RoundDown(maximum_capacity, Page::kPageSize);
+  initial_total_capacity_ = RoundDown(initial_capacity, Page::kPageSize);
+  total_capacity_ = initial_capacity;
+  maximum_total_capacity_ = RoundDown(maximum_capacity, Page::kPageSize);
   maximum_committed_ = 0;
   committed_ = false;
   start_ = start;
@@ -1481,15 +1481,15 @@ void SemiSpace::SetUp(Address start, int initial_capacity,
 
 void SemiSpace::TearDown() {
   start_ = NULL;
-  capacity_ = 0;
+  total_capacity_ = 0;
 }
 
 
 bool SemiSpace::Commit() {
   DCHECK(!is_committed());
-  int pages = capacity_ / Page::kPageSize;
-  if (!heap()->isolate()->memory_allocator()->CommitBlock(start_, capacity_,
-                                                          executable())) {
+  int pages = total_capacity_ / Page::kPageSize;
+  if (!heap()->isolate()->memory_allocator()->CommitBlock(
+          start_, total_capacity_, executable())) {
     return false;
   }
 
@@ -1501,7 +1501,7 @@ bool SemiSpace::Commit() {
     current = new_page;
   }
 
-  SetCapacity(capacity_);
+  SetCapacity(total_capacity_);
   committed_ = true;
   Reset();
   return true;
@@ -1510,8 +1510,9 @@ bool SemiSpace::Commit() {
 
 bool SemiSpace::Uncommit() {
   DCHECK(is_committed());
-  Address start = start_ + maximum_capacity_ - capacity_;
-  if (!heap()->isolate()->memory_allocator()->UncommitBlock(start, capacity_)) {
+  Address start = start_ + maximum_total_capacity_ - total_capacity_;
+  if (!heap()->isolate()->memory_allocator()->UncommitBlock(start,
+                                                            total_capacity_)) {
     return false;
   }
   anchor()->set_next_page(anchor());
@@ -1538,16 +1539,16 @@ bool SemiSpace::GrowTo(int new_capacity) {
     if (!Commit()) return false;
   }
   DCHECK((new_capacity & Page::kPageAlignmentMask) == 0);
-  DCHECK(new_capacity <= maximum_capacity_);
-  DCHECK(new_capacity > capacity_);
-  int pages_before = capacity_ / Page::kPageSize;
+  DCHECK(new_capacity <= maximum_total_capacity_);
+  DCHECK(new_capacity > total_capacity_);
+  int pages_before = total_capacity_ / Page::kPageSize;
   int pages_after = new_capacity / Page::kPageSize;
 
-  size_t delta = new_capacity - capacity_;
+  size_t delta = new_capacity - total_capacity_;
 
   DCHECK(IsAligned(delta, base::OS::AllocateAlignment()));
   if (!heap()->isolate()->memory_allocator()->CommitBlock(
-          start_ + capacity_, delta, executable())) {
+          start_ + total_capacity_, delta, executable())) {
     return false;
   }
   SetCapacity(new_capacity);
@@ -1570,10 +1571,10 @@ bool SemiSpace::GrowTo(int new_capacity) {
 
 bool SemiSpace::ShrinkTo(int new_capacity) {
   DCHECK((new_capacity & Page::kPageAlignmentMask) == 0);
-  DCHECK(new_capacity >= initial_capacity_);
-  DCHECK(new_capacity < capacity_);
+  DCHECK(new_capacity >= initial_total_capacity_);
+  DCHECK(new_capacity < total_capacity_);
   if (is_committed()) {
-    size_t delta = capacity_ - new_capacity;
+    size_t delta = total_capacity_ - new_capacity;
     DCHECK(IsAligned(delta, base::OS::AllocateAlignment()));
 
     MemoryAllocator* allocator = heap()->isolate()->memory_allocator();
@@ -1653,9 +1654,9 @@ void SemiSpace::Swap(SemiSpace* from, SemiSpace* to) {
 
 
 void SemiSpace::SetCapacity(int new_capacity) {
-  capacity_ = new_capacity;
-  if (capacity_ > maximum_committed_) {
-    maximum_committed_ = capacity_;
+  total_capacity_ = new_capacity;
+  if (total_capacity_ > maximum_committed_) {
+    maximum_committed_ = total_capacity_;
   }
 }
 
@@ -1896,11 +1897,11 @@ static void DoReportStatistics(Isolate* isolate, HistogramInfo* info,
 void NewSpace::ReportStatistics() {
 #ifdef DEBUG
   if (FLAG_heap_stats) {
-    float pct = static_cast<float>(Available()) / Capacity();
+    float pct = static_cast<float>(Available()) / TotalCapacity();
     PrintF("  capacity: %" V8_PTR_PREFIX
            "d"
            ", available: %" V8_PTR_PREFIX "d, %%%d\n",
-           Capacity(), Available(), static_cast<int>(pct * 100));
+           TotalCapacity(), Available(), static_cast<int>(pct * 100));
     PrintF("\n  Object Histogram:\n");
     for (int i = 0; i <= LAST_TYPE; i++) {
       if (allocated_histogram_[i].number() > 0) {
@@ -2839,9 +2840,7 @@ AllocationResult LargeObjectSpace::AllocateRaw(int object_size,
     return AllocationResult::Retry(identity());
   }
 
-  if (Size() + object_size > max_capacity_) {
-    return AllocationResult::Retry(identity());
-  }
+  if (!CanAllocateSize(object_size)) return AllocationResult::Retry(identity());
 
   LargePage* page = heap()->isolate()->memory_allocator()->AllocateLargePage(
       object_size, this, executable);

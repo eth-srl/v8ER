@@ -4,6 +4,7 @@
 
 #include "src/v8.h"
 
+#include "src/code-factory.h"
 #include "src/codegen.h"
 #include "src/compiler.h"
 #include "src/debug.h"
@@ -32,17 +33,21 @@ void BreakableStatementChecker::VisitVariableDeclaration(
     VariableDeclaration* decl) {
 }
 
+
 void BreakableStatementChecker::VisitFunctionDeclaration(
     FunctionDeclaration* decl) {
 }
+
 
 void BreakableStatementChecker::VisitModuleDeclaration(
     ModuleDeclaration* decl) {
 }
 
+
 void BreakableStatementChecker::VisitImportDeclaration(
     ImportDeclaration* decl) {
 }
+
 
 void BreakableStatementChecker::VisitExportDeclaration(
     ExportDeclaration* decl) {
@@ -174,6 +179,13 @@ void BreakableStatementChecker::VisitCaseClause(CaseClause* clause) {
 
 
 void BreakableStatementChecker::VisitFunctionLiteral(FunctionLiteral* expr) {
+}
+
+
+void BreakableStatementChecker::VisitClassLiteral(ClassLiteral* expr) {
+  if (expr->extends() != NULL) {
+    Visit(expr->extends());
+  }
 }
 
 
@@ -408,14 +420,13 @@ void FullCodeGenerator::PrepareForBailout(Expression* node, State state) {
 
 void FullCodeGenerator::CallLoadIC(ContextualMode contextual_mode,
                                    TypeFeedbackId id) {
-  ExtraICState extra_state = LoadIC::ComputeExtraICState(contextual_mode);
-  Handle<Code> ic = LoadIC::initialize_stub(isolate(), extra_state);
+  Handle<Code> ic = CodeFactory::LoadIC(isolate(), contextual_mode).code();
   CallIC(ic, id);
 }
 
 
 void FullCodeGenerator::CallStoreIC(TypeFeedbackId id) {
-  Handle<Code> ic = StoreIC::initialize_stub(isolate(), strict_mode());
+  Handle<Code> ic = CodeFactory::StoreIC(isolate(), strict_mode()).code();
   CallIC(ic, id);
 }
 
@@ -822,8 +833,7 @@ void FullCodeGenerator::SetStatementPosition(Statement* stmt) {
 
 
 void FullCodeGenerator::VisitSuperReference(SuperReference* super) {
-  DCHECK(FLAG_harmony_classes);
-  UNIMPLEMENTED();
+  __ CallRuntime(Runtime::kThrowUnsupportedSuperError, 0);
 }
 
 
@@ -1531,6 +1541,16 @@ void FullCodeGenerator::VisitFunctionLiteral(FunctionLiteral* expr) {
 }
 
 
+void FullCodeGenerator::VisitClassLiteral(ClassLiteral* expr) {
+  // TODO(arv): Implement
+  Comment cmnt(masm_, "[ ClassLiteral");
+  if (expr->extends() != NULL) {
+    VisitForEffect(expr->extends());
+  }
+  context()->Plug(isolate()->factory()->undefined_value());
+}
+
+
 void FullCodeGenerator::VisitNativeFunctionLiteral(
     NativeFunctionLiteral* expr) {
   Comment cmnt(masm_, "[ NativeFunctionLiteral");
@@ -1547,13 +1567,11 @@ void FullCodeGenerator::VisitNativeFunctionLiteral(
   const int literals = fun->NumberOfLiterals();
   Handle<Code> code = Handle<Code>(fun->shared()->code());
   Handle<Code> construct_stub = Handle<Code>(fun->shared()->construct_stub());
-  bool is_generator = false;
-  bool is_arrow = false;
   Handle<SharedFunctionInfo> shared =
       isolate()->factory()->NewSharedFunctionInfo(
-          name, literals, is_generator, is_arrow, code,
+          name, literals, FunctionKind::kNormalFunction, code,
           Handle<ScopeInfo>(fun->shared()->scope_info()),
-          Handle<FixedArray>(fun->shared()->feedback_vector()));
+          Handle<TypeFeedbackVector>(fun->shared()->feedback_vector()));
   shared->set_construct_stub(*construct_stub);
 
   // Copy the function data to the shared function info.

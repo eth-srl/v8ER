@@ -757,13 +757,9 @@ bool Debug::CompileDebuggerScript(Isolate* isolate, int index) {
   Handle<JSFunction> function =
       factory->NewFunctionFromSharedFunctionInfo(function_info, context);
 
-  Handle<Object> exception;
-  MaybeHandle<Object> result =
-      Execution::TryCall(function,
-                         handle(context->global_proxy()),
-                         0,
-                         NULL,
-                         &exception);
+  MaybeHandle<Object> maybe_exception;
+  MaybeHandle<Object> result = Execution::TryCall(
+      function, handle(context->global_proxy()), 0, NULL, &maybe_exception);
 
   // Check for caught exceptions.
   if (result.is_null()) {
@@ -774,7 +770,8 @@ bool Debug::CompileDebuggerScript(Isolate* isolate, int index) {
         isolate, "error_loading_debugger", &computed_location,
         Vector<Handle<Object> >::empty(), Handle<JSArray>());
     DCHECK(!isolate->has_pending_exception());
-    if (!exception.is_null()) {
+    Handle<Object> exception;
+    if (maybe_exception.ToHandle(&exception)) {
       isolate->set_pending_exception(*exception);
       MessageHandler::ReportMessage(isolate, NULL, message);
       isolate->clear_pending_exception();
@@ -821,7 +818,7 @@ bool Debug::Load() {
 
   // Expose the builtins object in the debugger context.
   Handle<String> key = isolate_->factory()->InternalizeOneByteString(
-      STATIC_ASCII_VECTOR("builtins"));
+      STATIC_CHAR_VECTOR("builtins"));
   Handle<GlobalObject> global =
       Handle<GlobalObject>(context->global_object(), isolate_);
   Handle<JSBuiltinsObject> builtin =
@@ -1037,7 +1034,7 @@ bool Debug::CheckBreakPoint(Handle<Object> break_point_object) {
   // Get the function IsBreakPointTriggered (defined in debug-debugger.js).
   Handle<String> is_break_point_triggered_string =
       factory->InternalizeOneByteString(
-          STATIC_ASCII_VECTOR("IsBreakPointTriggered"));
+          STATIC_CHAR_VECTOR("IsBreakPointTriggered"));
   Handle<GlobalObject> debug_global(debug_context()->global_object());
   Handle<JSFunction> check_break_point =
     Handle<JSFunction>::cast(Object::GetProperty(
@@ -1268,7 +1265,7 @@ bool Debug::IsBreakOnException(ExceptionBreakType type) {
 bool Debug::PromiseHasRejectHandler(Handle<JSObject> promise) {
   Handle<JSFunction> fun = Handle<JSFunction>::cast(
       JSObject::GetDataProperty(isolate_->js_builtins_object(),
-                                isolate_->factory()->NewStringFromStaticAscii(
+                                isolate_->factory()->NewStringFromStaticChars(
                                     "PromiseHasRejectHandler")));
   Handle<Object> result =
       Execution::Call(isolate_, fun, promise, 0, NULL).ToHandleChecked();
@@ -1883,7 +1880,7 @@ static void EnsureFunctionHasDebugBreakSlots(Handle<JSFunction> function) {
   // Make sure that the shared full code is compiled with debug
   // break slots.
   if (!function->shared()->code()->has_debug_break_slots()) {
-    MaybeHandle<Code> code = Compiler::GetCodeForDebugging(function);
+    MaybeHandle<Code> code = Compiler::GetDebugCode(function);
     // Recompilation can fail.  In that case leave the code as it was.
     if (!code.is_null()) function->ReplaceCode(*code.ToHandleChecked());
   } else {
@@ -1917,7 +1914,7 @@ void Debug::PrepareForBreakPoints() {
 
     Deoptimizer::DeoptimizeAll(isolate_);
 
-    Handle<Code> lazy_compile = isolate_->builtins()->CompileUnoptimized();
+    Handle<Code> lazy_compile = isolate_->builtins()->CompileLazy();
 
     // There will be at least one break point when we are done.
     has_break_points_ = true;
@@ -2396,13 +2393,11 @@ void Debug::ClearMirrorCache() {
   Factory* factory = isolate_->factory();
   Handle<GlobalObject> global(isolate_->global_object());
   JSObject::SetProperty(global,
-      factory->NewStringFromAsciiChecked("next_handle_"),
-      handle(Smi::FromInt(0), isolate_),
-      SLOPPY).Check();
+                        factory->NewStringFromAsciiChecked("next_handle_"),
+                        handle(Smi::FromInt(0), isolate_), SLOPPY).Check();
   JSObject::SetProperty(global,
-      factory->NewStringFromAsciiChecked("mirror_cache_"),
-      factory->NewJSArray(0, FAST_ELEMENTS),
-      SLOPPY).Check();
+                        factory->NewStringFromAsciiChecked("mirror_cache_"),
+                        factory->NewJSArray(0, FAST_ELEMENTS), SLOPPY).Check();
 }
 
 
@@ -2508,8 +2503,18 @@ MaybeHandle<Object> Debug::MakeAsyncTaskEvent(Handle<JSObject> task_event) {
 
 void Debug::OnThrow(Handle<Object> exception, bool uncaught) {
   if (in_debug_scope() || ignore_events()) return;
+  // Temporarily clear any scheduled_exception to allow evaluating
+  // JavaScript from the debug event handler.
   HandleScope scope(isolate_);
+  Handle<Object> scheduled_exception;
+  if (isolate_->has_scheduled_exception()) {
+    scheduled_exception = handle(isolate_->scheduled_exception(), isolate_);
+    isolate_->clear_scheduled_exception();
+  }
   OnException(exception, uncaught, isolate_->GetPromiseOnStackOnThrow());
+  if (!scheduled_exception.is_null()) {
+    isolate_->thread_local_top()->scheduled_exception_ = *scheduled_exception;
+  }
 }
 
 
@@ -2630,7 +2635,7 @@ void Debug::OnAfterCompile(Handle<Script> script) {
   // Get the function UpdateScriptBreakPoints (defined in debug-debugger.js).
   Handle<String> update_script_break_points_string =
       isolate_->factory()->InternalizeOneByteString(
-          STATIC_ASCII_VECTOR("UpdateScriptBreakPoints"));
+          STATIC_CHAR_VECTOR("UpdateScriptBreakPoints"));
   Handle<GlobalObject> debug_global(debug_context()->global_object());
   Handle<Object> update_script_break_points =
       Object::GetProperty(
@@ -2865,11 +2870,12 @@ void Debug::NotifyMessageHandler(v8::DebugEvent event,
     Handle<String> request_text = isolate_->factory()->NewStringFromTwoByte(
         command_text).ToHandleChecked();
     Handle<Object> request_args[] = { request_text };
-    Handle<Object> exception;
     Handle<Object> answer_value;
     Handle<String> answer;
-    MaybeHandle<Object> maybe_result = Execution::TryCall(
-        process_debug_request, cmd_processor, 1, request_args, &exception);
+    MaybeHandle<Object> maybe_exception;
+    MaybeHandle<Object> maybe_result =
+        Execution::TryCall(process_debug_request, cmd_processor, 1,
+                           request_args, &maybe_exception);
 
     if (maybe_result.ToHandle(&answer_value)) {
       if (answer_value->IsUndefined()) {
@@ -2887,10 +2893,15 @@ void Debug::NotifyMessageHandler(v8::DebugEvent event,
       Handle<Object> is_running_args[] = { answer };
       maybe_result = Execution::Call(
           isolate_, is_running, cmd_processor, 1, is_running_args);
-      running = maybe_result.ToHandleChecked()->IsTrue();
+      Handle<Object> result;
+      if (!maybe_result.ToHandle(&result)) break;
+      running = result->IsTrue();
     } else {
-      answer = Handle<String>::cast(
-          Execution::ToString(isolate_, exception).ToHandleChecked());
+      Handle<Object> exception;
+      if (!maybe_exception.ToHandle(&exception)) break;
+      Handle<Object> result;
+      if (!Execution::ToString(isolate_, exception).ToHandle(&result)) break;
+      answer = Handle<String>::cast(result);
     }
 
     // Return the result.
@@ -2903,6 +2914,7 @@ void Debug::NotifyMessageHandler(v8::DebugEvent event,
     // running state (through a continue command) or auto continue is active
     // and there are no more commands queued.
   } while (!running || has_commands());
+  command_queue_.Clear();
 }
 
 

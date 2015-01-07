@@ -5,6 +5,7 @@
 #include "src/factory.h"
 
 #include "src/allocation-site-scopes.h"
+#include "src/base/bits.h"
 #include "src/conversions.h"
 #include "src/isolate-inl.h"
 #include "src/macro-assembler.h"
@@ -247,7 +248,7 @@ MaybeHandle<String> Factory::NewStringFromUtf8(Vector<const char> string,
       isolate(), result,
       NewRawTwoByteString(non_ascii_start + utf16_length, pretenure),
       String);
-  // Copy ascii portion.
+  // Copy ASCII portion.
   uint16_t* data = result->GetChars();
   const char* ascii_data = string.start();
   for (int i = 0; i < non_ascii_start; i++) {
@@ -346,16 +347,17 @@ MaybeHandle<Map> Factory::InternalizedStringMapForString(
   // Find the corresponding internalized string map for strings.
   switch (string->map()->instance_type()) {
     case STRING_TYPE: return internalized_string_map();
-    case ASCII_STRING_TYPE: return ascii_internalized_string_map();
+    case ONE_BYTE_STRING_TYPE:
+      return one_byte_internalized_string_map();
     case EXTERNAL_STRING_TYPE: return external_internalized_string_map();
-    case EXTERNAL_ASCII_STRING_TYPE:
-      return external_ascii_internalized_string_map();
+    case EXTERNAL_ONE_BYTE_STRING_TYPE:
+      return external_one_byte_internalized_string_map();
     case EXTERNAL_STRING_WITH_ONE_BYTE_DATA_TYPE:
       return external_internalized_string_with_one_byte_data_map();
     case SHORT_EXTERNAL_STRING_TYPE:
       return short_external_internalized_string_map();
-    case SHORT_EXTERNAL_ASCII_STRING_TYPE:
-      return short_external_ascii_internalized_string_map();
+    case SHORT_EXTERNAL_ONE_BYTE_STRING_TYPE:
+      return short_external_one_byte_internalized_string_map();
     case SHORT_EXTERNAL_STRING_WITH_ONE_BYTE_DATA_TYPE:
       return short_external_internalized_string_with_one_byte_data_map();
     default: return MaybeHandle<Map>();  // No match found.
@@ -366,7 +368,7 @@ MaybeHandle<Map> Factory::InternalizedStringMapForString(
 MaybeHandle<SeqOneByteString> Factory::NewRawOneByteString(
     int length, PretenureFlag pretenure) {
   if (length > String::kMaxLength || length < 0) {
-    return isolate()->Throw<SeqOneByteString>(NewInvalidStringLengthError());
+    THROW_NEW_ERROR(isolate(), NewInvalidStringLengthError(), SeqOneByteString);
   }
   CALL_HEAP_FUNCTION(
       isolate(),
@@ -378,7 +380,7 @@ MaybeHandle<SeqOneByteString> Factory::NewRawOneByteString(
 MaybeHandle<SeqTwoByteString> Factory::NewRawTwoByteString(
     int length, PretenureFlag pretenure) {
   if (length > String::kMaxLength || length < 0) {
-    return isolate()->Throw<SeqTwoByteString>(NewInvalidStringLengthError());
+    THROW_NEW_ERROR(isolate(), NewInvalidStringLengthError(), SeqTwoByteString);
   }
   CALL_HEAP_FUNCTION(
       isolate(),
@@ -435,7 +437,8 @@ static inline Handle<String> MakeOrFindTwoCharacterString(Isolate* isolate,
   // when building the new string.
   if (static_cast<unsigned>(c1 | c2) <= String::kMaxOneByteCharCodeU) {
     // We can do this.
-    DCHECK(IsPowerOf2(String::kMaxOneByteCharCodeU + 1));  // because of this.
+    DCHECK(base::bits::IsPowerOfTwo32(String::kMaxOneByteCharCodeU +
+                                      1));  // because of this.
     Handle<SeqOneByteString> str =
         isolate->factory()->NewRawOneByteString(2).ToHandleChecked();
     uint8_t* dest = str->GetChars();
@@ -483,7 +486,7 @@ MaybeHandle<String> Factory::NewConsString(Handle<String> left,
   // Make sure that an out of memory exception is thrown if the length
   // of the new cons string is too large.
   if (length > String::kMaxLength || length < 0) {
-    return isolate()->Throw<String>(NewInvalidStringLengthError());
+    THROW_NEW_ERROR(isolate(), NewInvalidStringLengthError(), String);
   }
 
   bool left_is_one_byte = left->IsOneByteRepresentation();
@@ -492,12 +495,12 @@ MaybeHandle<String> Factory::NewConsString(Handle<String> left,
   bool is_one_byte_data_in_two_byte_string = false;
   if (!is_one_byte) {
     // At least one of the strings uses two-byte representation so we
-    // can't use the fast case code for short ASCII strings below, but
-    // we can try to save memory if all chars actually fit in ASCII.
+    // can't use the fast case code for short one-byte strings below, but
+    // we can try to save memory if all chars actually fit in one-byte.
     is_one_byte_data_in_two_byte_string =
         left->HasOnlyOneByteChars() && right->HasOnlyOneByteChars();
     if (is_one_byte_data_in_two_byte_string) {
-      isolate()->counters()->string_add_runtime_ext_to_ascii()->Increment();
+      isolate()->counters()->string_add_runtime_ext_to_one_byte()->Increment();
     }
   }
 
@@ -515,14 +518,15 @@ MaybeHandle<String> Factory::NewConsString(Handle<String> left,
       DisallowHeapAllocation no_gc;
       uint8_t* dest = result->GetChars();
       // Copy left part.
-      const uint8_t* src = left->IsExternalString()
-          ? Handle<ExternalAsciiString>::cast(left)->GetChars()
-          : Handle<SeqOneByteString>::cast(left)->GetChars();
+      const uint8_t* src =
+          left->IsExternalString()
+              ? Handle<ExternalOneByteString>::cast(left)->GetChars()
+              : Handle<SeqOneByteString>::cast(left)->GetChars();
       for (int i = 0; i < left_length; i++) *dest++ = src[i];
       // Copy right part.
       src = right->IsExternalString()
-          ? Handle<ExternalAsciiString>::cast(right)->GetChars()
-          : Handle<SeqOneByteString>::cast(right)->GetChars();
+                ? Handle<ExternalOneByteString>::cast(right)->GetChars()
+                : Handle<SeqOneByteString>::cast(right)->GetChars();
       for (int i = 0; i < right_length; i++) *dest++ = src[i];
       return result;
     }
@@ -535,7 +539,8 @@ MaybeHandle<String> Factory::NewConsString(Handle<String> left,
   }
 
   Handle<Map> map = (is_one_byte || is_one_byte_data_in_two_byte_string)
-      ? cons_ascii_string_map()  : cons_string_map();
+                        ? cons_one_byte_string_map()
+                        : cons_string_map();
   Handle<ConsString> result =  New<ConsString>(map, NEW_SPACE);
 
   DisallowHeapAllocation no_gc;
@@ -600,8 +605,9 @@ Handle<String> Factory::NewProperSubString(Handle<String> str,
   }
 
   DCHECK(str->IsSeqString() || str->IsExternalString());
-  Handle<Map> map = str->IsOneByteRepresentation() ? sliced_ascii_string_map()
-                                                   : sliced_string_map();
+  Handle<Map> map = str->IsOneByteRepresentation()
+                        ? sliced_one_byte_string_map()
+                        : sliced_string_map();
   Handle<SlicedString> slice = New<SlicedString>(map, NEW_SPACE);
 
   slice->set_hash_field(String::kEmptyHashField);
@@ -612,16 +618,16 @@ Handle<String> Factory::NewProperSubString(Handle<String> str,
 }
 
 
-MaybeHandle<String> Factory::NewExternalStringFromAscii(
-    const ExternalAsciiString::Resource* resource) {
+MaybeHandle<String> Factory::NewExternalStringFromOneByte(
+    const ExternalOneByteString::Resource* resource) {
   size_t length = resource->length();
   if (length > static_cast<size_t>(String::kMaxLength)) {
-    return isolate()->Throw<String>(NewInvalidStringLengthError());
+    THROW_NEW_ERROR(isolate(), NewInvalidStringLengthError(), String);
   }
 
-  Handle<Map> map = external_ascii_string_map();
-  Handle<ExternalAsciiString> external_string =
-      New<ExternalAsciiString>(map, NEW_SPACE);
+  Handle<Map> map = external_one_byte_string_map();
+  Handle<ExternalOneByteString> external_string =
+      New<ExternalOneByteString>(map, NEW_SPACE);
   external_string->set_length(static_cast<int>(length));
   external_string->set_hash_field(String::kEmptyHashField);
   external_string->set_resource(resource);
@@ -634,7 +640,7 @@ MaybeHandle<String> Factory::NewExternalStringFromTwoByte(
     const ExternalTwoByteString::Resource* resource) {
   size_t length = resource->length();
   if (length > static_cast<size_t>(String::kMaxLength)) {
-    return isolate()->Throw<String>(NewInvalidStringLengthError());
+    THROW_NEW_ERROR(isolate(), NewInvalidStringLengthError(), String);
   }
 
   // For small strings we check whether the resource contains only
@@ -1050,59 +1056,58 @@ Handle<HeapNumber> Factory::NewHeapNumber(double value,
 }
 
 
-Handle<Object> Factory::NewTypeError(const char* message,
-                                     Vector< Handle<Object> > args) {
+MaybeHandle<Object> Factory::NewTypeError(const char* message,
+                                          Vector<Handle<Object> > args) {
   return NewError("MakeTypeError", message, args);
 }
 
 
-Handle<Object> Factory::NewTypeError(Handle<String> message) {
+MaybeHandle<Object> Factory::NewTypeError(Handle<String> message) {
   return NewError("$TypeError", message);
 }
 
 
-Handle<Object> Factory::NewRangeError(const char* message,
-                                      Vector< Handle<Object> > args) {
+MaybeHandle<Object> Factory::NewRangeError(const char* message,
+                                           Vector<Handle<Object> > args) {
   return NewError("MakeRangeError", message, args);
 }
 
 
-Handle<Object> Factory::NewRangeError(Handle<String> message) {
+MaybeHandle<Object> Factory::NewRangeError(Handle<String> message) {
   return NewError("$RangeError", message);
 }
 
 
-Handle<Object> Factory::NewSyntaxError(const char* message,
-                                       Handle<JSArray> args) {
+MaybeHandle<Object> Factory::NewSyntaxError(const char* message,
+                                            Handle<JSArray> args) {
   return NewError("MakeSyntaxError", message, args);
 }
 
 
-Handle<Object> Factory::NewSyntaxError(Handle<String> message) {
+MaybeHandle<Object> Factory::NewSyntaxError(Handle<String> message) {
   return NewError("$SyntaxError", message);
 }
 
 
-Handle<Object> Factory::NewReferenceError(const char* message,
-                                          Vector< Handle<Object> > args) {
+MaybeHandle<Object> Factory::NewReferenceError(const char* message,
+                                               Vector<Handle<Object> > args) {
   return NewError("MakeReferenceError", message, args);
 }
 
 
-Handle<Object> Factory::NewReferenceError(const char* message,
-                                          Handle<JSArray> args) {
+MaybeHandle<Object> Factory::NewReferenceError(const char* message,
+                                               Handle<JSArray> args) {
   return NewError("MakeReferenceError", message, args);
 }
 
 
-Handle<Object> Factory::NewReferenceError(Handle<String> message) {
+MaybeHandle<Object> Factory::NewReferenceError(Handle<String> message) {
   return NewError("$ReferenceError", message);
 }
 
 
-Handle<Object> Factory::NewError(const char* maker,
-                                 const char* message,
-                                 Vector< Handle<Object> > args) {
+MaybeHandle<Object> Factory::NewError(const char* maker, const char* message,
+                                      Vector<Handle<Object> > args) {
   // Instantiate a closeable HandleScope for EscapeFrom.
   v8::EscapableHandleScope scope(reinterpret_cast<v8::Isolate*>(isolate()));
   Handle<FixedArray> array = NewFixedArray(args.length());
@@ -1110,19 +1115,21 @@ Handle<Object> Factory::NewError(const char* maker,
     array->set(i, *args[i]);
   }
   Handle<JSArray> object = NewJSArrayWithElements(array);
-  Handle<Object> result = NewError(maker, message, object);
+  Handle<Object> result;
+  ASSIGN_RETURN_ON_EXCEPTION(isolate(), result,
+                             NewError(maker, message, object), Object);
   return result.EscapeFrom(&scope);
 }
 
 
-Handle<Object> Factory::NewEvalError(const char* message,
-                                     Vector< Handle<Object> > args) {
+MaybeHandle<Object> Factory::NewEvalError(const char* message,
+                                          Vector<Handle<Object> > args) {
   return NewError("MakeEvalError", message, args);
 }
 
 
-Handle<Object> Factory::NewError(const char* message,
-                                 Vector< Handle<Object> > args) {
+MaybeHandle<Object> Factory::NewError(const char* message,
+                                      Vector<Handle<Object> > args) {
   return NewError("MakeError", message, args);
 }
 
@@ -1163,9 +1170,8 @@ Handle<String> Factory::EmergencyNewError(const char* message,
 }
 
 
-Handle<Object> Factory::NewError(const char* maker,
-                                 const char* message,
-                                 Handle<JSArray> args) {
+MaybeHandle<Object> Factory::NewError(const char* maker, const char* message,
+                                      Handle<JSArray> args) {
   Handle<String> make_str = InternalizeUtf8String(maker);
   Handle<Object> fun_obj = Object::GetProperty(
       isolate()->js_builtins_object(), make_str).ToHandleChecked();
@@ -1181,7 +1187,7 @@ Handle<Object> Factory::NewError(const char* maker,
   // Invoke the JavaScript factory method. If an exception is thrown while
   // running the factory method, use the exception as the result.
   Handle<Object> result;
-  Handle<Object> exception;
+  MaybeHandle<Object> exception;
   if (!Execution::TryCall(fun,
                           isolate()->js_builtins_object(),
                           arraysize(argv),
@@ -1193,13 +1199,13 @@ Handle<Object> Factory::NewError(const char* maker,
 }
 
 
-Handle<Object> Factory::NewError(Handle<String> message) {
+MaybeHandle<Object> Factory::NewError(Handle<String> message) {
   return NewError("$Error", message);
 }
 
 
-Handle<Object> Factory::NewError(const char* constructor,
-                                 Handle<String> message) {
+MaybeHandle<Object> Factory::NewError(const char* constructor,
+                                      Handle<String> message) {
   Handle<String> constr = InternalizeUtf8String(constructor);
   Handle<JSFunction> fun = Handle<JSFunction>::cast(Object::GetProperty(
       isolate()->js_builtins_object(), constr).ToHandleChecked());
@@ -1208,7 +1214,7 @@ Handle<Object> Factory::NewError(const char* constructor,
   // Invoke the JavaScript factory method. If an exception is thrown while
   // running the factory method, use the exception as the result.
   Handle<Object> result;
-  Handle<Object> exception;
+  MaybeHandle<Object> exception;
   if (!Execution::TryCall(fun,
                           isolate()->js_builtins_object(),
                           arraysize(argv),
@@ -1231,7 +1237,6 @@ void Factory::InitializeFunction(Handle<JSFunction> function,
   function->set_prototype_or_initial_map(*the_hole_value());
   function->set_literals_or_bindings(*empty_fixed_array());
   function->set_next_function_link(*undefined_value());
-  if (info->is_arrow()) function->RemovePrototype();
 }
 
 
@@ -1297,8 +1302,9 @@ Handle<JSFunction> Factory::NewFunction(Handle<String> name,
   Handle<JSFunction> function = NewFunction(
       name, code, prototype, read_only_prototype);
 
-  Handle<Map> initial_map = NewMap(
-      type, instance_size, GetInitialFastElementsKind());
+  ElementsKind elements_kind =
+      type == JS_ARRAY_TYPE ? FAST_SMI_ELEMENTS : FAST_HOLEY_SMI_ELEMENTS;
+  Handle<Map> initial_map = NewMap(type, instance_size, elements_kind);
   if (prototype->IsTheHole() && !function->shared()->is_generator()) {
     prototype = NewFunctionPrototype(function);
   }
@@ -1350,8 +1356,7 @@ Handle<JSFunction> Factory::NewFunctionFromSharedFunctionInfo(
     Handle<SharedFunctionInfo> info,
     Handle<Context> context,
     PretenureFlag pretenure) {
-  int map_index = Context::FunctionMapIndex(info->strict_mode(),
-                                            info->is_generator());
+  int map_index = Context::FunctionMapIndex(info->strict_mode(), info->kind());
   Handle<Map> map(Map::cast(context->native_context()->get(map_index)));
   Handle<JSFunction> result = NewFunction(map, info, context, pretenure);
 
@@ -1798,7 +1803,7 @@ void Factory::ReinitializeJSProxy(Handle<JSProxy> proxy, InstanceType type,
   Heap* heap = isolate()->heap();
   MaybeHandle<SharedFunctionInfo> shared;
   if (type == JS_FUNCTION_TYPE) {
-    OneByteStringKey key(STATIC_ASCII_VECTOR("<freezing call trap>"),
+    OneByteStringKey key(STATIC_CHAR_VECTOR("<freezing call trap>"),
                          heap->HashSeed());
     Handle<String> name = InternalizeStringWithKey(&key);
     shared = NewSharedFunctionInfo(name, MaybeHandle<Code>());
@@ -1882,29 +1887,32 @@ void Factory::BecomeJSFunction(Handle<JSProxy> proxy) {
 }
 
 
-Handle<FixedArray> Factory::NewTypeFeedbackVector(int slot_count) {
+Handle<TypeFeedbackVector> Factory::NewTypeFeedbackVector(int slot_count) {
   // Ensure we can skip the write barrier
   DCHECK_EQ(isolate()->heap()->uninitialized_symbol(),
-            *TypeFeedbackInfo::UninitializedSentinel(isolate()));
+            *TypeFeedbackVector::UninitializedSentinel(isolate()));
 
-  CALL_HEAP_FUNCTION(
-      isolate(),
-      isolate()->heap()->AllocateFixedArrayWithFiller(
-          slot_count,
-          TENURED,
-          *TypeFeedbackInfo::UninitializedSentinel(isolate())),
-      FixedArray);
+  if (slot_count == 0) {
+    return Handle<TypeFeedbackVector>::cast(empty_fixed_array());
+  }
+
+  CALL_HEAP_FUNCTION(isolate(),
+                     isolate()->heap()->AllocateFixedArrayWithFiller(
+                         slot_count, TENURED,
+                         *TypeFeedbackVector::UninitializedSentinel(isolate())),
+                     TypeFeedbackVector);
 }
 
 
 Handle<SharedFunctionInfo> Factory::NewSharedFunctionInfo(
-    Handle<String> name, int number_of_literals, bool is_generator,
-    bool is_arrow, Handle<Code> code, Handle<ScopeInfo> scope_info,
-    Handle<FixedArray> feedback_vector) {
+    Handle<String> name, int number_of_literals, FunctionKind kind,
+    Handle<Code> code, Handle<ScopeInfo> scope_info,
+    Handle<TypeFeedbackVector> feedback_vector) {
+  DCHECK(IsValidFunctionKind(kind));
   Handle<SharedFunctionInfo> shared = NewSharedFunctionInfo(name, code);
   shared->set_scope_info(*scope_info);
   shared->set_feedback_vector(*feedback_vector);
-  shared->set_is_arrow(is_arrow);
+  shared->set_kind(kind);
   int literals_array_size = number_of_literals;
   // If the function contains object, regexp or array literals,
   // allocate extra space for a literals array prefix containing the
@@ -1913,7 +1921,7 @@ Handle<SharedFunctionInfo> Factory::NewSharedFunctionInfo(
     literals_array_size += JSFunction::kLiteralsPrefixSize;
   }
   shared->set_num_literals(literals_array_size);
-  if (is_generator) {
+  if (IsGeneratorFunction(kind)) {
     shared->set_instance_class_name(isolate()->heap()->Generator_string());
     shared->DisableOptimization(kGenerator);
   }
@@ -1967,7 +1975,8 @@ Handle<SharedFunctionInfo> Factory::NewSharedFunctionInfo(
   share->set_script(*undefined_value(), SKIP_WRITE_BARRIER);
   share->set_debug_info(*undefined_value(), SKIP_WRITE_BARRIER);
   share->set_inferred_name(*empty_string(), SKIP_WRITE_BARRIER);
-  share->set_feedback_vector(*empty_fixed_array(), SKIP_WRITE_BARRIER);
+  Handle<TypeFeedbackVector> feedback_vector = NewTypeFeedbackVector(0);
+  share->set_feedback_vector(*feedback_vector, SKIP_WRITE_BARRIER);
   share->set_profiler_ticks(0);
   share->set_ast_node_count(0);
   share->set_counters(0);
@@ -2181,7 +2190,8 @@ Handle<JSFunction> Factory::CreateApiFunction(
   if (prototype->IsTheHole()) {
 #ifdef DEBUG
     LookupIterator it(handle(JSObject::cast(result->prototype())),
-                      constructor_string(), LookupIterator::OWN_PROPERTY);
+                      constructor_string(),
+                      LookupIterator::OWN_SKIP_INTERCEPTOR);
     MaybeHandle<Object> maybe_prop = Object::GetProperty(&it);
     DCHECK(it.IsFound());
     DCHECK(maybe_prop.ToHandleChecked().is_identical_to(result));
@@ -2320,9 +2330,12 @@ Handle<Map> Factory::ObjectLiteralMapFromCache(Handle<Context> context,
       Handle<MapCache>(MapCache::cast(context->map_cache()));
   Handle<Object> result = Handle<Object>(cache->Lookup(*keys), isolate());
   if (result->IsMap()) return Handle<Map>::cast(result);
-  // Create a new map and add it to the cache.
-  Handle<Map> map = Map::Create(
-      handle(context->object_function()), keys->length());
+  int length = keys->length();
+  // Create a new map and add it to the cache. Reuse the initial map of the
+  // Object function if the literal has no predeclared properties.
+  Handle<Map> map = length == 0
+                        ? handle(context->object_function()->initial_map())
+                        : Map::Create(isolate(), length);
   AddToMapCache(context, keys, map);
   return map;
 }
@@ -2352,9 +2365,9 @@ void Factory::SetRegExpIrregexpData(Handle<JSRegExp> regexp,
   store->set(JSRegExp::kTagIndex, Smi::FromInt(type));
   store->set(JSRegExp::kSourceIndex, *source);
   store->set(JSRegExp::kFlagsIndex, Smi::FromInt(flags.value()));
-  store->set(JSRegExp::kIrregexpASCIICodeIndex, uninitialized);
+  store->set(JSRegExp::kIrregexpLatin1CodeIndex, uninitialized);
   store->set(JSRegExp::kIrregexpUC16CodeIndex, uninitialized);
-  store->set(JSRegExp::kIrregexpASCIICodeSavedIndex, uninitialized);
+  store->set(JSRegExp::kIrregexpLatin1CodeSavedIndex, uninitialized);
   store->set(JSRegExp::kIrregexpUC16CodeSavedIndex, uninitialized);
   store->set(JSRegExp::kIrregexpMaxRegisterCountIndex, Smi::FromInt(0));
   store->set(JSRegExp::kIrregexpCaptureCountIndex,

@@ -9,6 +9,7 @@
 #include "src/compiler/common-operator.h"
 #include "src/compiler/graph.h"
 #include "src/compiler/js-operator.h"
+#include "src/compiler/machine-operator.h"
 #include "src/compiler/node-properties.h"
 
 namespace v8 {
@@ -22,11 +23,14 @@ class Typer;
 // constants, and various helper methods.
 class JSGraph : public ZoneObject {
  public:
-  JSGraph(Graph* graph, CommonOperatorBuilder* common, Typer* typer)
+  JSGraph(Graph* graph, CommonOperatorBuilder* common,
+          JSOperatorBuilder* javascript, Typer* typer,
+          MachineOperatorBuilder* machine)
       : graph_(graph),
         common_(common),
-        javascript_(zone()),
+        javascript_(javascript),
         typer_(typer),
+        machine_(machine),
         cache_(zone()) {}
 
   // Canonicalized global constants.
@@ -42,7 +46,7 @@ class JSGraph : public ZoneObject {
 
   // Creates a HeapConstant node, possibly canonicalized, without inspecting the
   // object.
-  Node* HeapConstant(PrintableUnique<Object> value);
+  Node* HeapConstant(Unique<Object> value);
 
   // Creates a HeapConstant node, possibly canonicalized, and may access the
   // heap to inspect the object.
@@ -61,6 +65,12 @@ class JSGraph : public ZoneObject {
 
   // Creates a Int32Constant node, usually canonicalized.
   Node* Int32Constant(int32_t value);
+  Node* Uint32Constant(uint32_t value) {
+    return Int32Constant(bit_cast<int32_t>(value));
+  }
+
+  // Creates a Float32Constant node, usually canonicalized.
+  Node* Float32Constant(float value);
 
   // Creates a Float64Constant node, usually canonicalized.
   Node* Float64Constant(double value);
@@ -73,8 +83,9 @@ class JSGraph : public ZoneObject {
     return Constant(immediate);
   }
 
-  JSOperatorBuilder* javascript() { return &javascript_; }
+  JSOperatorBuilder* javascript() { return javascript_; }
   CommonOperatorBuilder* common() { return common_; }
+  MachineOperatorBuilder* machine() { return machine_; }
   Graph* graph() { return graph_; }
   Zone* zone() { return graph()->zone(); }
   Isolate* isolate() { return zone()->isolate(); }
@@ -82,8 +93,9 @@ class JSGraph : public ZoneObject {
  private:
   Graph* graph_;
   CommonOperatorBuilder* common_;
-  JSOperatorBuilder javascript_;
+  JSOperatorBuilder* javascript_;
   Typer* typer_;
+  MachineOperatorBuilder* machine_;
 
   SetOncePointer<Node> c_entry_stub_constant_;
   SetOncePointer<Node> undefined_constant_;
@@ -99,10 +111,11 @@ class JSGraph : public ZoneObject {
 
   Node* ImmovableHeapConstant(Handle<Object> value);
   Node* NumberConstant(double value);
-  Node* NewNode(Operator* op);
+  Node* NewNode(const Operator* op);
 
   Factory* factory() { return isolate()->factory(); }
 };
+
 }  // namespace compiler
 }  // namespace internal
 }  // namespace v8

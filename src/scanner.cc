@@ -330,9 +330,9 @@ void Scanner::TryToParseSourceURLComment() {
   if (!name.is_one_byte()) return;
   Vector<const uint8_t> name_literal = name.one_byte_literal();
   LiteralBuffer* value;
-  if (name_literal == STATIC_ASCII_VECTOR("sourceURL")) {
+  if (name_literal == STATIC_CHAR_VECTOR("sourceURL")) {
     value = &source_url_;
-  } else if (name_literal == STATIC_ASCII_VECTOR("sourceMappingURL")) {
+  } else if (name_literal == STATIC_CHAR_VECTOR("sourceMappingURL")) {
     value = &source_mapping_url_;
   } else {
     return;
@@ -902,70 +902,73 @@ uc32 Scanner::ScanIdentifierUnicodeEscape() {
 // ----------------------------------------------------------------------------
 // Keyword Matcher
 
-#define KEYWORDS(KEYWORD_GROUP, KEYWORD)                                      \
-  KEYWORD_GROUP('b')                                                          \
-  KEYWORD("break", Token::BREAK)                                              \
-  KEYWORD_GROUP('c')                                                          \
-  KEYWORD("case", Token::CASE)                                                \
-  KEYWORD("catch", Token::CATCH)                                              \
-  KEYWORD("class", Token::FUTURE_RESERVED_WORD)                               \
-  KEYWORD("const", Token::CONST)                                              \
-  KEYWORD("continue", Token::CONTINUE)                                        \
-  KEYWORD_GROUP('d')                                                          \
-  KEYWORD("debugger", Token::DEBUGGER)                                        \
-  KEYWORD("default", Token::DEFAULT)                                          \
-  KEYWORD("delete", Token::DELETE)                                            \
-  KEYWORD("do", Token::DO)                                                    \
-  KEYWORD_GROUP('e')                                                          \
-  KEYWORD("else", Token::ELSE)                                                \
-  KEYWORD("enum", Token::FUTURE_RESERVED_WORD)                                \
-  KEYWORD("export",                                                           \
-          harmony_modules ? Token::EXPORT : Token::FUTURE_RESERVED_WORD)      \
-  KEYWORD("extends", Token::FUTURE_RESERVED_WORD)                             \
-  KEYWORD_GROUP('f')                                                          \
-  KEYWORD("false", Token::FALSE_LITERAL)                                      \
-  KEYWORD("finally", Token::FINALLY)                                          \
-  KEYWORD("for", Token::FOR)                                                  \
-  KEYWORD("function", Token::FUNCTION)                                        \
-  KEYWORD_GROUP('i')                                                          \
-  KEYWORD("if", Token::IF)                                                    \
-  KEYWORD("implements", Token::FUTURE_STRICT_RESERVED_WORD)                   \
-  KEYWORD("import",                                                           \
-          harmony_modules ? Token::IMPORT : Token::FUTURE_RESERVED_WORD)      \
-  KEYWORD("in", Token::IN)                                                    \
-  KEYWORD("instanceof", Token::INSTANCEOF)                                    \
-  KEYWORD("interface", Token::FUTURE_STRICT_RESERVED_WORD)                    \
-  KEYWORD_GROUP('l')                                                          \
-  KEYWORD("let",                                                              \
-          harmony_scoping ? Token::LET : Token::FUTURE_STRICT_RESERVED_WORD)  \
-  KEYWORD_GROUP('n')                                                          \
-  KEYWORD("new", Token::NEW)                                                  \
-  KEYWORD("null", Token::NULL_LITERAL)                                        \
-  KEYWORD_GROUP('p')                                                          \
-  KEYWORD("package", Token::FUTURE_STRICT_RESERVED_WORD)                      \
-  KEYWORD("private", Token::FUTURE_STRICT_RESERVED_WORD)                      \
-  KEYWORD("protected", Token::FUTURE_STRICT_RESERVED_WORD)                    \
-  KEYWORD("public", Token::FUTURE_STRICT_RESERVED_WORD)                       \
-  KEYWORD_GROUP('r')                                                          \
-  KEYWORD("return", Token::RETURN)                                            \
-  KEYWORD_GROUP('s')                                                          \
-  KEYWORD("static", Token::FUTURE_STRICT_RESERVED_WORD)                       \
-  KEYWORD("super",                                                            \
-          harmony_classes ? Token::SUPER : Token::FUTURE_RESERVED_WORD)       \
-  KEYWORD("switch", Token::SWITCH)                                            \
-  KEYWORD_GROUP('t')                                                          \
-  KEYWORD("this", Token::THIS)                                                \
-  KEYWORD("throw", Token::THROW)                                              \
-  KEYWORD("true", Token::TRUE_LITERAL)                                        \
-  KEYWORD("try", Token::TRY)                                                  \
-  KEYWORD("typeof", Token::TYPEOF)                                            \
-  KEYWORD_GROUP('v')                                                          \
-  KEYWORD("var", Token::VAR)                                                  \
-  KEYWORD("void", Token::VOID)                                                \
-  KEYWORD_GROUP('w')                                                          \
-  KEYWORD("while", Token::WHILE)                                              \
-  KEYWORD("with", Token::WITH)                                                \
-  KEYWORD_GROUP('y')                                                          \
+#define KEYWORDS(KEYWORD_GROUP, KEYWORD)                                     \
+  KEYWORD_GROUP('b')                                                         \
+  KEYWORD("break", Token::BREAK)                                             \
+  KEYWORD_GROUP('c')                                                         \
+  KEYWORD("case", Token::CASE)                                               \
+  KEYWORD("catch", Token::CATCH)                                             \
+  KEYWORD("class",                                                           \
+          harmony_classes ? Token::CLASS : Token::FUTURE_RESERVED_WORD)      \
+  KEYWORD("const", Token::CONST)                                             \
+  KEYWORD("continue", Token::CONTINUE)                                       \
+  KEYWORD_GROUP('d')                                                         \
+  KEYWORD("debugger", Token::DEBUGGER)                                       \
+  KEYWORD("default", Token::DEFAULT)                                         \
+  KEYWORD("delete", Token::DELETE)                                           \
+  KEYWORD("do", Token::DO)                                                   \
+  KEYWORD_GROUP('e')                                                         \
+  KEYWORD("else", Token::ELSE)                                               \
+  KEYWORD("enum", Token::FUTURE_RESERVED_WORD)                               \
+  KEYWORD("export",                                                          \
+          harmony_modules ? Token::EXPORT : Token::FUTURE_RESERVED_WORD)     \
+  KEYWORD("extends",                                                         \
+          harmony_classes ? Token::EXTENDS : Token::FUTURE_RESERVED_WORD)    \
+  KEYWORD_GROUP('f')                                                         \
+  KEYWORD("false", Token::FALSE_LITERAL)                                     \
+  KEYWORD("finally", Token::FINALLY)                                         \
+  KEYWORD("for", Token::FOR)                                                 \
+  KEYWORD("function", Token::FUNCTION)                                       \
+  KEYWORD_GROUP('i')                                                         \
+  KEYWORD("if", Token::IF)                                                   \
+  KEYWORD("implements", Token::FUTURE_STRICT_RESERVED_WORD)                  \
+  KEYWORD("import",                                                          \
+          harmony_modules ? Token::IMPORT : Token::FUTURE_RESERVED_WORD)     \
+  KEYWORD("in", Token::IN)                                                   \
+  KEYWORD("instanceof", Token::INSTANCEOF)                                   \
+  KEYWORD("interface", Token::FUTURE_STRICT_RESERVED_WORD)                   \
+  KEYWORD_GROUP('l')                                                         \
+  KEYWORD("let",                                                             \
+          harmony_scoping ? Token::LET : Token::FUTURE_STRICT_RESERVED_WORD) \
+  KEYWORD_GROUP('n')                                                         \
+  KEYWORD("new", Token::NEW)                                                 \
+  KEYWORD("null", Token::NULL_LITERAL)                                       \
+  KEYWORD_GROUP('p')                                                         \
+  KEYWORD("package", Token::FUTURE_STRICT_RESERVED_WORD)                     \
+  KEYWORD("private", Token::FUTURE_STRICT_RESERVED_WORD)                     \
+  KEYWORD("protected", Token::FUTURE_STRICT_RESERVED_WORD)                   \
+  KEYWORD("public", Token::FUTURE_STRICT_RESERVED_WORD)                      \
+  KEYWORD_GROUP('r')                                                         \
+  KEYWORD("return", Token::RETURN)                                           \
+  KEYWORD_GROUP('s')                                                         \
+  KEYWORD("static", harmony_classes ? Token::STATIC                          \
+                                    : Token::FUTURE_STRICT_RESERVED_WORD)    \
+  KEYWORD("super",                                                           \
+          harmony_classes ? Token::SUPER : Token::FUTURE_RESERVED_WORD)      \
+  KEYWORD("switch", Token::SWITCH)                                           \
+  KEYWORD_GROUP('t')                                                         \
+  KEYWORD("this", Token::THIS)                                               \
+  KEYWORD("throw", Token::THROW)                                             \
+  KEYWORD("true", Token::TRUE_LITERAL)                                       \
+  KEYWORD("try", Token::TRY)                                                 \
+  KEYWORD("typeof", Token::TYPEOF)                                           \
+  KEYWORD_GROUP('v')                                                         \
+  KEYWORD("var", Token::VAR)                                                 \
+  KEYWORD("void", Token::VOID)                                               \
+  KEYWORD_GROUP('w')                                                         \
+  KEYWORD("while", Token::WHILE)                                             \
+  KEYWORD("with", Token::WITH)                                               \
+  KEYWORD_GROUP('y')                                                         \
   KEYWORD("yield", Token::YIELD)
 
 
@@ -1305,7 +1308,7 @@ bool DuplicateFinder::IsNumberCanonical(Vector<const uint8_t> number) {
 
 uint32_t DuplicateFinder::Hash(Vector<const uint8_t> key, bool is_one_byte) {
   // Primitive hash function, almost identical to the one used
-  // for strings (except that it's seeded by the length and ASCII-ness).
+  // for strings (except that it's seeded by the length and representation).
   int length = key.length();
   uint32_t hash = (length << 1) | (is_one_byte ? 1 : 0) ;
   for (int i = 0; i < length; i++) {
@@ -1319,10 +1322,10 @@ uint32_t DuplicateFinder::Hash(Vector<const uint8_t> key, bool is_one_byte) {
 
 bool DuplicateFinder::Match(void* first, void* second) {
   // Decode lengths.
-  // Length + ASCII-bit is encoded as base 128, most significant heptet first,
-  // with a 8th bit being non-zero while there are more heptets.
+  // Length + representation is encoded as base 128, most significant heptet
+  // first, with a 8th bit being non-zero while there are more heptets.
   // The value encodes the number of bytes following, and whether the original
-  // was ASCII.
+  // was Latin1.
   byte* s1 = reinterpret_cast<byte*>(first);
   byte* s2 = reinterpret_cast<byte*>(second);
   uint32_t length_one_byte_field = 0;

@@ -18,7 +18,7 @@ namespace internal {
 namespace compiler {
 
 // Generates native code for a sequence of instructions.
-class CodeGenerator V8_FINAL : public GapResolver::Assembler {
+class CodeGenerator FINAL : public GapResolver::Assembler {
  public:
   explicit CodeGenerator(InstructionSequence* code);
 
@@ -46,8 +46,8 @@ class CodeGenerator V8_FINAL : public GapResolver::Assembler {
   }
 
   // Record a safepoint with the given pointer map.
-  Safepoint::Id RecordSafepoint(PointerMap* pointers, Safepoint::Kind kind,
-                                int arguments, Safepoint::DeoptMode deopt_mode);
+  void RecordSafepoint(PointerMap* pointers, Safepoint::Kind kind,
+                       int arguments, Safepoint::DeoptMode deopt_mode);
 
   // Assemble code for the specified instruction.
   void AssembleInstruction(Instruction* instr);
@@ -62,6 +62,8 @@ class CodeGenerator V8_FINAL : public GapResolver::Assembler {
   void AssembleArchBranch(Instruction* instr, FlagsCondition condition);
   void AssembleArchBoolean(Instruction* instr, FlagsCondition condition);
 
+  void AssembleDeoptimizerCall(int deoptimization_id);
+
   // Generates an architecture-specific, descriptor-specific prologue
   // to set up a stack frame.
   void AssemblePrologue();
@@ -75,50 +77,46 @@ class CodeGenerator V8_FINAL : public GapResolver::Assembler {
 
   // Interface used by the gap resolver to emit moves and swaps.
   virtual void AssembleMove(InstructionOperand* source,
-                            InstructionOperand* destination) V8_OVERRIDE;
+                            InstructionOperand* destination) OVERRIDE;
   virtual void AssembleSwap(InstructionOperand* source,
-                            InstructionOperand* destination) V8_OVERRIDE;
+                            InstructionOperand* destination) OVERRIDE;
 
   // ===========================================================================
   // Deoptimization table construction
   void AddSafepointAndDeopt(Instruction* instr);
-  void UpdateSafepointsWithDeoptimizationPc();
-  void RecordLazyDeoptimizationEntry(Instruction* instr,
-                                     Safepoint::Id safepoint_id);
   void PopulateDeoptimizationData(Handle<Code> code);
   int DefineDeoptimizationLiteral(Handle<Object> literal);
-  int BuildTranslation(Instruction* instr, int frame_state_offset);
+  FrameStateDescriptor* GetFrameStateDescriptor(Instruction* instr,
+                                                size_t frame_state_offset);
+  int BuildTranslation(Instruction* instr, int pc_offset,
+                       size_t frame_state_offset,
+                       OutputFrameStateCombine state_combine);
+  void BuildTranslationForFrameStateDescriptor(
+      FrameStateDescriptor* descriptor, Instruction* instr,
+      Translation* translation, size_t frame_state_offset,
+      OutputFrameStateCombine state_combine);
   void AddTranslationForOperand(Translation* translation, Instruction* instr,
                                 InstructionOperand* op);
   void AddNopForSmiCodeInlining();
+  void EnsureSpaceForLazyDeopt();
+  void MarkLazyDeoptSite();
+
   // ===========================================================================
-
-  class LazyDeoptimizationEntry V8_FINAL {
+  struct DeoptimizationState : ZoneObject {
    public:
-    LazyDeoptimizationEntry(int position_after_call, Label* continuation,
-                            Label* deoptimization, Safepoint::Id safepoint_id)
-        : position_after_call_(position_after_call),
-          continuation_(continuation),
-          deoptimization_(deoptimization),
-          safepoint_id_(safepoint_id) {}
+    BailoutId bailout_id() const { return bailout_id_; }
+    int translation_id() const { return translation_id_; }
+    int pc_offset() const { return pc_offset_; }
 
-    int position_after_call() const { return position_after_call_; }
-    Label* continuation() const { return continuation_; }
-    Label* deoptimization() const { return deoptimization_; }
-    Safepoint::Id safepoint_id() const { return safepoint_id_; }
+    DeoptimizationState(BailoutId bailout_id, int translation_id, int pc_offset)
+        : bailout_id_(bailout_id),
+          translation_id_(translation_id),
+          pc_offset_(pc_offset) {}
 
    private:
-    int position_after_call_;
-    Label* continuation_;
-    Label* deoptimization_;
-    Safepoint::Id safepoint_id_;
-  };
-
-  struct DeoptimizationState : ZoneObject {
+    BailoutId bailout_id_;
     int translation_id_;
-
-    explicit DeoptimizationState(int translation_id)
-        : translation_id_(translation_id) {}
+    int pc_offset_;
   };
 
   InstructionSequence* code_;
@@ -127,10 +125,10 @@ class CodeGenerator V8_FINAL : public GapResolver::Assembler {
   MacroAssembler masm_;
   GapResolver resolver_;
   SafepointTableBuilder safepoints_;
-  ZoneDeque<LazyDeoptimizationEntry> lazy_deoptimization_entries_;
   ZoneDeque<DeoptimizationState*> deoptimization_states_;
   ZoneDeque<Handle<Object> > deoptimization_literals_;
   TranslationBuffer translations_;
+  int last_lazy_deopt_pc_;
 };
 
 }  // namespace compiler

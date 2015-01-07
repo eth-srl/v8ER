@@ -129,8 +129,8 @@ void IC::set_target(Code* code) {
 
 void LoadIC::set_target(Code* code) {
   // The contextual mode must be preserved across IC patching.
-  DCHECK(GetContextualMode(code->extra_ic_state()) ==
-         GetContextualMode(target()->extra_ic_state()));
+  DCHECK(LoadICState::GetContextualMode(code->extra_ic_state()) ==
+         LoadICState::GetContextualMode(target()->extra_ic_state()));
 
   IC::set_target(code);
 }
@@ -208,17 +208,17 @@ Handle<Map> IC::GetICCacheHolder(HeapType* type, Isolate* isolate,
 }
 
 
-IC::State CallIC::FeedbackToState(Handle<FixedArray> vector,
+IC::State CallIC::FeedbackToState(Handle<TypeFeedbackVector> vector,
                                   Handle<Smi> slot) const {
   IC::State state = UNINITIALIZED;
   Object* feedback = vector->get(slot->value());
 
-  if (feedback == *TypeFeedbackInfo::MegamorphicSentinel(isolate())) {
+  if (feedback == *TypeFeedbackVector::MegamorphicSentinel(isolate())) {
     state = GENERIC;
   } else if (feedback->IsAllocationSite() || feedback->IsJSFunction()) {
     state = MONOMORPHIC;
   } else {
-    CHECK(feedback == *TypeFeedbackInfo::UninitializedSentinel(isolate()));
+    CHECK(feedback == *TypeFeedbackVector::UninitializedSentinel(isolate()));
   }
 
   return state;

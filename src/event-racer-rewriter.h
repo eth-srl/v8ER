@@ -53,6 +53,7 @@ namespace internal {
   V(Literal)                                    \
   V(RegExpLiteral)                              \
   V(NativeFunctionLiteral)                      \
+  V(ClassLiteral)                               \
   V(ThisFunction)                               \
   V(SuperReference)
 
@@ -91,20 +92,20 @@ public:
   AstRewriterImpl(CompilationInfo *info);
 
 #define DEF_VISIT(type) \
-  virtual type* doVisit(type *nd) V8_FINAL V8_OVERRIDE;
+  virtual type* doVisit(type *nd) FINAL OVERRIDE;
   INSTRUMENTED_AST_NODE_LIST(DEF_VISIT)
 #undef DEF_VISIT
 
 #define DEF_VISIT(type) \
-  virtual type* doVisit(type *nd) V8_FINAL V8_OVERRIDE { return nd; }
+  virtual type* doVisit(type *nd) FINAL OVERRIDE { return nd; }
   UNMODIFIED_AST_NODE_LIST(DEF_VISIT)
 #undef DEF_VISIT
 
-  virtual Expression* doVisit(VariableProxy *) V8_FINAL V8_OVERRIDE;
-  virtual Expression* doVisit(Property *) V8_FINAL V8_OVERRIDE;
-  virtual Expression* doVisit(CountOperation *) V8_FINAL V8_OVERRIDE;
-  virtual Expression* doVisit(UnaryOperation *) V8_FINAL V8_OVERRIDE;
-  virtual Expression* doVisit(Assignment *) V8_FINAL V8_OVERRIDE;
+  virtual Expression* doVisit(VariableProxy *) FINAL OVERRIDE;
+  virtual Expression* doVisit(Property *) FINAL OVERRIDE;
+  virtual Expression* doVisit(CountOperation *) FINAL OVERRIDE;
+  virtual Expression* doVisit(UnaryOperation *) FINAL OVERRIDE;
+  virtual Expression* doVisit(Assignment *) FINAL OVERRIDE;
 
 private:
   struct ContextScope {

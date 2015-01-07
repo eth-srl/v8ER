@@ -181,7 +181,7 @@ void Accessors::ArgumentsIteratorSetter(
   if (SetPropertyOnInstanceIfInherited(isolate, info, name, value)) return;
 
   LookupIterator it(object, Utils::OpenHandle(*name));
-  CHECK(it.HasProperty());
+  CHECK_EQ(LookupIterator::ACCESSOR, it.state());
   DCHECK(it.HolderIsReceiverOrHiddenPrototype());
   Object::SetDataProperty(&it, value);
 }
@@ -262,9 +262,15 @@ void Accessors::ArrayLengthSetter(
     return;
   }
 
-  isolate->ScheduleThrow(
-      *isolate->factory()->NewRangeError("invalid_array_length",
-                                         HandleVector<Object>(NULL, 0)));
+  Handle<Object> exception;
+  maybe = isolate->factory()->NewRangeError("invalid_array_length",
+                                            HandleVector<Object>(NULL, 0));
+  if (!maybe.ToHandle(&exception)) {
+    isolate->OptionalRescheduleException(false);
+    return;
+  }
+
+  isolate->ScheduleThrow(*exception);
 }
 
 
@@ -352,7 +358,7 @@ void Accessors::ScriptColumnOffsetSetter(
 Handle<AccessorInfo> Accessors::ScriptColumnOffsetInfo(
       Isolate* isolate, PropertyAttributes attributes) {
   Handle<String> name(isolate->factory()->InternalizeOneByteString(
-        STATIC_ASCII_VECTOR("column_offset")));
+      STATIC_CHAR_VECTOR("column_offset")));
   return MakeAccessor(isolate,
                       name,
                       &ScriptColumnOffsetGetter,
@@ -388,8 +394,8 @@ void Accessors::ScriptIdSetter(
 
 Handle<AccessorInfo> Accessors::ScriptIdInfo(
       Isolate* isolate, PropertyAttributes attributes) {
-  Handle<String> name(isolate->factory()->InternalizeOneByteString(
-        STATIC_ASCII_VECTOR("id")));
+  Handle<String> name(
+      isolate->factory()->InternalizeOneByteString(STATIC_CHAR_VECTOR("id")));
   return MakeAccessor(isolate,
                       name,
                       &ScriptIdGetter,
@@ -496,7 +502,7 @@ void Accessors::ScriptLineOffsetSetter(
 Handle<AccessorInfo> Accessors::ScriptLineOffsetInfo(
       Isolate* isolate, PropertyAttributes attributes) {
   Handle<String> name(isolate->factory()->InternalizeOneByteString(
-        STATIC_ASCII_VECTOR("line_offset")));
+      STATIC_CHAR_VECTOR("line_offset")));
   return MakeAccessor(isolate,
                       name,
                       &ScriptLineOffsetGetter,
@@ -532,8 +538,8 @@ void Accessors::ScriptTypeSetter(
 
 Handle<AccessorInfo> Accessors::ScriptTypeInfo(
       Isolate* isolate, PropertyAttributes attributes) {
-  Handle<String> name(isolate->factory()->InternalizeOneByteString(
-        STATIC_ASCII_VECTOR("type")));
+  Handle<String> name(
+      isolate->factory()->InternalizeOneByteString(STATIC_CHAR_VECTOR("type")));
   return MakeAccessor(isolate,
                       name,
                       &ScriptTypeGetter,
@@ -571,7 +577,7 @@ void Accessors::ScriptCompilationTypeSetter(
 Handle<AccessorInfo> Accessors::ScriptCompilationTypeInfo(
       Isolate* isolate, PropertyAttributes attributes) {
   Handle<String> name(isolate->factory()->InternalizeOneByteString(
-        STATIC_ASCII_VECTOR("compilation_type")));
+      STATIC_CHAR_VECTOR("compilation_type")));
   return MakeAccessor(isolate,
                       name,
                       &ScriptCompilationTypeGetter,
@@ -616,7 +622,7 @@ void Accessors::ScriptLineEndsSetter(
 Handle<AccessorInfo> Accessors::ScriptLineEndsInfo(
       Isolate* isolate, PropertyAttributes attributes) {
   Handle<String> name(isolate->factory()->InternalizeOneByteString(
-        STATIC_ASCII_VECTOR("line_ends")));
+      STATIC_CHAR_VECTOR("line_ends")));
   return MakeAccessor(isolate,
                       name,
                       &ScriptLineEndsGetter,
@@ -724,7 +730,7 @@ void Accessors::ScriptContextDataSetter(
 Handle<AccessorInfo> Accessors::ScriptContextDataInfo(
       Isolate* isolate, PropertyAttributes attributes) {
   Handle<String> name(isolate->factory()->InternalizeOneByteString(
-        STATIC_ASCII_VECTOR("context_data")));
+      STATIC_CHAR_VECTOR("context_data")));
   return MakeAccessor(isolate,
                       name,
                       &ScriptContextDataGetter,
@@ -771,7 +777,7 @@ void Accessors::ScriptEvalFromScriptSetter(
 Handle<AccessorInfo> Accessors::ScriptEvalFromScriptInfo(
       Isolate* isolate, PropertyAttributes attributes) {
   Handle<String> name(isolate->factory()->InternalizeOneByteString(
-        STATIC_ASCII_VECTOR("eval_from_script")));
+      STATIC_CHAR_VECTOR("eval_from_script")));
   return MakeAccessor(isolate,
                       name,
                       &ScriptEvalFromScriptGetter,
@@ -817,7 +823,7 @@ void Accessors::ScriptEvalFromScriptPositionSetter(
 Handle<AccessorInfo> Accessors::ScriptEvalFromScriptPositionInfo(
       Isolate* isolate, PropertyAttributes attributes) {
   Handle<String> name(isolate->factory()->InternalizeOneByteString(
-        STATIC_ASCII_VECTOR("eval_from_script_position")));
+      STATIC_CHAR_VECTOR("eval_from_script_position")));
   return MakeAccessor(isolate,
                       name,
                       &ScriptEvalFromScriptPositionGetter,
@@ -863,7 +869,7 @@ void Accessors::ScriptEvalFromFunctionNameSetter(
 Handle<AccessorInfo> Accessors::ScriptEvalFromFunctionNameInfo(
       Isolate* isolate, PropertyAttributes attributes) {
   Handle<String> name(isolate->factory()->InternalizeOneByteString(
-        STATIC_ASCII_VECTOR("eval_from_function_name")));
+      STATIC_CHAR_VECTOR("eval_from_function_name")));
   return MakeAccessor(isolate,
                       name,
                       &ScriptEvalFromFunctionNameGetter,
@@ -1350,9 +1356,16 @@ static void ModuleGetExport(
   Isolate* isolate = instance->GetIsolate();
   if (value->IsTheHole()) {
     Handle<String> name = v8::Utils::OpenHandle(*property);
-    isolate->ScheduleThrow(
-        *isolate->factory()->NewReferenceError("not_defined",
-                                               HandleVector(&name, 1)));
+
+    Handle<Object> exception;
+    MaybeHandle<Object> maybe = isolate->factory()->NewReferenceError(
+        "not_defined", HandleVector(&name, 1));
+    if (!maybe.ToHandle(&exception)) {
+      isolate->OptionalRescheduleException(false);
+      return;
+    }
+
+    isolate->ScheduleThrow(*exception);
     return;
   }
   info.GetReturnValue().Set(v8::Utils::ToLocal(Handle<Object>(value, isolate)));
@@ -1368,12 +1381,18 @@ static void ModuleSetExport(
   DCHECK(context->IsModuleContext());
   int slot = info.Data()->Int32Value();
   Object* old_value = context->get(slot);
+  Isolate* isolate = context->GetIsolate();
   if (old_value->IsTheHole()) {
     Handle<String> name = v8::Utils::OpenHandle(*property);
-    Isolate* isolate = instance->GetIsolate();
-    isolate->ScheduleThrow(
-        *isolate->factory()->NewReferenceError("not_defined",
-                                               HandleVector(&name, 1)));
+    Handle<Object> exception;
+    MaybeHandle<Object> maybe = isolate->factory()->NewReferenceError(
+        "not_defined", HandleVector(&name, 1));
+    if (!maybe.ToHandle(&exception)) {
+      isolate->OptionalRescheduleException(false);
+      return;
+    }
+
+    isolate->ScheduleThrow(*exception);
     return;
   }
   context->set(slot, *v8::Utils::OpenHandle(*value));

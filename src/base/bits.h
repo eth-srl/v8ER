@@ -6,6 +6,7 @@
 #define V8_BASE_BITS_H_
 
 #include "include/v8stdint.h"
+#include "src/base/macros.h"
 #if V8_CC_MSVC
 #include <intrin.h>
 #endif
@@ -72,6 +73,37 @@ inline uint32_t CountTrailingZeros32(uint32_t value) {
 }
 
 
+// Returns true iff |value| is a power of 2.
+inline bool IsPowerOfTwo32(uint32_t value) {
+  return value && !(value & (value - 1));
+}
+
+
+// Returns true iff |value| is a power of 2.
+inline bool IsPowerOfTwo64(uint64_t value) {
+  return value && !(value & (value - 1));
+}
+
+
+// RoundUpToPowerOfTwo32(value) returns the smallest power of two which is
+// greater than or equal to |value|. If you pass in a |value| that is already a
+// power of two, it is returned as is. |value| must be less than or equal to
+// 0x80000000u. Implementation is from "Hacker's Delight" by Henry S. Warren,
+// Jr., figure 3-3, page 48, where the function is called clp2.
+uint32_t RoundUpToPowerOfTwo32(uint32_t value);
+
+
+// RoundDownToPowerOfTwo32(value) returns the greatest power of two which is
+// less than or equal to |value|. If you pass in a |value| that is already a
+// power of two, it is returned as is.
+inline uint32_t RoundDownToPowerOfTwo32(uint32_t value) {
+  if (value > 0x80000000u) return 0x80000000u;
+  uint32_t result = RoundUpToPowerOfTwo32(value);
+  if (result > value) result >>= 1;
+  return result;
+}
+
+
 inline uint32_t RotateRight32(uint32_t value, uint32_t shift) {
   if (shift == 0) return value;
   return (value >> shift) | (value << (32 - shift));
@@ -81,6 +113,34 @@ inline uint32_t RotateRight32(uint32_t value, uint32_t shift) {
 inline uint64_t RotateRight64(uint64_t value, uint64_t shift) {
   if (shift == 0) return value;
   return (value >> shift) | (value << (64 - shift));
+}
+
+
+// SignedAddOverflow32(lhs,rhs,val) performs a signed summation of |lhs| and
+// |rhs| and stores the result into the variable pointed to by |val| and
+// returns true if the signed summation resulted in an overflow.
+inline bool SignedAddOverflow32(int32_t lhs, int32_t rhs, int32_t* val) {
+#if V8_HAS_BUILTIN_SADD_OVERFLOW
+  return __builtin_sadd_overflow(lhs, rhs, val);
+#else
+  uint32_t res = static_cast<uint32_t>(lhs) + static_cast<uint32_t>(rhs);
+  *val = bit_cast<int32_t>(res);
+  return ((res ^ lhs) & (res ^ rhs) & (1U << 31)) != 0;
+#endif
+}
+
+
+// SignedSubOverflow32(lhs,rhs,val) performs a signed subtraction of |lhs| and
+// |rhs| and stores the result into the variable pointed to by |val| and
+// returns true if the signed subtraction resulted in an overflow.
+inline bool SignedSubOverflow32(int32_t lhs, int32_t rhs, int32_t* val) {
+#if V8_HAS_BUILTIN_SSUB_OVERFLOW
+  return __builtin_ssub_overflow(lhs, rhs, val);
+#else
+  uint32_t res = static_cast<uint32_t>(lhs) - static_cast<uint32_t>(rhs);
+  *val = bit_cast<int32_t>(res);
+  return ((res ^ lhs) & (res ^ ~rhs) & (1U << 31)) != 0;
+#endif
 }
 
 }  // namespace bits

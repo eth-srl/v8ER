@@ -61,16 +61,16 @@ void JSContextSpecializer::SpecializeToContext() {
 Reduction JSContextSpecializer::ReduceJSLoadContext(Node* node) {
   DCHECK_EQ(IrOpcode::kJSLoadContext, node->opcode());
 
-  ValueMatcher<Handle<Context> > match(NodeProperties::GetValueInput(node, 0));
+  HeapObjectMatcher<Context> m(NodeProperties::GetValueInput(node, 0));
   // If the context is not constant, no reduction can occur.
-  if (!match.HasValue()) {
+  if (!m.HasValue()) {
     return Reducer::NoChange();
   }
 
   ContextAccess access = OpParameter<ContextAccess>(node);
 
   // Find the right parent context.
-  Context* context = *match.Value();
+  Context* context = *m.Value().handle();
   for (int i = access.depth(); i > 0; --i) {
     context = context->previous();
   }
@@ -81,8 +81,8 @@ Reduction JSContextSpecializer::ReduceJSLoadContext(Node* node) {
     if (access.depth() == 0) {
       return Reducer::NoChange();
     }
-    Operator* op = jsgraph_->javascript()->LoadContext(0, access.index(),
-                                                       access.immutable());
+    const Operator* op = jsgraph_->javascript()->LoadContext(
+        0, access.index(), access.immutable());
     node->set_op(op);
     Handle<Object> context_handle = Handle<Object>(context, info_->isolate());
     node->ReplaceInput(0, jsgraph_->Constant(context_handle));
@@ -109,9 +109,9 @@ Reduction JSContextSpecializer::ReduceJSLoadContext(Node* node) {
 Reduction JSContextSpecializer::ReduceJSStoreContext(Node* node) {
   DCHECK_EQ(IrOpcode::kJSStoreContext, node->opcode());
 
-  ValueMatcher<Handle<Context> > match(NodeProperties::GetValueInput(node, 0));
+  HeapObjectMatcher<Context> m(NodeProperties::GetValueInput(node, 0));
   // If the context is not constant, no reduction can occur.
-  if (!match.HasValue()) {
+  if (!m.HasValue()) {
     return Reducer::NoChange();
   }
 
@@ -123,18 +123,19 @@ Reduction JSContextSpecializer::ReduceJSStoreContext(Node* node) {
   }
 
   // Find the right parent context.
-  Context* context = *match.Value();
+  Context* context = *m.Value().handle();
   for (int i = access.depth(); i > 0; --i) {
     context = context->previous();
   }
 
-  Operator* op = jsgraph_->javascript()->StoreContext(0, access.index());
+  const Operator* op = jsgraph_->javascript()->StoreContext(0, access.index());
   node->set_op(op);
   Handle<Object> new_context_handle = Handle<Object>(context, info_->isolate());
   node->ReplaceInput(0, jsgraph_->Constant(new_context_handle));
 
   return Reducer::Changed(node);
 }
-}
-}
-}  // namespace v8::internal::compiler
+
+}  // namespace compiler
+}  // namespace internal
+}  // namespace v8

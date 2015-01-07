@@ -6,6 +6,7 @@
 
 #include "src/ic/call-optimization.h"
 #include "src/ic/handler-compiler.h"
+#include "src/ic/ic.h"
 #include "src/ic/ic-inl.h"
 
 namespace v8 {
@@ -75,6 +76,11 @@ Handle<Code> PropertyHandlerCompiler::GetCode(Code::Kind kind,
   Handle<Code> code = GetCodeWithFlags(flags, name);
   PROFILE(isolate(), CodeCreateEvent(Logger::STUB_TAG, *code, *name));
   return code;
+}
+
+
+void PropertyHandlerCompiler::set_type_for_object(Handle<Object> object) {
+  type_ = IC::CurrentTypeOf(object, isolate());
 }
 
 
@@ -225,22 +231,27 @@ Handle<Code> NamedLoadHandlerCompiler::CompileLoadInterceptor(
   // So far the most popular follow ups for interceptor loads are FIELD and
   // ExecutableAccessorInfo, so inline only them. Other cases may be added
   // later.
-  bool inline_followup = it->state() == LookupIterator::PROPERTY;
-  if (inline_followup) {
-    switch (it->property_kind()) {
-      case LookupIterator::DATA:
-        inline_followup = it->property_details().type() == FIELD;
-        break;
-      case LookupIterator::ACCESSOR: {
-        Handle<Object> accessors = it->GetAccessors();
-        inline_followup = accessors->IsExecutableAccessorInfo();
-        if (!inline_followup) break;
-        Handle<ExecutableAccessorInfo> info =
-            Handle<ExecutableAccessorInfo>::cast(accessors);
-        inline_followup = info->getter() != NULL &&
-                          ExecutableAccessorInfo::IsCompatibleReceiverType(
-                              isolate(), info, type());
-      }
+  bool inline_followup = false;
+  switch (it->state()) {
+    case LookupIterator::TRANSITION:
+      UNREACHABLE();
+    case LookupIterator::ACCESS_CHECK:
+    case LookupIterator::INTERCEPTOR:
+    case LookupIterator::JSPROXY:
+    case LookupIterator::NOT_FOUND:
+      break;
+    case LookupIterator::DATA:
+      inline_followup = it->property_details().type() == FIELD;
+      break;
+    case LookupIterator::ACCESSOR: {
+      Handle<Object> accessors = it->GetAccessors();
+      inline_followup = accessors->IsExecutableAccessorInfo();
+      if (!inline_followup) break;
+      Handle<ExecutableAccessorInfo> info =
+          Handle<ExecutableAccessorInfo>::cast(accessors);
+      inline_followup = info->getter() != NULL &&
+                        ExecutableAccessorInfo::IsCompatibleReceiverType(
+                            isolate(), info, type());
     }
   }
 
@@ -264,7 +275,13 @@ void NamedLoadHandlerCompiler::GenerateLoadPostInterceptor(
   set_holder(real_named_property_holder);
   Register reg = Frontend(interceptor_reg, it->name());
 
-  switch (it->property_kind()) {
+  switch (it->state()) {
+    case LookupIterator::ACCESS_CHECK:
+    case LookupIterator::INTERCEPTOR:
+    case LookupIterator::JSPROXY:
+    case LookupIterator::NOT_FOUND:
+    case LookupIterator::TRANSITION:
+      UNREACHABLE();
     case LookupIterator::DATA: {
       DCHECK_EQ(FIELD, it->property_details().type());
       __ Move(receiver(), reg);
@@ -371,14 +388,15 @@ void ElementHandlerCompiler::CompileElementHandlers(
     } else {
       bool is_js_array = receiver_map->instance_type() == JS_ARRAY_TYPE;
       ElementsKind elements_kind = receiver_map->elements_kind();
-
-      if (IsFastElementsKind(elements_kind) ||
-          IsExternalArrayElementsKind(elements_kind) ||
-          IsFixedTypedArrayElementsKind(elements_kind)) {
+      if (receiver_map->has_indexed_interceptor()) {
+        cached_stub = LoadIndexedInterceptorStub(isolate()).GetCode();
+      } else if (IsSloppyArgumentsElements(elements_kind)) {
+        cached_stub = KeyedLoadSloppyArgumentsStub(isolate()).GetCode();
+      } else if (IsFastElementsKind(elements_kind) ||
+                 IsExternalArrayElementsKind(elements_kind) ||
+                 IsFixedTypedArrayElementsKind(elements_kind)) {
         cached_stub = LoadFastElementStub(isolate(), is_js_array, elements_kind)
                           .GetCode();
-      } else if (elements_kind == SLOPPY_ARGUMENTS_ELEMENTS) {
-        cached_stub = isolate()->builtins()->KeyedLoadIC_SloppyArguments();
       } else {
         DCHECK(elements_kind == DICTIONARY_ELEMENTS);
         cached_stub = LoadDictionaryElementStub(isolate()).GetCode();

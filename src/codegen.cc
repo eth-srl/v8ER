@@ -11,7 +11,7 @@
 #include "src/debug.h"
 #include "src/prettyprinter.h"
 #include "src/rewriter.h"
-#include "src/runtime.h"
+#include "src/runtime/runtime.h"
 
 namespace v8 {
 namespace internal {
@@ -116,6 +116,7 @@ void CodeGenerator::MakeCodePrologue(CompilationInfo* info, const char* kind) {
           CodeStub::MajorName(info->code_stub()->MajorKey(), true);
       PrintF("%s", name == NULL ? "<unknown>" : name);
     } else {
+      AllowDeferredHandleDereference allow_deference_for_trace;
       PrintF("%s", info->function()->debug_name()->ToCString().get());
     }
     PrintF("]\n");
@@ -189,7 +190,7 @@ void CodeGenerator::PrintCode(Handle<Code> code, CompilationInfo* info) {
             function->end_position() - function->start_position() + 1;
         for (int i = 0; i < source_len; i++) {
           if (stream.HasMore()) {
-            os << AsUC16(stream.GetNext());
+            os << AsReversiblyEscapedUC16(stream.GetNext());
           }
         }
         os << "\n\n";

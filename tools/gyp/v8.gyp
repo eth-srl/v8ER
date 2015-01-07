@@ -55,11 +55,23 @@
           # to appear before libv8_snapshot.a so it's listed explicitly.
           'dependencies': ['v8_base', 'v8_nosnapshot'],
         }],
+        ['v8_use_external_startup_data==1 and want_separate_host_toolset==1', {
+          'dependencies': ['v8_base', 'v8_external_snapshot'],
+          'target_conditions': [
+            ['_toolset=="host"', {
+              'inputs': [
+                '<(PRODUCT_DIR)/snapshot_blob_host.bin',
+              ],
+            }, {
+              'inputs': [
+                '<(PRODUCT_DIR)/snapshot_blob.bin',
+              ],
+            }],
+          ],
+        }],
         ['v8_use_external_startup_data==1 and want_separate_host_toolset==0', {
           'dependencies': ['v8_base', 'v8_external_snapshot'],
-        }],
-        ['v8_use_external_startup_data==1 and want_separate_host_toolset==1', {
-          'dependencies': ['v8_base', 'v8_external_snapshot#host'],
+          'inputs': [ '<(PRODUCT_DIR)/snapshot_blob.bin', ],
         }],
         ['component=="shared_library"', {
           'type': '<(component)',
@@ -218,11 +230,11 @@
       'type': 'static_library',
       'conditions': [
         ['want_separate_host_toolset==1', {
-          'toolsets': ['host'],
+          'toolsets': ['host', 'target'],
           'dependencies': [
             'mksnapshot#host',
             'js2c#host',
-            'natives_blob#host',
+            'natives_blob',
         ]}, {
           'toolsets': ['target'],
           'dependencies': [
@@ -260,9 +272,27 @@
           'inputs': [
             '<(PRODUCT_DIR)/<(EXECUTABLE_PREFIX)mksnapshot<(EXECUTABLE_SUFFIX)',
           ],
-          'outputs': [
-            '<(INTERMEDIATE_DIR)/snapshot.cc',
-            '<(PRODUCT_DIR)/snapshot_blob.bin',
+          'conditions': [
+            ['want_separate_host_toolset==1', {
+              'target_conditions': [
+                ['_toolset=="host"', {
+                  'outputs': [
+                    '<(INTERMEDIATE_DIR)/snapshot.cc',
+                    '<(PRODUCT_DIR)/snapshot_blob_host.bin',
+                  ],
+                }, {
+                  'outputs': [
+                    '<(INTERMEDIATE_DIR)/snapshot.cc',
+                    '<(PRODUCT_DIR)/snapshot_blob.bin',
+                  ],
+                }],
+              ],
+            }, {
+              'outputs': [
+                '<(INTERMEDIATE_DIR)/snapshot.cc',
+                '<(PRODUCT_DIR)/snapshot_blob.bin',
+              ],
+            }],
           ],
           'variables': {
             'mksnapshot_flags': [
@@ -317,6 +347,12 @@
         '../../src/ast-value-factory.h',
         '../../src/ast.cc',
         '../../src/ast.h',
+        '../../src/background-parsing-task.cc',
+        '../../src/background-parsing-task.h',
+        '../../src/bailout-reason.cc',
+        '../../src/bailout-reason.h',
+        '../../src/basic-block-profiler.cc',
+        '../../src/basic-block-profiler.h',
         '../../src/bignum-dtoa.cc',
         '../../src/bignum-dtoa.h',
         '../../src/bignum.cc',
@@ -334,6 +370,8 @@
         '../../src/checks.h',
         '../../src/circular-queue-inl.h',
         '../../src/circular-queue.h',
+        '../../src/code-factory.cc',
+        '../../src/code-factory.h',
         '../../src/code-stubs.cc',
         '../../src/code-stubs.h',
         '../../src/code-stubs-hydrogen.cc',
@@ -342,14 +380,19 @@
         '../../src/codegen.h',
         '../../src/compilation-cache.cc',
         '../../src/compilation-cache.h',
+        '../../src/compiler/access-builder.cc',
+        '../../src/compiler/access-builder.h',
         '../../src/compiler/ast-graph-builder.cc',
         '../../src/compiler/ast-graph-builder.h',
+        '../../src/compiler/basic-block-instrumentor.cc',
+        '../../src/compiler/basic-block-instrumentor.h',
         '../../src/compiler/change-lowering.cc',
         '../../src/compiler/change-lowering.h',
         '../../src/compiler/code-generator-impl.h',
         '../../src/compiler/code-generator.cc',
         '../../src/compiler/code-generator.h',
         '../../src/compiler/common-node-cache.h',
+        '../../src/compiler/common-operator.cc',
         '../../src/compiler/common-operator.h',
         '../../src/compiler/control-builders.cc',
         '../../src/compiler/control-builders.h',
@@ -378,6 +421,8 @@
         '../../src/compiler/instruction-selector.h',
         '../../src/compiler/instruction.cc',
         '../../src/compiler/instruction.h',
+        '../../src/compiler/js-builtin-reducer.cc',
+        '../../src/compiler/js-builtin-reducer.h',
         '../../src/compiler/js-context-specialization.cc',
         '../../src/compiler/js-context-specialization.h',
         '../../src/compiler/js-generic-lowering.cc',
@@ -392,9 +437,9 @@
         '../../src/compiler/linkage-impl.h',
         '../../src/compiler/linkage.cc',
         '../../src/compiler/linkage.h',
-        '../../src/compiler/machine-node-factory.h',
         '../../src/compiler/machine-operator-reducer.cc',
         '../../src/compiler/machine-operator-reducer.h',
+        '../../src/compiler/machine-operator.cc',
         '../../src/compiler/machine-operator.h',
         '../../src/compiler/machine-type.cc',
         '../../src/compiler/machine-type.h',
@@ -410,6 +455,7 @@
         '../../src/compiler/opcodes.h',
         '../../src/compiler/operator-properties-inl.h',
         '../../src/compiler/operator-properties.h',
+        '../../src/compiler/operator.cc',
         '../../src/compiler/operator.h',
         '../../src/compiler/phi-reducer.h',
         '../../src/compiler/pipeline.cc',
@@ -425,16 +471,16 @@
         '../../src/compiler/scheduler.h',
         '../../src/compiler/simplified-lowering.cc',
         '../../src/compiler/simplified-lowering.h',
-        '../../src/compiler/simplified-node-factory.h',
         '../../src/compiler/simplified-operator-reducer.cc',
         '../../src/compiler/simplified-operator-reducer.h',
+        '../../src/compiler/simplified-operator.cc',
         '../../src/compiler/simplified-operator.h',
         '../../src/compiler/source-position.cc',
         '../../src/compiler/source-position.h',
-        '../../src/compiler/structured-machine-assembler.cc',
-        '../../src/compiler/structured-machine-assembler.h',
         '../../src/compiler/typer.cc',
         '../../src/compiler/typer.h',
+        '../../src/compiler/value-numbering-reducer.cc',
+        '../../src/compiler/value-numbering-reducer.h',
         '../../src/compiler/verifier.cc',
         '../../src/compiler/verifier.h',
         '../../src/compiler.cc',
@@ -607,13 +653,16 @@
         '../../src/ic/handler-compiler.cc',
         '../../src/ic/handler-compiler.h',
         '../../src/ic/ic-inl.h',
+        '../../src/ic/ic-state.cc',
+        '../../src/ic/ic-state.h',
         '../../src/ic/ic.cc',
         '../../src/ic/ic.h',
         '../../src/ic/ic-compiler.cc',
         '../../src/ic/ic-compiler.h',
-        '../../src/ic/ic-conventions.h',
         '../../src/interface.cc',
         '../../src/interface.h',
+        '../../src/interface-descriptors.cc',
+        '../../src/interface-descriptors.h',
         '../../src/interpreter-irregexp.cc',
         '../../src/interpreter-irregexp.h',
         '../../src/isolate.cc',
@@ -688,8 +737,21 @@
         '../../src/rewriter.h',
         '../../src/runtime-profiler.cc',
         '../../src/runtime-profiler.h',
-        '../../src/runtime.cc',
-        '../../src/runtime.h',
+        '../../src/runtime/runtime-collections.cc',
+        '../../src/runtime/runtime-compiler.cc',
+        '../../src/runtime/runtime-i18n.cc',
+        '../../src/runtime/runtime-json.cc',
+        '../../src/runtime/runtime-maths.cc',
+        '../../src/runtime/runtime-numbers.cc',
+        '../../src/runtime/runtime-regexp.cc',
+        '../../src/runtime/runtime-strings.cc',
+        '../../src/runtime/runtime-test.cc',
+        '../../src/runtime/runtime-typedarray.cc',
+        '../../src/runtime/runtime-uri.cc',
+        '../../src/runtime/runtime-utils.h',
+        '../../src/runtime/runtime.cc',
+        '../../src/runtime/runtime.h',
+        '../../src/runtime/string-builder.h',
         '../../src/safepoint-table.cc',
         '../../src/safepoint-table.h',
         '../../src/sampler.cc',
@@ -722,6 +784,9 @@
         '../../src/transitions-inl.h',
         '../../src/transitions.cc',
         '../../src/transitions.h',
+        '../../src/type-feedback-vector-inl.h',
+        '../../src/type-feedback-vector.cc',
+        '../../src/type-feedback-vector.h',
         '../../src/type-info.cc',
         '../../src/type-info.h',
         '../../src/types-inl.h',
@@ -782,6 +847,8 @@
             '../../src/arm/frames-arm.cc',
             '../../src/arm/frames-arm.h',
             '../../src/arm/full-codegen-arm.cc',
+            '../../src/arm/interface-descriptors-arm.cc',
+            '../../src/arm/interface-descriptors-arm.h',
             '../../src/arm/lithium-arm.cc',
             '../../src/arm/lithium-arm.h',
             '../../src/arm/lithium-codegen-arm.cc',
@@ -801,7 +868,6 @@
             '../../src/ic/arm/handler-compiler-arm.cc',
             '../../src/ic/arm/ic-arm.cc',
             '../../src/ic/arm/ic-compiler-arm.cc',
-            '../../src/ic/arm/ic-conventions-arm.cc',
             '../../src/ic/arm/stub-cache-arm.cc',
           ],
         }],
@@ -834,6 +900,8 @@
             '../../src/arm64/instructions-arm64.h',
             '../../src/arm64/instrument-arm64.cc',
             '../../src/arm64/instrument-arm64.h',
+            '../../src/arm64/interface-descriptors-arm64.cc',
+            '../../src/arm64/interface-descriptors-arm64.h',
             '../../src/arm64/lithium-arm64.cc',
             '../../src/arm64/lithium-arm64.h',
             '../../src/arm64/lithium-codegen-arm64.cc',
@@ -857,7 +925,6 @@
             '../../src/ic/arm64/handler-compiler-arm64.cc',
             '../../src/ic/arm64/ic-arm64.cc',
             '../../src/ic/arm64/ic-compiler-arm64.cc',
-            '../../src/ic/arm64/ic-conventions-arm64.cc',
             '../../src/ic/arm64/stub-cache-arm64.cc',
           ],
         }],
@@ -878,6 +945,7 @@
             '../../src/ia32/frames-ia32.cc',
             '../../src/ia32/frames-ia32.h',
             '../../src/ia32/full-codegen-ia32.cc',
+            '../../src/ia32/interface-descriptors-ia32.cc',
             '../../src/ia32/lithium-codegen-ia32.cc',
             '../../src/ia32/lithium-codegen-ia32.h',
             '../../src/ia32/lithium-gap-resolver-ia32.cc',
@@ -896,7 +964,6 @@
             '../../src/ic/ia32/handler-compiler-ia32.cc',
             '../../src/ic/ia32/ic-ia32.cc',
             '../../src/ic/ia32/ic-compiler-ia32.cc',
-            '../../src/ic/ia32/ic-conventions-ia32.cc',
             '../../src/ic/ia32/stub-cache-ia32.cc',
           ],
         }],
@@ -917,6 +984,7 @@
             '../../src/x87/frames-x87.cc',
             '../../src/x87/frames-x87.h',
             '../../src/x87/full-codegen-x87.cc',
+            '../../src/x87/interface-descriptors-x87.cc',
             '../../src/x87/lithium-codegen-x87.cc',
             '../../src/x87/lithium-codegen-x87.h',
             '../../src/x87/lithium-gap-resolver-x87.cc',
@@ -931,7 +999,6 @@
             '../../src/ic/x87/handler-compiler-x87.cc',
             '../../src/ic/x87/ic-x87.cc',
             '../../src/ic/x87/ic-compiler-x87.cc',
-            '../../src/ic/x87/ic-conventions-x87.cc',
             '../../src/ic/x87/stub-cache-x87.cc',
           ],
         }],
@@ -954,6 +1021,7 @@
             '../../src/mips/frames-mips.cc',
             '../../src/mips/frames-mips.h',
             '../../src/mips/full-codegen-mips.cc',
+            '../../src/mips/interface-descriptors-mips.cc',
             '../../src/mips/lithium-codegen-mips.cc',
             '../../src/mips/lithium-codegen-mips.h',
             '../../src/mips/lithium-gap-resolver-mips.cc',
@@ -969,7 +1037,6 @@
             '../../src/ic/mips/handler-compiler-mips.cc',
             '../../src/ic/mips/ic-mips.cc',
             '../../src/ic/mips/ic-compiler-mips.cc',
-            '../../src/ic/mips/ic-conventions-mips.cc',
             '../../src/ic/mips/stub-cache-mips.cc',
           ],
         }],
@@ -992,6 +1059,7 @@
             '../../src/mips64/frames-mips64.cc',
             '../../src/mips64/frames-mips64.h',
             '../../src/mips64/full-codegen-mips64.cc',
+            '../../src/mips64/interface-descriptors-mips64.cc',
             '../../src/mips64/lithium-codegen-mips64.cc',
             '../../src/mips64/lithium-codegen-mips64.h',
             '../../src/mips64/lithium-gap-resolver-mips64.cc',
@@ -1007,7 +1075,6 @@
             '../../src/ic/mips64/handler-compiler-mips64.cc',
             '../../src/ic/mips64/ic-mips64.cc',
             '../../src/ic/mips64/ic-compiler-mips64.cc',
-            '../../src/ic/mips64/ic-conventions-mips64.cc',
             '../../src/ic/mips64/stub-cache-mips64.cc',
           ],
         }],
@@ -1028,6 +1095,7 @@
             '../../src/x64/frames-x64.cc',
             '../../src/x64/frames-x64.h',
             '../../src/x64/full-codegen-x64.cc',
+            '../../src/x64/interface-descriptors-x64.cc',
             '../../src/x64/lithium-codegen-x64.cc',
             '../../src/x64/lithium-codegen-x64.h',
             '../../src/x64/lithium-gap-resolver-x64.cc',
@@ -1046,7 +1114,6 @@
             '../../src/ic/x64/handler-compiler-x64.cc',
             '../../src/ic/x64/ic-x64.cc',
             '../../src/ic/x64/ic-compiler-x64.cc',
-            '../../src/ic/x64/ic-conventions-x64.cc',
             '../../src/ic/x64/stub-cache-x64.cc',
           ],
         }],
@@ -1128,10 +1195,14 @@
         '../../src/base/atomicops_internals_x86_gcc.cc',
         '../../src/base/atomicops_internals_x86_gcc.h',
         '../../src/base/atomicops_internals_x86_msvc.h',
+        '../../src/base/bits.cc',
         '../../src/base/bits.h',
         '../../src/base/build_config.h',
+        '../../src/base/compiler-specific.h',
         '../../src/base/cpu.cc',
         '../../src/base/cpu.h',
+        '../../src/base/division-by-constant.cc',
+        '../../src/base/division-by-constant.h',
         '../../src/base/flags.h',
         '../../src/base/lazy-instance.h',
         '../../src/base/logging.cc',
@@ -1391,7 +1462,13 @@
       'type': 'none',
       'conditions': [
         [ 'v8_use_external_startup_data==1', {
-          'dependencies': ['js2c'],
+          'conditions': [
+            ['want_separate_host_toolset==1', {
+              'dependencies': ['js2c#host'],
+            }, {
+              'dependencies': ['js2c'],
+            }],
+          ],
           'actions': [{
             'action_name': 'concatenate_natives_blob',
             'inputs': [
@@ -1399,14 +1476,38 @@
               '<(SHARED_INTERMEDIATE_DIR)/libraries.bin',
               '<(SHARED_INTERMEDIATE_DIR)/libraries-experimental.bin',
             ],
-            'outputs': [
-              '<(PRODUCT_DIR)/natives_blob.bin',
+            'conditions': [
+              ['want_separate_host_toolset==1', {
+                'target_conditions': [
+                  ['_toolset=="host"', {
+                    'outputs': [
+                      '<(PRODUCT_DIR)/natives_blob_host.bin',
+                    ],
+                    'action': [
+                      'python', '<@(_inputs)', '<(PRODUCT_DIR)/natives_blob_host.bin'
+                    ],
+                  }, {
+                    'outputs': [
+                      '<(PRODUCT_DIR)/natives_blob.bin',
+                    ],
+                    'action': [
+                      'python', '<@(_inputs)', '<(PRODUCT_DIR)/natives_blob.bin'
+                    ],
+                  }],
+                ],
+              }, {
+                'outputs': [
+                  '<(PRODUCT_DIR)/natives_blob.bin',
+                ],
+                'action': [
+                  'python', '<@(_inputs)', '<(PRODUCT_DIR)/natives_blob.bin'
+                ],
+              }],
             ],
-            'action': ['python', '<@(_inputs)', '<@(_outputs)'],
           }],
         }],
         ['want_separate_host_toolset==1', {
-          'toolsets': ['host'],
+          'toolsets': ['host', 'target'],
         }, {
           'toolsets': ['target'],
         }],
@@ -1449,6 +1550,7 @@
           '../../src/regexp.js',
           '../../src/arraybuffer.js',
           '../../src/typedarray.js',
+          '../../src/generator.js',
           '../../src/object-observe.js',
           '../../src/collection.js',
           '../../src/weak-collection.js',

@@ -133,7 +133,7 @@ static void GenerateDictionaryStore(MacroAssembler* masm, Label* miss_label,
 
   // Update write barrier. Make sure not to clobber the value.
   __ mov(r1, value);
-  __ RecordWrite(elements, r0, r1);
+  __ RecordWrite(elements, r0, r1, kDontSaveFPRegs);
 }
 
 
@@ -312,8 +312,8 @@ void KeyedLoadIC::GenerateGeneric(MacroAssembler* masm) {
   Label slow, check_name, index_smi, index_name, property_array_property;
   Label probe_dictionary, check_number_dictionary;
 
-  Register receiver = LoadConvention::ReceiverRegister();
-  Register key = LoadConvention::NameRegister();
+  Register receiver = LoadDescriptor::ReceiverRegister();
+  Register key = LoadDescriptor::NameRegister();
   DCHECK(receiver.is(edx));
   DCHECK(key.is(ecx));
 
@@ -482,8 +482,8 @@ void KeyedLoadIC::GenerateString(MacroAssembler* masm) {
   // Return address is on the stack.
   Label miss;
 
-  Register receiver = LoadConvention::ReceiverRegister();
-  Register index = LoadConvention::NameRegister();
+  Register receiver = LoadDescriptor::ReceiverRegister();
+  Register index = LoadDescriptor::NameRegister();
   Register scratch = ebx;
   DCHECK(!scratch.is(receiver) && !scratch.is(index));
   Register result = eax;
@@ -505,80 +505,12 @@ void KeyedLoadIC::GenerateString(MacroAssembler* masm) {
 }
 
 
-void KeyedLoadIC::GenerateIndexedInterceptor(MacroAssembler* masm) {
-  // Return address is on the stack.
-  Label slow;
-
-  Register receiver = LoadConvention::ReceiverRegister();
-  Register key = LoadConvention::NameRegister();
-  Register scratch = eax;
-  DCHECK(!scratch.is(receiver) && !scratch.is(key));
-
-  // Check that the receiver isn't a smi.
-  __ JumpIfSmi(receiver, &slow);
-
-  // Check that the key is an array index, that is Uint32.
-  __ test(key, Immediate(kSmiTagMask | kSmiSignMask));
-  __ j(not_zero, &slow);
-
-  // Get the map of the receiver.
-  __ mov(scratch, FieldOperand(receiver, HeapObject::kMapOffset));
-
-  // Check that it has indexed interceptor and access checks
-  // are not enabled for this object.
-  __ movzx_b(scratch, FieldOperand(scratch, Map::kBitFieldOffset));
-  __ and_(scratch, Immediate(kSlowCaseBitFieldMask));
-  __ cmp(scratch, Immediate(1 << Map::kHasIndexedInterceptor));
-  __ j(not_zero, &slow);
-
-  // Everything is fine, call runtime.
-  __ pop(scratch);
-  __ push(receiver);  // receiver
-  __ push(key);       // key
-  __ push(scratch);   // return address
-
-  // Perform tail call to the entry.
-  ExternalReference ref = ExternalReference(
-      IC_Utility(kLoadElementWithInterceptor), masm->isolate());
-  __ TailCallExternalReference(ref, 2, 1);
-
-  __ bind(&slow);
-  GenerateMiss(masm);
-}
-
-
-void KeyedLoadIC::GenerateSloppyArguments(MacroAssembler* masm) {
-  // The return address is on the stack.
-  Register receiver = LoadConvention::ReceiverRegister();
-  Register key = LoadConvention::NameRegister();
-  DCHECK(receiver.is(edx));
-  DCHECK(key.is(ecx));
-
-  Label slow, notin;
-  Factory* factory = masm->isolate()->factory();
-  Operand mapped_location = GenerateMappedArgumentsLookup(
-      masm, receiver, key, ebx, eax, &notin, &slow);
-  __ mov(eax, mapped_location);
-  __ Ret();
-  __ bind(&notin);
-  // The unmapped lookup expects that the parameter map is in ebx.
-  Operand unmapped_location =
-      GenerateUnmappedArgumentsLookup(masm, key, ebx, eax, &slow);
-  __ cmp(unmapped_location, factory->the_hole_value());
-  __ j(equal, &slow);
-  __ mov(eax, unmapped_location);
-  __ Ret();
-  __ bind(&slow);
-  GenerateMiss(masm);
-}
-
-
 void KeyedStoreIC::GenerateSloppyArguments(MacroAssembler* masm) {
   // Return address is on the stack.
   Label slow, notin;
-  Register receiver = StoreConvention::ReceiverRegister();
-  Register name = StoreConvention::NameRegister();
-  Register value = StoreConvention::ValueRegister();
+  Register receiver = StoreDescriptor::ReceiverRegister();
+  Register name = StoreDescriptor::NameRegister();
+  Register value = StoreDescriptor::ValueRegister();
   DCHECK(receiver.is(edx));
   DCHECK(name.is(ecx));
   DCHECK(value.is(eax));
@@ -588,7 +520,7 @@ void KeyedStoreIC::GenerateSloppyArguments(MacroAssembler* masm) {
   __ mov(mapped_location, value);
   __ lea(ecx, mapped_location);
   __ mov(edx, value);
-  __ RecordWrite(ebx, ecx, edx);
+  __ RecordWrite(ebx, ecx, edx, kDontSaveFPRegs);
   __ Ret();
   __ bind(&notin);
   // The unmapped lookup expects that the parameter map is in ebx.
@@ -597,7 +529,7 @@ void KeyedStoreIC::GenerateSloppyArguments(MacroAssembler* masm) {
   __ mov(unmapped_location, value);
   __ lea(edi, unmapped_location);
   __ mov(edx, value);
-  __ RecordWrite(ebx, edi, edx);
+  __ RecordWrite(ebx, edi, edx, kDontSaveFPRegs);
   __ Ret();
   __ bind(&slow);
   GenerateMiss(masm);
@@ -610,9 +542,9 @@ static void KeyedStoreGenerateGenericHelper(
   Label transition_smi_elements;
   Label finish_object_store, non_double_value, transition_double_elements;
   Label fast_double_without_map_check;
-  Register receiver = StoreConvention::ReceiverRegister();
-  Register key = StoreConvention::NameRegister();
-  Register value = StoreConvention::ValueRegister();
+  Register receiver = StoreDescriptor::ReceiverRegister();
+  Register key = StoreDescriptor::NameRegister();
+  Register value = StoreDescriptor::ValueRegister();
   DCHECK(receiver.is(edx));
   DCHECK(key.is(ecx));
   DCHECK(value.is(eax));
@@ -666,7 +598,8 @@ static void KeyedStoreGenerateGenericHelper(
   __ mov(FixedArrayElementOperand(ebx, key), value);
   // Update write barrier for the elements array address.
   __ mov(edx, value);  // Preserve the value which is returned.
-  __ RecordWriteArray(ebx, edx, key, EMIT_REMEMBERED_SET, OMIT_SMI_CHECK);
+  __ RecordWriteArray(ebx, edx, key, kDontSaveFPRegs, EMIT_REMEMBERED_SET,
+                      OMIT_SMI_CHECK);
   __ ret(0);
 
   __ bind(fast_double);
@@ -747,8 +680,8 @@ void KeyedStoreIC::GenerateGeneric(MacroAssembler* masm,
   Label slow, fast_object, fast_object_grow;
   Label fast_double, fast_double_grow;
   Label array, extra, check_if_double_array;
-  Register receiver = StoreConvention::ReceiverRegister();
-  Register key = StoreConvention::NameRegister();
+  Register receiver = StoreDescriptor::ReceiverRegister();
+  Register key = StoreDescriptor::NameRegister();
   DCHECK(receiver.is(edx));
   DCHECK(key.is(ecx));
 
@@ -825,35 +758,17 @@ void KeyedStoreIC::GenerateGeneric(MacroAssembler* masm,
 }
 
 
-void LoadIC::GenerateMegamorphic(MacroAssembler* masm) {
-  // The return address is on the stack.
-  Register receiver = LoadConvention::ReceiverRegister();
-  Register name = LoadConvention::NameRegister();
-  DCHECK(receiver.is(edx));
-  DCHECK(name.is(ecx));
-
-  // Probe the stub cache.
-  Code::Flags flags = Code::RemoveTypeAndHolderFromFlags(
-      Code::ComputeHandlerFlags(Code::LOAD_IC));
-  masm->isolate()->stub_cache()->GenerateProbe(masm, flags, receiver, name, ebx,
-                                               eax);
-
-  // Cache miss: Jump to runtime.
-  GenerateMiss(masm);
-}
-
-
 void LoadIC::GenerateNormal(MacroAssembler* masm) {
   Register dictionary = eax;
-  DCHECK(!dictionary.is(LoadConvention::ReceiverRegister()));
-  DCHECK(!dictionary.is(LoadConvention::NameRegister()));
+  DCHECK(!dictionary.is(LoadDescriptor::ReceiverRegister()));
+  DCHECK(!dictionary.is(LoadDescriptor::NameRegister()));
 
   Label slow;
 
-  __ mov(dictionary, FieldOperand(LoadConvention::ReceiverRegister(),
+  __ mov(dictionary, FieldOperand(LoadDescriptor::ReceiverRegister(),
                                   JSObject::kPropertiesOffset));
   GenerateDictionaryLoad(masm, &slow, dictionary,
-                         LoadConvention::NameRegister(), edi, ebx, eax);
+                         LoadDescriptor::NameRegister(), edi, ebx, eax);
   __ ret(0);
 
   // Dictionary load failed, go slow (but don't miss).
@@ -863,8 +778,8 @@ void LoadIC::GenerateNormal(MacroAssembler* masm) {
 
 
 static void LoadIC_PushArgs(MacroAssembler* masm) {
-  Register receiver = LoadConvention::ReceiverRegister();
-  Register name = LoadConvention::NameRegister();
+  Register receiver = LoadDescriptor::ReceiverRegister();
+  Register name = LoadDescriptor::NameRegister();
   DCHECK(!ebx.is(receiver) && !ebx.is(name));
 
   __ pop(ebx);
@@ -923,8 +838,8 @@ void StoreIC::GenerateMegamorphic(MacroAssembler* masm) {
   Code::Flags flags = Code::RemoveTypeAndHolderFromFlags(
       Code::ComputeHandlerFlags(Code::STORE_IC));
   masm->isolate()->stub_cache()->GenerateProbe(
-      masm, flags, StoreConvention::ReceiverRegister(),
-      StoreConvention::NameRegister(), ebx, no_reg);
+      masm, flags, false, StoreDescriptor::ReceiverRegister(),
+      StoreDescriptor::NameRegister(), ebx, no_reg);
 
   // Cache miss: Jump to runtime.
   GenerateMiss(masm);
@@ -932,9 +847,9 @@ void StoreIC::GenerateMegamorphic(MacroAssembler* masm) {
 
 
 static void StoreIC_PushArgs(MacroAssembler* masm) {
-  Register receiver = StoreConvention::ReceiverRegister();
-  Register name = StoreConvention::NameRegister();
-  Register value = StoreConvention::ValueRegister();
+  Register receiver = StoreDescriptor::ReceiverRegister();
+  Register name = StoreDescriptor::NameRegister();
+  Register value = StoreDescriptor::ValueRegister();
 
   DCHECK(!ebx.is(receiver) && !ebx.is(name) && !ebx.is(value));
 
@@ -959,9 +874,9 @@ void StoreIC::GenerateMiss(MacroAssembler* masm) {
 
 void StoreIC::GenerateNormal(MacroAssembler* masm) {
   Label restore_miss;
-  Register receiver = StoreConvention::ReceiverRegister();
-  Register name = StoreConvention::NameRegister();
-  Register value = StoreConvention::ValueRegister();
+  Register receiver = StoreDescriptor::ReceiverRegister();
+  Register name = StoreDescriptor::NameRegister();
+  Register value = StoreDescriptor::ValueRegister();
   Register dictionary = ebx;
 
   __ mov(dictionary, FieldOperand(receiver, JSObject::kPropertiesOffset));

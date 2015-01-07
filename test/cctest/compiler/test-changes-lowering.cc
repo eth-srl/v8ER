@@ -10,7 +10,6 @@
 #include "src/compiler/js-graph.h"
 #include "src/compiler/node-properties-inl.h"
 #include "src/compiler/pipeline.h"
-#include "src/compiler/simplified-node-factory.h"
 #include "src/compiler/typer.h"
 #include "src/compiler/verifier.h"
 #include "src/execution.h"
@@ -32,10 +31,13 @@ class ChangesLoweringTester : public GraphBuilderTester<ReturnType> {
   explicit ChangesLoweringTester(MachineType p0 = kMachNone)
       : GraphBuilderTester<ReturnType>(p0),
         typer(this->zone()),
-        jsgraph(this->graph(), this->common(), &typer),
+        javascript(this->zone()),
+        jsgraph(this->graph(), this->common(), &javascript, &typer,
+                this->machine()),
         function(Handle<JSFunction>::null()) {}
 
   Typer typer;
+  JSOperatorBuilder javascript;
   JSGraph jsgraph;
   Handle<JSFunction> function;
 
@@ -53,8 +55,6 @@ class ChangesLoweringTester : public GraphBuilderTester<ReturnType> {
               "(function() { 'use strict'; return 2.7123; })")));
       CompilationInfoWithZone info(function);
       CHECK(Parser::Parse(&info));
-      StrictMode strict_mode = info.function()->strict_mode();
-      info.SetStrictMode(strict_mode);
       info.SetOptimizing(BailoutId::None(), Handle<Code>(function->code()));
       CHECK(Rewriter::Rewrite(&info));
       CHECK(Scope::Analyze(&info));
@@ -101,7 +101,7 @@ class ChangesLoweringTester : public GraphBuilderTester<ReturnType> {
     CHECK(this->isolate()->factory()->NewNumber(expected)->SameValue(number));
   }
 
-  void BuildAndLower(Operator* op) {
+  void BuildAndLower(const Operator* op) {
     // We build a graph by hand here, because the raw machine assembler
     // does not add the correct control and effect nodes.
     Node* p0 = this->Parameter(0);
@@ -113,7 +113,8 @@ class ChangesLoweringTester : public GraphBuilderTester<ReturnType> {
     LowerChange(change);
   }
 
-  void BuildStoreAndLower(Operator* op, Operator* store_op, void* location) {
+  void BuildStoreAndLower(const Operator* op, const Operator* store_op,
+                          void* location) {
     // We build a graph by hand here, because the raw machine assembler
     // does not add the correct control and effect nodes.
     Node* p0 = this->Parameter(0);
@@ -128,7 +129,8 @@ class ChangesLoweringTester : public GraphBuilderTester<ReturnType> {
     LowerChange(change);
   }
 
-  void BuildLoadAndLower(Operator* op, Operator* load_op, void* location) {
+  void BuildLoadAndLower(const Operator* op, const Operator* load_op,
+                         void* location) {
     // We build a graph by hand here, because the raw machine assembler
     // does not add the correct control and effect nodes.
     Node* load =
@@ -146,7 +148,7 @@ class ChangesLoweringTester : public GraphBuilderTester<ReturnType> {
     // Run the graph reducer with changes lowering on a single node.
     CompilationInfo info(this->isolate(), this->zone());
     Linkage linkage(&info);
-    ChangeLowering lowering(&jsgraph, &linkage, this->machine());
+    ChangeLowering lowering(&jsgraph, &linkage);
     GraphReducer reducer(this->graph());
     reducer.AddReducer(&lowering);
     reducer.ReduceNode(change);
@@ -222,9 +224,10 @@ TEST(RunChangeTaggedToFloat64) {
   ChangesLoweringTester<int32_t> t(kMachAnyTagged);
   double result;
 
-  t.BuildStoreAndLower(t.simplified()->ChangeTaggedToFloat64(),
-                       t.machine()->Store(kMachFloat64, kNoWriteBarrier),
-                       &result);
+  t.BuildStoreAndLower(
+      t.simplified()->ChangeTaggedToFloat64(),
+      t.machine()->Store(StoreRepresentation(kMachFloat64, kNoWriteBarrier)),
+      &result);
 
   if (Pipeline::SupportedTarget()) {
     FOR_INT32_INPUTS(i) {
@@ -304,10 +307,7 @@ TEST(RunChangeBitToBool) {
 }
 
 
-#ifndef V8_TARGET_ARCH_ARM64
 #if V8_TURBOFAN_BACKEND
-// TODO(titzer): disabled on ARM64 because calling into the runtime to
-// allocate uses the wrong stack pointer.
 // TODO(titzer): disabled on ARM
 
 TEST(RunChangeInt32ToTaggedSmi) {
@@ -412,4 +412,3 @@ TEST(RunChangeFloat64ToTagged) {
 }
 
 #endif  // V8_TURBOFAN_BACKEND
-#endif  // !V8_TARGET_ARCH_ARM64

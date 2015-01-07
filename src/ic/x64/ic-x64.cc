@@ -257,8 +257,8 @@ void KeyedLoadIC::GenerateGeneric(MacroAssembler* masm) {
   Label slow, check_name, index_smi, index_name, property_array_property;
   Label probe_dictionary, check_number_dictionary;
 
-  Register receiver = LoadConvention::ReceiverRegister();
-  Register key = LoadConvention::NameRegister();
+  Register receiver = LoadDescriptor::ReceiverRegister();
+  Register key = LoadDescriptor::NameRegister();
   DCHECK(receiver.is(rdx));
   DCHECK(key.is(rcx));
 
@@ -407,8 +407,8 @@ void KeyedLoadIC::GenerateString(MacroAssembler* masm) {
   // Return address is on the stack.
   Label miss;
 
-  Register receiver = LoadConvention::ReceiverRegister();
-  Register index = LoadConvention::NameRegister();
+  Register receiver = LoadDescriptor::ReceiverRegister();
+  Register index = LoadDescriptor::NameRegister();
   Register scratch = rbx;
   Register result = rax;
   DCHECK(!scratch.is(receiver) && !scratch.is(index));
@@ -429,58 +429,15 @@ void KeyedLoadIC::GenerateString(MacroAssembler* masm) {
 }
 
 
-void KeyedLoadIC::GenerateIndexedInterceptor(MacroAssembler* masm) {
-  // Return address is on the stack.
-  Label slow;
-
-  Register receiver = LoadConvention::ReceiverRegister();
-  Register key = LoadConvention::NameRegister();
-  Register scratch = rax;
-  DCHECK(!scratch.is(receiver) && !scratch.is(key));
-
-  // Check that the receiver isn't a smi.
-  __ JumpIfSmi(receiver, &slow);
-
-  // Check that the key is an array index, that is Uint32.
-  STATIC_ASSERT(kSmiValueSize <= 32);
-  __ JumpUnlessNonNegativeSmi(key, &slow);
-
-  // Get the map of the receiver.
-  __ movp(scratch, FieldOperand(receiver, HeapObject::kMapOffset));
-
-  // Check that it has indexed interceptor and access checks
-  // are not enabled for this object.
-  __ movb(scratch, FieldOperand(scratch, Map::kBitFieldOffset));
-  __ andb(scratch, Immediate(kSlowCaseBitFieldMask));
-  __ cmpb(scratch, Immediate(1 << Map::kHasIndexedInterceptor));
-  __ j(not_zero, &slow);
-
-  // Everything is fine, call runtime.
-  __ PopReturnAddressTo(scratch);
-  __ Push(receiver);  // receiver
-  __ Push(key);       // key
-  __ PushReturnAddressFrom(scratch);
-
-  // Perform tail call to the entry.
-  __ TailCallExternalReference(
-      ExternalReference(IC_Utility(kLoadElementWithInterceptor),
-                        masm->isolate()),
-      2, 1);
-
-  __ bind(&slow);
-  GenerateMiss(masm);
-}
-
-
 static void KeyedStoreGenerateGenericHelper(
     MacroAssembler* masm, Label* fast_object, Label* fast_double, Label* slow,
     KeyedStoreCheckMap check_map, KeyedStoreIncrementLength increment_length) {
   Label transition_smi_elements;
   Label finish_object_store, non_double_value, transition_double_elements;
   Label fast_double_without_map_check;
-  Register receiver = StoreConvention::ReceiverRegister();
-  Register key = StoreConvention::NameRegister();
-  Register value = StoreConvention::ValueRegister();
+  Register receiver = StoreDescriptor::ReceiverRegister();
+  Register key = StoreDescriptor::NameRegister();
+  Register value = StoreDescriptor::ValueRegister();
   DCHECK(receiver.is(rdx));
   DCHECK(key.is(rcx));
   DCHECK(value.is(rax));
@@ -615,8 +572,8 @@ void KeyedStoreIC::GenerateGeneric(MacroAssembler* masm,
   Label slow, slow_with_tagged_index, fast_object, fast_object_grow;
   Label fast_double, fast_double_grow;
   Label array, extra, check_if_double_array;
-  Register receiver = StoreConvention::ReceiverRegister();
-  Register key = StoreConvention::NameRegister();
+  Register receiver = StoreDescriptor::ReceiverRegister();
+  Register key = StoreDescriptor::NameRegister();
   DCHECK(receiver.is(rdx));
   DCHECK(key.is(rcx));
 
@@ -765,37 +722,12 @@ static Operand GenerateUnmappedArgumentsLookup(MacroAssembler* masm,
 }
 
 
-void KeyedLoadIC::GenerateSloppyArguments(MacroAssembler* masm) {
-  // The return address is on the stack.
-  Register receiver = LoadConvention::ReceiverRegister();
-  Register key = LoadConvention::NameRegister();
-  DCHECK(receiver.is(rdx));
-  DCHECK(key.is(rcx));
-
-  Label slow, notin;
-  Operand mapped_location = GenerateMappedArgumentsLookup(
-      masm, receiver, key, rbx, rax, rdi, &notin, &slow);
-  __ movp(rax, mapped_location);
-  __ Ret();
-  __ bind(&notin);
-  // The unmapped lookup expects that the parameter map is in rbx.
-  Operand unmapped_location =
-      GenerateUnmappedArgumentsLookup(masm, key, rbx, rax, &slow);
-  __ CompareRoot(unmapped_location, Heap::kTheHoleValueRootIndex);
-  __ j(equal, &slow);
-  __ movp(rax, unmapped_location);
-  __ Ret();
-  __ bind(&slow);
-  GenerateMiss(masm);
-}
-
-
 void KeyedStoreIC::GenerateSloppyArguments(MacroAssembler* masm) {
   // The return address is on the stack.
   Label slow, notin;
-  Register receiver = StoreConvention::ReceiverRegister();
-  Register name = StoreConvention::NameRegister();
-  Register value = StoreConvention::ValueRegister();
+  Register receiver = StoreDescriptor::ReceiverRegister();
+  Register name = StoreDescriptor::NameRegister();
+  Register value = StoreDescriptor::ValueRegister();
   DCHECK(receiver.is(rdx));
   DCHECK(name.is(rcx));
   DCHECK(value.is(rax));
@@ -823,34 +755,17 @@ void KeyedStoreIC::GenerateSloppyArguments(MacroAssembler* masm) {
 }
 
 
-void LoadIC::GenerateMegamorphic(MacroAssembler* masm) {
-  // The return address is on the stack.
-  Register receiver = LoadConvention::ReceiverRegister();
-  Register name = LoadConvention::NameRegister();
-  DCHECK(receiver.is(rdx));
-  DCHECK(name.is(rcx));
-
-  // Probe the stub cache.
-  Code::Flags flags = Code::RemoveTypeAndHolderFromFlags(
-      Code::ComputeHandlerFlags(Code::LOAD_IC));
-  masm->isolate()->stub_cache()->GenerateProbe(masm, flags, receiver, name, rbx,
-                                               rax);
-
-  GenerateMiss(masm);
-}
-
-
 void LoadIC::GenerateNormal(MacroAssembler* masm) {
   Register dictionary = rax;
-  DCHECK(!dictionary.is(LoadConvention::ReceiverRegister()));
-  DCHECK(!dictionary.is(LoadConvention::NameRegister()));
+  DCHECK(!dictionary.is(LoadDescriptor::ReceiverRegister()));
+  DCHECK(!dictionary.is(LoadDescriptor::NameRegister()));
 
   Label slow;
 
-  __ movp(dictionary, FieldOperand(LoadConvention::ReceiverRegister(),
+  __ movp(dictionary, FieldOperand(LoadDescriptor::ReceiverRegister(),
                                    JSObject::kPropertiesOffset));
   GenerateDictionaryLoad(masm, &slow, dictionary,
-                         LoadConvention::NameRegister(), rbx, rdi, rax);
+                         LoadDescriptor::NameRegister(), rbx, rdi, rax);
   __ ret(0);
 
   // Dictionary load failed, go slow (but don't miss).
@@ -873,8 +788,8 @@ void LoadIC::GenerateMiss(MacroAssembler* masm) {
   __ IncrementCounter(counters->load_miss(), 1);
 
   __ PopReturnAddressTo(LoadIC_TempRegister());
-  __ Push(LoadConvention::ReceiverRegister());  // receiver
-  __ Push(LoadConvention::NameRegister());      // name
+  __ Push(LoadDescriptor::ReceiverRegister());  // receiver
+  __ Push(LoadDescriptor::NameRegister());      // name
   __ PushReturnAddressFrom(LoadIC_TempRegister());
 
   // Perform tail call to the entry.
@@ -888,8 +803,8 @@ void LoadIC::GenerateRuntimeGetProperty(MacroAssembler* masm) {
   // The return address is on the stack.
 
   __ PopReturnAddressTo(LoadIC_TempRegister());
-  __ Push(LoadConvention::ReceiverRegister());  // receiver
-  __ Push(LoadConvention::NameRegister());      // name
+  __ Push(LoadDescriptor::ReceiverRegister());  // receiver
+  __ Push(LoadDescriptor::NameRegister());      // name
   __ PushReturnAddressFrom(LoadIC_TempRegister());
 
   // Perform tail call to the entry.
@@ -903,8 +818,8 @@ void KeyedLoadIC::GenerateMiss(MacroAssembler* masm) {
   __ IncrementCounter(counters->keyed_load_miss(), 1);
 
   __ PopReturnAddressTo(KeyedLoadIC_TempRegister());
-  __ Push(LoadConvention::ReceiverRegister());  // receiver
-  __ Push(LoadConvention::NameRegister());      // name
+  __ Push(LoadDescriptor::ReceiverRegister());  // receiver
+  __ Push(LoadDescriptor::NameRegister());      // name
   __ PushReturnAddressFrom(KeyedLoadIC_TempRegister());
 
   // Perform tail call to the entry.
@@ -918,8 +833,8 @@ void KeyedLoadIC::GenerateRuntimeGetProperty(MacroAssembler* masm) {
   // The return address is on the stack.
 
   __ PopReturnAddressTo(KeyedLoadIC_TempRegister());
-  __ Push(LoadConvention::ReceiverRegister());  // receiver
-  __ Push(LoadConvention::NameRegister());      // name
+  __ Push(LoadDescriptor::ReceiverRegister());  // receiver
+  __ Push(LoadDescriptor::NameRegister());      // name
   __ PushReturnAddressFrom(KeyedLoadIC_TempRegister());
 
   // Perform tail call to the entry.
@@ -934,8 +849,8 @@ void StoreIC::GenerateMegamorphic(MacroAssembler* masm) {
   Code::Flags flags = Code::RemoveTypeAndHolderFromFlags(
       Code::ComputeHandlerFlags(Code::STORE_IC));
   masm->isolate()->stub_cache()->GenerateProbe(
-      masm, flags, StoreConvention::ReceiverRegister(),
-      StoreConvention::NameRegister(), rbx, no_reg);
+      masm, flags, false, StoreDescriptor::ReceiverRegister(),
+      StoreDescriptor::NameRegister(), rbx, no_reg);
 
   // Cache miss: Jump to runtime.
   GenerateMiss(masm);
@@ -943,9 +858,9 @@ void StoreIC::GenerateMegamorphic(MacroAssembler* masm) {
 
 
 static void StoreIC_PushArgs(MacroAssembler* masm) {
-  Register receiver = StoreConvention::ReceiverRegister();
-  Register name = StoreConvention::NameRegister();
-  Register value = StoreConvention::ValueRegister();
+  Register receiver = StoreDescriptor::ReceiverRegister();
+  Register name = StoreDescriptor::NameRegister();
+  Register value = StoreDescriptor::ValueRegister();
 
   DCHECK(!rbx.is(receiver) && !rbx.is(name) && !rbx.is(value));
 
@@ -969,9 +884,9 @@ void StoreIC::GenerateMiss(MacroAssembler* masm) {
 
 
 void StoreIC::GenerateNormal(MacroAssembler* masm) {
-  Register receiver = StoreConvention::ReceiverRegister();
-  Register name = StoreConvention::NameRegister();
-  Register value = StoreConvention::ValueRegister();
+  Register receiver = StoreDescriptor::ReceiverRegister();
+  Register name = StoreDescriptor::NameRegister();
+  Register value = StoreDescriptor::ValueRegister();
   Register dictionary = rbx;
 
   Label miss;
