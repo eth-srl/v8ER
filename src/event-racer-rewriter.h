@@ -131,32 +131,6 @@ private:
     ContextScope *prev;
   };
 
-  struct AstNodeIdAllocationScope {
-    AstNodeIdAllocationScope(AstRewriterImpl<EventRacerRewriterTag> *w)
-      : rewriter(w) {
-      prev = w->id_alloc_scope_;
-      saved_ast_node_id = w->ast_node_id();
-      w->set_ast_node_id(BailoutId::FirstUsable().ToInt());
-    }
-
-    AstNodeIdAllocationScope(AstRewriterImpl<EventRacerRewriterTag> *w,
-                             FunctionLiteral *fn)
-      : rewriter(w) {
-      prev = w->id_alloc_scope_;
-      saved_ast_node_id = w->ast_node_id();
-      w->set_ast_node_id(fn->next_ast_node_id());
-    }
-
-    ~AstNodeIdAllocationScope() {
-      rewriter->set_ast_node_id(saved_ast_node_id);
-      rewriter->id_alloc_scope_ = prev;
-    }
-
-    int saved_ast_node_id;
-    AstRewriterImpl<EventRacerRewriterTag> *rewriter;
-    AstNodeIdAllocationScope *prev;
-  };
-
   // Hack around protected members of Scope, that we need to call.
   class ScopeHack : public Scope {
   public:
@@ -184,7 +158,6 @@ private:
 
   CompilationInfo *info_;
   ContextScope *current_context_;
-  AstNodeIdAllocationScope *id_alloc_scope_;
 
   AstNodeFactory<AstNullVisitor> factory_;
   const AstRawString *o_string_, *k_string_, *v_string_, *getctx_string_;
@@ -201,14 +174,12 @@ private:
 
   ScopeHack *NewScope(Scope* outer);
   void ensure_arg_names(int n);
-  int ast_node_id() const;
-  void set_ast_node_id(int);
 
   bool is_literal_key(const Expression *) const;
   Literal *duplicate_key(const Literal *);
 
   FunctionLiteral *make_fn(Scope *scope, ZoneList<Statement *> *body,
-                           int param_count, int ast_node_id, int pos);
+                           int param_count, int pos);
   Expression *log_vp(VariableProxy *, Expression *,
                      enum InstrumentationFunction,
                      enum InstrumentationFunction);
@@ -224,22 +195,21 @@ public:
   AST_NODE_LIST(DECLARE_VISIT)
 #undef DECLARE_VISIT
 
-  void add_node();
   void add_materialized_literal(MaterializedLiteral *);
-  void add_feedback_slot(FeedbackSlotInterface *);
+  void add_feedback_slot(AstNode *);
 
 private:
   struct FunctionState {
     FunctionState()
-      : prev(NULL),
-        materialized_literal_count(JSFunction::kLiteralsPrefixSize),
-        feedback_slot_count(0),
-        node_count(0) {}
+        : prev(NULL),
+          materialized_literal_count(JSFunction::kLiteralsPrefixSize),
+          feedback_slot_count(0),
+          ic_feedback_slot_count(0) {}
 
     FunctionState *prev;
     int materialized_literal_count;
     int feedback_slot_count;
-    int node_count;
+    int ic_feedback_slot_count;
 
     static FunctionState guard;
   };

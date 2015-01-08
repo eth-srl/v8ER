@@ -3,9 +3,10 @@
 // found in the LICENSE file.
 
 #include "src/compiler/change-lowering.h"
-#include "src/compiler/machine-operator.h"
 
 #include "src/compiler/js-graph.h"
+#include "src/compiler/linkage.h"
+#include "src/compiler/machine-operator.h"
 
 namespace v8 {
 namespace internal {
@@ -45,14 +46,14 @@ Node* ChangeLowering::HeapNumberValueIndexConstant() {
   STATIC_ASSERT(HeapNumber::kValueOffset % kPointerSize == 0);
   const int heap_number_value_offset =
       ((HeapNumber::kValueOffset / kPointerSize) * (machine()->Is64() ? 8 : 4));
-  return jsgraph()->Int32Constant(heap_number_value_offset - kHeapObjectTag);
+  return jsgraph()->IntPtrConstant(heap_number_value_offset - kHeapObjectTag);
 }
 
 
 Node* ChangeLowering::SmiMaxValueConstant() {
   const int smi_value_size = machine()->Is32() ? SmiTagging<4>::SmiValueSize()
                                                : SmiTagging<8>::SmiValueSize();
-  return jsgraph()->Int32Constant(
+  return jsgraph()->IntPtrConstant(
       -(static_cast<int>(0xffffffffu << (smi_value_size - 1)) + 1));
 }
 
@@ -60,7 +61,7 @@ Node* ChangeLowering::SmiMaxValueConstant() {
 Node* ChangeLowering::SmiShiftBitsConstant() {
   const int smi_shift_size = machine()->Is32() ? SmiTagging<4>::SmiShiftSize()
                                                : SmiTagging<8>::SmiShiftSize();
-  return jsgraph()->Int32Constant(smi_shift_size + kSmiTagSize);
+  return jsgraph()->IntPtrConstant(smi_shift_size + kSmiTagSize);
 }
 
 
@@ -96,8 +97,8 @@ Node* ChangeLowering::ChangeSmiToInt32(Node* value) {
 
 Node* ChangeLowering::LoadHeapNumberValue(Node* value, Node* control) {
   return graph()->NewNode(machine()->Load(kMachFloat64), value,
-                          HeapNumberValueIndexConstant(),
-                          graph()->NewNode(common()->ControlEffect(), control));
+                          HeapNumberValueIndexConstant(), graph()->start(),
+                          control);
 }
 
 
@@ -141,7 +142,8 @@ Reduction ChangeLowering::ChangeInt32ToTagged(Node* val, Node* control) {
   Node* add = graph()->NewNode(machine()->Int32AddWithOverflow(), val, val);
   Node* ovf = graph()->NewNode(common()->Projection(1), add);
 
-  Node* branch = graph()->NewNode(common()->Branch(), ovf, control);
+  Node* branch =
+      graph()->NewNode(common()->Branch(BranchHint::kTrue), ovf, control);
 
   Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
   Node* heap_number = AllocateHeapNumberWithValue(
@@ -164,7 +166,7 @@ Reduction ChangeLowering::ChangeTaggedToUI32(Node* val, Node* control,
   STATIC_ASSERT(kSmiTagMask == 1);
 
   Node* tag = graph()->NewNode(machine()->WordAnd(), val,
-                               jsgraph()->Int32Constant(kSmiTagMask));
+                               jsgraph()->IntPtrConstant(kSmiTagMask));
   Node* branch = graph()->NewNode(common()->Branch(), tag, control);
 
   Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
@@ -190,7 +192,7 @@ Reduction ChangeLowering::ChangeTaggedToFloat64(Node* val, Node* control) {
   STATIC_ASSERT(kSmiTagMask == 1);
 
   Node* tag = graph()->NewNode(machine()->WordAnd(), val,
-                               jsgraph()->Int32Constant(kSmiTagMask));
+                               jsgraph()->IntPtrConstant(kSmiTagMask));
   Node* branch = graph()->NewNode(common()->Branch(), tag, control);
 
   Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
@@ -214,7 +216,8 @@ Reduction ChangeLowering::ChangeUint32ToTagged(Node* val, Node* control) {
 
   Node* cmp = graph()->NewNode(machine()->Uint32LessThanOrEqual(), val,
                                SmiMaxValueConstant());
-  Node* branch = graph()->NewNode(common()->Branch(), cmp, control);
+  Node* branch =
+      graph()->NewNode(common()->Branch(BranchHint::kTrue), cmp, control);
 
   Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
   Node* smi = graph()->NewNode(

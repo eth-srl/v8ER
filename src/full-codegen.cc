@@ -4,6 +4,8 @@
 
 #include "src/v8.h"
 
+#include "src/ast.h"
+#include "src/ast-numbering.h"
 #include "src/code-factory.h"
 #include "src/codegen.h"
 #include "src/compiler.h"
@@ -365,12 +367,24 @@ unsigned FullCodeGenerator::EmitBackEdgeTable() {
 }
 
 
-void FullCodeGenerator::EnsureSlotContainsAllocationSite(int slot) {
-  Handle<FixedArray> vector = FeedbackVector();
-  if (!vector->get(slot)->IsAllocationSite()) {
+void FullCodeGenerator::EnsureSlotContainsAllocationSite(
+    FeedbackVectorSlot slot) {
+  Handle<TypeFeedbackVector> vector = FeedbackVector();
+  if (!vector->Get(slot)->IsAllocationSite()) {
     Handle<AllocationSite> allocation_site =
         isolate()->factory()->NewAllocationSite();
-    vector->set(slot, *allocation_site);
+    vector->Set(slot, *allocation_site);
+  }
+}
+
+
+void FullCodeGenerator::EnsureSlotContainsAllocationSite(
+    FeedbackVectorICSlot slot) {
+  Handle<TypeFeedbackVector> vector = FeedbackVector();
+  if (!vector->Get(slot)->IsAllocationSite()) {
+    Handle<AllocationSite> allocation_site =
+        isolate()->factory()->NewAllocationSite();
+    vector->Set(slot, *allocation_site);
   }
 }
 
@@ -1541,13 +1555,35 @@ void FullCodeGenerator::VisitFunctionLiteral(FunctionLiteral* expr) {
 }
 
 
-void FullCodeGenerator::VisitClassLiteral(ClassLiteral* expr) {
-  // TODO(arv): Implement
+void FullCodeGenerator::VisitClassLiteral(ClassLiteral* lit) {
   Comment cmnt(masm_, "[ ClassLiteral");
-  if (expr->extends() != NULL) {
-    VisitForEffect(expr->extends());
+
+  if (lit->raw_name() != NULL) {
+    __ Push(lit->name());
+  } else {
+    __ Push(isolate()->factory()->undefined_value());
   }
-  context()->Plug(isolate()->factory()->undefined_value());
+
+  if (lit->extends() != NULL) {
+    VisitForStackValue(lit->extends());
+  } else {
+    __ Push(isolate()->factory()->the_hole_value());
+  }
+
+  if (lit->constructor() != NULL) {
+    VisitForStackValue(lit->constructor());
+  } else {
+    __ Push(isolate()->factory()->undefined_value());
+  }
+
+  __ Push(script());
+  __ Push(Smi::FromInt(lit->start_position()));
+  __ Push(Smi::FromInt(lit->end_position()));
+
+  __ CallRuntime(Runtime::kDefineClass, 6);
+  EmitClassDefineProperties(lit);
+
+  context()->Plug(result_register());
 }
 
 

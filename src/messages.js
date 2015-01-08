@@ -174,7 +174,10 @@ var kMessages = {
   invalid_module_path:           ["Module does not export '", "%0", "', or export is not itself a module"],
   module_type_error:             ["Module '", "%0", "' used improperly"],
   module_export_undefined:       ["Export '", "%0", "' is not defined in module"],
-  unexpected_super:              ["'super' keyword unexpected here"]
+  unexpected_super:              ["'super' keyword unexpected here"],
+  extends_value_not_a_function:  ["Class extends value ", "%0", " is not a function or null"],
+  prototype_parent_not_an_object: ["Class extends value does not have valid prototype property ", "%0"],
+  duplicate_constructor:         ["A class may only have one constructor"]
 };
 
 
@@ -221,7 +224,8 @@ function NoSideEffectToString(obj) {
     return str;
   }
   if (IS_SYMBOL(obj)) return %_CallFunction(obj, SymbolToString);
-  if (IS_OBJECT(obj) && %GetDataProperty(obj, "toString") === ObjectToString) {
+  if (IS_OBJECT(obj)
+      && %GetDataProperty(obj, "toString") === DefaultObjectToString) {
     var constructor = %GetDataProperty(obj, "constructor");
     if (typeof constructor == "function") {
       var constructorName = constructor.name;
@@ -233,7 +237,8 @@ function NoSideEffectToString(obj) {
   if (CanBeSafelyTreatedAsAnErrorObject(obj)) {
     return %_CallFunction(obj, ErrorToString);
   }
-  return %_CallFunction(obj, ObjectToString);
+
+  return %_CallFunction(obj, NoSideEffectsObjectToString);
 }
 
 // To determine whether we can safely stringify an object using ErrorToString
@@ -272,7 +277,7 @@ function ToStringCheckErrorObject(obj) {
 
 
 function ToDetailString(obj) {
-  if (obj != null && IS_OBJECT(obj) && obj.toString === ObjectToString) {
+  if (obj != null && IS_OBJECT(obj) && obj.toString === DefaultObjectToString) {
     var constructor = obj.constructor;
     if (typeof constructor == "function") {
       var constructorName = constructor.name;
@@ -360,6 +365,23 @@ function MakeEvalError(type, args) {
 
 function MakeError(type, args) {
   return MakeGenericError($Error, type, args);
+}
+
+
+// The embedded versions are called from unoptimized code, with embedded
+// arguments. Those arguments cannot be arrays, which are context-dependent.
+function MakeTypeErrorEmbedded(type, arg) {
+  return MakeGenericError($TypeError, type, [arg]);
+}
+
+
+function MakeSyntaxErrorEmbedded(type, arg) {
+  return MakeGenericError($SyntaxError, type, [arg]);
+}
+
+
+function MakeReferenceErrorEmbedded(type, arg) {
+  return MakeGenericError($ReferenceError, type, [arg]);
 }
 
 /**
@@ -1103,12 +1125,12 @@ function GetTypeName(receiver, requireConstructor) {
   var constructor = receiver.constructor;
   if (!constructor) {
     return requireConstructor ? null :
-        %_CallFunction(receiver, ObjectToString);
+        %_CallFunction(receiver, NoSideEffectsObjectToString);
   }
   var constructorName = constructor.name;
   if (!constructorName) {
     return requireConstructor ? null :
-        %_CallFunction(receiver, ObjectToString);
+        %_CallFunction(receiver, NoSideEffectsObjectToString);
   }
   return constructorName;
 }

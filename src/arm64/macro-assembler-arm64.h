@@ -422,6 +422,7 @@ class MacroAssembler : public Assembler {
   inline void Frinta(const FPRegister& fd, const FPRegister& fn);
   inline void Frintm(const FPRegister& fd, const FPRegister& fn);
   inline void Frintn(const FPRegister& fd, const FPRegister& fn);
+  inline void Frintp(const FPRegister& fd, const FPRegister& fn);
   inline void Frintz(const FPRegister& fd, const FPRegister& fn);
   inline void Fsqrt(const FPRegister& fd, const FPRegister& fn);
   inline void Fsub(const FPRegister& fd,
@@ -1627,6 +1628,7 @@ class MacroAssembler : public Assembler {
 
   // Activation support.
   void EnterFrame(StackFrame::Type type);
+  void EnterFrame(StackFrame::Type type, bool load_constant_pool_pointer_reg);
   void LeaveFrame(StackFrame::Type type);
 
   // Returns map with validated enum cache in object register.

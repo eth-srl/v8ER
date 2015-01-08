@@ -42,12 +42,9 @@ Node* Node::FindProjection(size_t projection_index) {
 }
 
 
-OStream& operator<<(OStream& os, const Operator& op) { return op.PrintTo(os); }
-
-
-OStream& operator<<(OStream& os, const Node& n) {
+std::ostream& operator<<(std::ostream& os, const Node& n) {
   os << n.id() << ": " << *n.op();
-  if (n.op()->InputCount() != 0) {
+  if (n.op()->InputCount() > 0) {
     os << "(";
     for (int i = 0; i < n.op()->InputCount(); ++i) {
       if (i != 0) os << ", ";
