@@ -22,7 +22,7 @@ namespace compiler {
 class MachineOperatorReducerTest : public TypedGraphTest {
  public:
   explicit MachineOperatorReducerTest(int num_parameters = 2)
-      : TypedGraphTest(num_parameters) {}
+      : TypedGraphTest(num_parameters), machine_(zone()) {}
 
  protected:
   Reduction Reduce(Node* node) {
@@ -455,6 +455,20 @@ TEST_F(MachineOperatorReducerTest, TruncateFloat64ToInt32WithConstant) {
 }
 
 
+TEST_F(MachineOperatorReducerTest, TruncateFloat64ToInt32WithPhi) {
+  Node* const p0 = Parameter(0);
+  Node* const p1 = Parameter(1);
+  Node* const merge = graph()->start();
+  Reduction reduction = Reduce(graph()->NewNode(
+      machine()->TruncateFloat64ToInt32(),
+      graph()->NewNode(common()->Phi(kMachFloat64, 2), p0, p1, merge)));
+  ASSERT_TRUE(reduction.Changed());
+  EXPECT_THAT(reduction.replacement(),
+              IsPhi(kMachInt32, IsTruncateFloat64ToInt32(p0),
+                    IsTruncateFloat64ToInt32(p1), merge));
+}
+
+
 // -----------------------------------------------------------------------------
 // TruncateInt64ToInt32
 
@@ -512,6 +526,25 @@ TEST_F(MachineOperatorReducerTest, Word32AndWithWord32AndWithConstant) {
 }
 
 
+TEST_F(MachineOperatorReducerTest, Word32AndWithInt32AddAndConstant) {
+  Node* const p0 = Parameter(0);
+
+  TRACED_FOREACH(int32_t, k, kInt32Values) {
+    TRACED_FORRANGE(int32_t, l, 1, 31) {
+      // (x + (K << L)) & (-1 << L) => (x & (-1 << L)) + (K << L)
+      Reduction const r = Reduce(graph()->NewNode(
+          machine()->Word32And(),
+          graph()->NewNode(machine()->Int32Add(), p0, Int32Constant(k << l)),
+          Int32Constant(-1 << l)));
+      ASSERT_TRUE(r.Changed());
+      EXPECT_THAT(r.replacement(),
+                  IsInt32Add(IsWord32And(p0, IsInt32Constant(-1 << l)),
+                             IsInt32Constant(k << l)));
+    }
+  }
+}
+
+
 // -----------------------------------------------------------------------------
 // Word32Xor
 
@@ -558,24 +591,43 @@ TEST_F(MachineOperatorReducerTest, Word32XorWithWord32XorAndMinusOne) {
 TEST_F(MachineOperatorReducerTest, ReduceToWord32RorWithParameters) {
   Node* value = Parameter(0);
   Node* shift = Parameter(1);
-  Node* shl = graph()->NewNode(machine()->Word32Shl(), value, shift);
-  Node* shr = graph()->NewNode(
-      machine()->Word32Shr(), value,
-      graph()->NewNode(machine()->Int32Sub(), Int32Constant(32), shift));
+  Node* sub = graph()->NewNode(machine()->Int32Sub(), Int32Constant(32), shift);
 
-  // (x << y) | (x >> (32 - y)) => x ror y
-  Node* node1 = graph()->NewNode(machine()->Word32Or(), shl, shr);
+  // Testing rotate left.
+  Node* shl_l = graph()->NewNode(machine()->Word32Shl(), value, shift);
+  Node* shr_l = graph()->NewNode(machine()->Word32Shr(), value, sub);
+
+  // (x << y) | (x >>> (32 - y)) => x ror (32 - y)
+  Node* node1 = graph()->NewNode(machine()->Word32Or(), shl_l, shr_l);
   Reduction reduction1 = Reduce(node1);
   EXPECT_TRUE(reduction1.Changed());
   EXPECT_EQ(reduction1.replacement(), node1);
-  EXPECT_THAT(reduction1.replacement(), IsWord32Ror(value, shift));
+  EXPECT_THAT(reduction1.replacement(), IsWord32Ror(value, sub));
 
-  // (x >> (32 - y)) | (x << y) => x ror y
-  Node* node2 = graph()->NewNode(machine()->Word32Or(), shr, shl);
+  // (x >>> (32 - y)) | (x << y) => x ror (32 - y)
+  Node* node2 = graph()->NewNode(machine()->Word32Or(), shr_l, shl_l);
   Reduction reduction2 = Reduce(node2);
   EXPECT_TRUE(reduction2.Changed());
   EXPECT_EQ(reduction2.replacement(), node2);
-  EXPECT_THAT(reduction2.replacement(), IsWord32Ror(value, shift));
+  EXPECT_THAT(reduction2.replacement(), IsWord32Ror(value, sub));
+
+  // Testing rotate right.
+  Node* shl_r = graph()->NewNode(machine()->Word32Shl(), value, sub);
+  Node* shr_r = graph()->NewNode(machine()->Word32Shr(), value, shift);
+
+  // (x << (32 - y)) | (x >>> y) => x ror y
+  Node* node3 = graph()->NewNode(machine()->Word32Or(), shl_r, shr_r);
+  Reduction reduction3 = Reduce(node3);
+  EXPECT_TRUE(reduction3.Changed());
+  EXPECT_EQ(reduction3.replacement(), node3);
+  EXPECT_THAT(reduction3.replacement(), IsWord32Ror(value, shift));
+
+  // (x >>> y) | (x << (32 - y)) => x ror y
+  Node* node4 = graph()->NewNode(machine()->Word32Or(), shr_r, shl_r);
+  Reduction reduction4 = Reduce(node4);
+  EXPECT_TRUE(reduction4.Changed());
+  EXPECT_EQ(reduction4.replacement(), node4);
+  EXPECT_THAT(reduction4.replacement(), IsWord32Ror(value, shift));
 }
 
 
@@ -587,21 +639,21 @@ TEST_F(MachineOperatorReducerTest, ReduceToWord32RorWithConstant) {
     Node* shr =
         graph()->NewNode(machine()->Word32Shr(), value, Int32Constant(32 - k));
 
-    // (x << K) | (x >> ((32 - K) - y)) => x ror K
+    // (x << K) | (x >>> ((32 - K) - y)) => x ror (32 - K)
     Node* node1 = graph()->NewNode(machine()->Word32Or(), shl, shr);
     Reduction reduction1 = Reduce(node1);
     EXPECT_TRUE(reduction1.Changed());
     EXPECT_EQ(reduction1.replacement(), node1);
     EXPECT_THAT(reduction1.replacement(),
-                IsWord32Ror(value, IsInt32Constant(k)));
+                IsWord32Ror(value, IsInt32Constant(32 - k)));
 
-    // (x >> (32 - K)) | (x << K) => x ror K
+    // (x >>> (32 - K)) | (x << K) => x ror (32 - K)
     Node* node2 = graph()->NewNode(machine()->Word32Or(), shr, shl);
     Reduction reduction2 = Reduce(node2);
     EXPECT_TRUE(reduction2.Changed());
     EXPECT_EQ(reduction2.replacement(), node2);
     EXPECT_THAT(reduction2.replacement(),
-                IsWord32Ror(value, IsInt32Constant(k)));
+                IsWord32Ror(value, IsInt32Constant(32 - k)));
   }
 }
 
@@ -626,6 +678,36 @@ TEST_F(MachineOperatorReducerTest, Word32RorWithConstants) {
       EXPECT_THAT(reduction.replacement(),
                   IsInt32Constant(base::bits::RotateRight32(x, y)));
     }
+  }
+}
+
+
+// -----------------------------------------------------------------------------
+// Word32Sar
+
+
+TEST_F(MachineOperatorReducerTest, Word32SarWithWord32ShlAndLoad) {
+  Node* const p0 = Parameter(0);
+  Node* const p1 = Parameter(1);
+  {
+    Node* const l = graph()->NewNode(machine()->Load(kMachInt8), p0, p1,
+                                     graph()->start(), graph()->start());
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Word32Sar(),
+        graph()->NewNode(machine()->Word32Shl(), l, Int32Constant(24)),
+        Int32Constant(24)));
+    ASSERT_TRUE(r.Changed());
+    EXPECT_EQ(l, r.replacement());
+  }
+  {
+    Node* const l = graph()->NewNode(machine()->Load(kMachInt16), p0, p1,
+                                     graph()->start(), graph()->start());
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Word32Sar(),
+        graph()->NewNode(machine()->Word32Shl(), l, Int32Constant(16)),
+        Int32Constant(16)));
+    ASSERT_TRUE(r.Changed());
+    EXPECT_EQ(l, r.replacement());
   }
 }
 
@@ -680,26 +762,26 @@ TEST_F(MachineOperatorReducerTest, Word32ShlWithWord32Shr) {
 TEST_F(MachineOperatorReducerTest, Int32DivWithConstant) {
   Node* const p0 = Parameter(0);
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Int32Div(), p0, Int32Constant(0)));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Int32Div(), p0, Int32Constant(0), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(), IsInt32Constant(0));
   }
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Int32Div(), p0, Int32Constant(1)));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Int32Div(), p0, Int32Constant(1), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_EQ(r.replacement(), p0);
   }
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Int32Div(), p0, Int32Constant(-1)));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Int32Div(), p0, Int32Constant(-1), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(), IsInt32Sub(IsInt32Constant(0), p0));
   }
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Int32Div(), p0, Int32Constant(2)));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Int32Div(), p0, Int32Constant(2), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(
         r.replacement(),
@@ -707,8 +789,8 @@ TEST_F(MachineOperatorReducerTest, Int32DivWithConstant) {
                     IsInt32Constant(1)));
   }
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Int32Div(), p0, Int32Constant(-2)));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Int32Div(), p0, Int32Constant(-2), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(
         r.replacement(),
@@ -718,8 +800,9 @@ TEST_F(MachineOperatorReducerTest, Int32DivWithConstant) {
                         IsInt32Constant(1))));
   }
   TRACED_FORRANGE(int32_t, shift, 2, 30) {
-    Reduction const r = Reduce(
-        graph()->NewNode(machine()->Int32Div(), p0, Int32Constant(1 << shift)));
+    Reduction const r =
+        Reduce(graph()->NewNode(machine()->Int32Div(), p0,
+                                Int32Constant(1 << shift), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(
         r.replacement(),
@@ -731,7 +814,8 @@ TEST_F(MachineOperatorReducerTest, Int32DivWithConstant) {
   TRACED_FORRANGE(int32_t, shift, 2, 31) {
     Reduction const r = Reduce(graph()->NewNode(
         machine()->Int32Div(), p0,
-        Uint32Constant(bit_cast<uint32_t, int32_t>(-1) << shift)));
+        Uint32Constant(bit_cast<uint32_t, int32_t>(-1) << shift),
+        graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(
         r.replacement(),
@@ -746,15 +830,15 @@ TEST_F(MachineOperatorReducerTest, Int32DivWithConstant) {
   TRACED_FOREACH(int32_t, divisor, kInt32Values) {
     if (divisor < 0) {
       if (base::bits::IsPowerOfTwo32(-divisor)) continue;
-      Reduction const r = Reduce(
-          graph()->NewNode(machine()->Int32Div(), p0, Int32Constant(divisor)));
+      Reduction const r = Reduce(graph()->NewNode(
+          machine()->Int32Div(), p0, Int32Constant(divisor), graph()->start()));
       ASSERT_TRUE(r.Changed());
       EXPECT_THAT(r.replacement(), IsInt32Sub(IsInt32Constant(0),
                                               IsTruncatingDiv(p0, -divisor)));
     } else if (divisor > 0) {
       if (base::bits::IsPowerOfTwo32(divisor)) continue;
-      Reduction const r = Reduce(
-          graph()->NewNode(machine()->Int32Div(), p0, Int32Constant(divisor)));
+      Reduction const r = Reduce(graph()->NewNode(
+          machine()->Int32Div(), p0, Int32Constant(divisor), graph()->start()));
       ASSERT_TRUE(r.Changed());
       EXPECT_THAT(r.replacement(), IsTruncatingDiv(p0, divisor));
     }
@@ -764,7 +848,8 @@ TEST_F(MachineOperatorReducerTest, Int32DivWithConstant) {
 
 TEST_F(MachineOperatorReducerTest, Int32DivWithParameters) {
   Node* const p0 = Parameter(0);
-  Reduction const r = Reduce(graph()->NewNode(machine()->Int32Div(), p0, p0));
+  Reduction const r =
+      Reduce(graph()->NewNode(machine()->Int32Div(), p0, p0, graph()->start()));
   ASSERT_TRUE(r.Changed());
   EXPECT_THAT(
       r.replacement(),
@@ -779,28 +864,28 @@ TEST_F(MachineOperatorReducerTest, Int32DivWithParameters) {
 TEST_F(MachineOperatorReducerTest, Uint32DivWithConstant) {
   Node* const p0 = Parameter(0);
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Uint32Div(), Int32Constant(0), p0));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Uint32Div(), Int32Constant(0), p0, graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(), IsInt32Constant(0));
   }
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Uint32Div(), p0, Int32Constant(0)));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Uint32Div(), p0, Int32Constant(0), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(), IsInt32Constant(0));
   }
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Uint32Div(), p0, Int32Constant(1)));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Uint32Div(), p0, Int32Constant(1), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_EQ(r.replacement(), p0);
   }
   TRACED_FOREACH(uint32_t, dividend, kUint32Values) {
     TRACED_FOREACH(uint32_t, divisor, kUint32Values) {
-      Reduction const r = Reduce(graph()->NewNode(machine()->Uint32Div(),
-                                                  Uint32Constant(dividend),
-                                                  Uint32Constant(divisor)));
+      Reduction const r = Reduce(
+          graph()->NewNode(machine()->Uint32Div(), Uint32Constant(dividend),
+                           Uint32Constant(divisor), graph()->start()));
       ASSERT_TRUE(r.Changed());
       EXPECT_THAT(r.replacement(),
                   IsInt32Constant(bit_cast<int32_t>(
@@ -808,8 +893,9 @@ TEST_F(MachineOperatorReducerTest, Uint32DivWithConstant) {
     }
   }
   TRACED_FORRANGE(uint32_t, shift, 1, 31) {
-    Reduction const r = Reduce(graph()->NewNode(machine()->Uint32Div(), p0,
-                                                Uint32Constant(1u << shift)));
+    Reduction const r =
+        Reduce(graph()->NewNode(machine()->Uint32Div(), p0,
+                                Uint32Constant(1u << shift), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(),
                 IsWord32Shr(p0, IsInt32Constant(bit_cast<int32_t>(shift))));
@@ -819,7 +905,8 @@ TEST_F(MachineOperatorReducerTest, Uint32DivWithConstant) {
 
 TEST_F(MachineOperatorReducerTest, Uint32DivWithParameters) {
   Node* const p0 = Parameter(0);
-  Reduction const r = Reduce(graph()->NewNode(machine()->Uint32Div(), p0, p0));
+  Reduction const r = Reduce(
+      graph()->NewNode(machine()->Uint32Div(), p0, p0, graph()->start()));
   ASSERT_TRUE(r.Changed());
   EXPECT_THAT(
       r.replacement(),
@@ -834,84 +921,72 @@ TEST_F(MachineOperatorReducerTest, Uint32DivWithParameters) {
 TEST_F(MachineOperatorReducerTest, Int32ModWithConstant) {
   Node* const p0 = Parameter(0);
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Int32Mod(), Int32Constant(0), p0));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Int32Mod(), Int32Constant(0), p0, graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(), IsInt32Constant(0));
   }
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Int32Mod(), p0, Int32Constant(0)));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Int32Mod(), p0, Int32Constant(0), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(), IsInt32Constant(0));
   }
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Int32Mod(), p0, Int32Constant(1)));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Int32Mod(), p0, Int32Constant(1), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(), IsInt32Constant(0));
   }
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Int32Mod(), p0, Int32Constant(-1)));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Int32Mod(), p0, Int32Constant(-1), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(), IsInt32Constant(0));
   }
   TRACED_FOREACH(int32_t, dividend, kInt32Values) {
     TRACED_FOREACH(int32_t, divisor, kInt32Values) {
-      Reduction const r = Reduce(graph()->NewNode(machine()->Int32Mod(),
-                                                  Int32Constant(dividend),
-                                                  Int32Constant(divisor)));
+      Reduction const r = Reduce(
+          graph()->NewNode(machine()->Int32Mod(), Int32Constant(dividend),
+                           Int32Constant(divisor), graph()->start()));
       ASSERT_TRUE(r.Changed());
       EXPECT_THAT(r.replacement(),
                   IsInt32Constant(base::bits::SignedMod32(dividend, divisor)));
     }
   }
   TRACED_FORRANGE(int32_t, shift, 1, 30) {
-    Reduction const r = Reduce(
-        graph()->NewNode(machine()->Int32Mod(), p0, Int32Constant(1 << shift)));
-    ASSERT_TRUE(r.Changed());
-
-    Capture<Node*> branch;
-    Node* const phi = r.replacement();
+    Reduction const r =
+        Reduce(graph()->NewNode(machine()->Int32Mod(), p0,
+                                Int32Constant(1 << shift), graph()->start()));
     int32_t const mask = (1 << shift) - 1;
+    ASSERT_TRUE(r.Changed());
     EXPECT_THAT(
-        phi, IsPhi(kMachInt32,
-                   IsInt32Sub(IsInt32Constant(0),
-                              IsWord32And(IsInt32Sub(IsInt32Constant(0), p0),
-                                          IsInt32Constant(mask))),
-                   IsWord32And(p0, IsInt32Constant(mask)),
-                   IsMerge(IsIfTrue(CaptureEq(&branch)),
-                           IsIfFalse(AllOf(
-                               CaptureEq(&branch),
-                               IsBranch(IsInt32LessThan(p0, IsInt32Constant(0)),
-                                        graph()->start()))))));
+        r.replacement(),
+        IsSelect(kMachInt32, IsInt32LessThan(p0, IsInt32Constant(0)),
+                 IsInt32Sub(IsInt32Constant(0),
+                            IsWord32And(IsInt32Sub(IsInt32Constant(0), p0),
+                                        IsInt32Constant(mask))),
+                 IsWord32And(p0, IsInt32Constant(mask))));
   }
   TRACED_FORRANGE(int32_t, shift, 1, 31) {
     Reduction const r = Reduce(graph()->NewNode(
         machine()->Int32Mod(), p0,
-        Uint32Constant(bit_cast<uint32_t, int32_t>(-1) << shift)));
-    ASSERT_TRUE(r.Changed());
-
-    Capture<Node*> branch;
-    Node* const phi = r.replacement();
+        Uint32Constant(bit_cast<uint32_t, int32_t>(-1) << shift),
+        graph()->start()));
     int32_t const mask = bit_cast<int32_t, uint32_t>((1U << shift) - 1);
+    ASSERT_TRUE(r.Changed());
     EXPECT_THAT(
-        phi, IsPhi(kMachInt32,
-                   IsInt32Sub(IsInt32Constant(0),
-                              IsWord32And(IsInt32Sub(IsInt32Constant(0), p0),
-                                          IsInt32Constant(mask))),
-                   IsWord32And(p0, IsInt32Constant(mask)),
-                   IsMerge(IsIfTrue(CaptureEq(&branch)),
-                           IsIfFalse(AllOf(
-                               CaptureEq(&branch),
-                               IsBranch(IsInt32LessThan(p0, IsInt32Constant(0)),
-                                        graph()->start()))))));
+        r.replacement(),
+        IsSelect(kMachInt32, IsInt32LessThan(p0, IsInt32Constant(0)),
+                 IsInt32Sub(IsInt32Constant(0),
+                            IsWord32And(IsInt32Sub(IsInt32Constant(0), p0),
+                                        IsInt32Constant(mask))),
+                 IsWord32And(p0, IsInt32Constant(mask))));
   }
   TRACED_FOREACH(int32_t, divisor, kInt32Values) {
     if (divisor == 0 || base::bits::IsPowerOfTwo32(Abs(divisor))) continue;
-    Reduction const r = Reduce(
-        graph()->NewNode(machine()->Int32Mod(), p0, Int32Constant(divisor)));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Int32Mod(), p0, Int32Constant(divisor), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(),
                 IsInt32Sub(p0, IsInt32Mul(IsTruncatingDiv(p0, Abs(divisor)),
@@ -922,7 +997,8 @@ TEST_F(MachineOperatorReducerTest, Int32ModWithConstant) {
 
 TEST_F(MachineOperatorReducerTest, Int32ModWithParameters) {
   Node* const p0 = Parameter(0);
-  Reduction const r = Reduce(graph()->NewNode(machine()->Int32Mod(), p0, p0));
+  Reduction const r =
+      Reduce(graph()->NewNode(machine()->Int32Mod(), p0, p0, graph()->start()));
   ASSERT_TRUE(r.Changed());
   EXPECT_THAT(r.replacement(), IsInt32Constant(0));
 }
@@ -935,28 +1011,28 @@ TEST_F(MachineOperatorReducerTest, Int32ModWithParameters) {
 TEST_F(MachineOperatorReducerTest, Uint32ModWithConstant) {
   Node* const p0 = Parameter(0);
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Uint32Mod(), p0, Int32Constant(0)));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Uint32Mod(), p0, Int32Constant(0), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(), IsInt32Constant(0));
   }
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Uint32Mod(), Int32Constant(0), p0));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Uint32Mod(), Int32Constant(0), p0, graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(), IsInt32Constant(0));
   }
   {
-    Reduction const r =
-        Reduce(graph()->NewNode(machine()->Uint32Mod(), p0, Int32Constant(1)));
+    Reduction const r = Reduce(graph()->NewNode(
+        machine()->Uint32Mod(), p0, Int32Constant(1), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(), IsInt32Constant(0));
   }
   TRACED_FOREACH(uint32_t, dividend, kUint32Values) {
     TRACED_FOREACH(uint32_t, divisor, kUint32Values) {
-      Reduction const r = Reduce(graph()->NewNode(machine()->Uint32Mod(),
-                                                  Uint32Constant(dividend),
-                                                  Uint32Constant(divisor)));
+      Reduction const r = Reduce(
+          graph()->NewNode(machine()->Uint32Mod(), Uint32Constant(dividend),
+                           Uint32Constant(divisor), graph()->start()));
       ASSERT_TRUE(r.Changed());
       EXPECT_THAT(r.replacement(),
                   IsInt32Constant(bit_cast<int32_t>(
@@ -964,8 +1040,9 @@ TEST_F(MachineOperatorReducerTest, Uint32ModWithConstant) {
     }
   }
   TRACED_FORRANGE(uint32_t, shift, 1, 31) {
-    Reduction const r = Reduce(graph()->NewNode(machine()->Uint32Mod(), p0,
-                                                Uint32Constant(1u << shift)));
+    Reduction const r =
+        Reduce(graph()->NewNode(machine()->Uint32Mod(), p0,
+                                Uint32Constant(1u << shift), graph()->start()));
     ASSERT_TRUE(r.Changed());
     EXPECT_THAT(r.replacement(),
                 IsWord32And(p0, IsInt32Constant(
@@ -976,7 +1053,8 @@ TEST_F(MachineOperatorReducerTest, Uint32ModWithConstant) {
 
 TEST_F(MachineOperatorReducerTest, Uint32ModWithParameters) {
   Node* const p0 = Parameter(0);
-  Reduction const r = Reduce(graph()->NewNode(machine()->Uint32Mod(), p0, p0));
+  Reduction const r = Reduce(
+      graph()->NewNode(machine()->Uint32Mod(), p0, p0, graph()->start()));
   ASSERT_TRUE(r.Changed());
   EXPECT_THAT(r.replacement(), IsInt32Constant(0));
 }
@@ -1097,6 +1175,27 @@ TEST_F(MachineOperatorReducerTest, Uint32LessThanWithWord32Sar) {
 
 
 // -----------------------------------------------------------------------------
+// Float64Mul
+
+
+TEST_F(MachineOperatorReducerTest, Float64MulWithMinusOne) {
+  Node* const p0 = Parameter(0);
+  {
+    Reduction r = Reduce(
+        graph()->NewNode(machine()->Float64Mul(), p0, Float64Constant(-1.0)));
+    ASSERT_TRUE(r.Changed());
+    EXPECT_THAT(r.replacement(), IsFloat64Sub(IsFloat64Constant(-0.0), p0));
+  }
+  {
+    Reduction r = Reduce(
+        graph()->NewNode(machine()->Float64Mul(), Float64Constant(-1.0), p0));
+    ASSERT_TRUE(r.Changed());
+    EXPECT_THAT(r.replacement(), IsFloat64Sub(IsFloat64Constant(-0.0), p0));
+  }
+}
+
+
+// -----------------------------------------------------------------------------
 // Store
 
 
@@ -1122,6 +1221,30 @@ TEST_F(MachineOperatorReducerTest, StoreRepWord8WithWord32And) {
 }
 
 
+TEST_F(MachineOperatorReducerTest, StoreRepWord8WithWord32SarAndWord32Shl) {
+  const StoreRepresentation rep(kRepWord8, kNoWriteBarrier);
+  Node* const base = Parameter(0);
+  Node* const index = Parameter(1);
+  Node* const value = Parameter(2);
+  Node* const effect = graph()->start();
+  Node* const control = graph()->start();
+  TRACED_FORRANGE(int32_t, x, 1, 24) {
+    Node* const node = graph()->NewNode(
+        machine()->Store(rep), base, index,
+        graph()->NewNode(
+            machine()->Word32Sar(),
+            graph()->NewNode(machine()->Word32Shl(), value, Int32Constant(x)),
+            Int32Constant(x)),
+        effect, control);
+
+    Reduction r = Reduce(node);
+    ASSERT_TRUE(r.Changed());
+    EXPECT_THAT(r.replacement(),
+                IsStore(rep, base, index, value, effect, control));
+  }
+}
+
+
 TEST_F(MachineOperatorReducerTest, StoreRepWord16WithWord32And) {
   const StoreRepresentation rep(kRepWord16, kNoWriteBarrier);
   Node* const base = Parameter(0);
@@ -1135,6 +1258,30 @@ TEST_F(MachineOperatorReducerTest, StoreRepWord16WithWord32And) {
                          graph()->NewNode(machine()->Word32And(), value,
                                           Uint32Constant(x | 0xffffu)),
                          effect, control);
+
+    Reduction r = Reduce(node);
+    ASSERT_TRUE(r.Changed());
+    EXPECT_THAT(r.replacement(),
+                IsStore(rep, base, index, value, effect, control));
+  }
+}
+
+
+TEST_F(MachineOperatorReducerTest, StoreRepWord16WithWord32SarAndWord32Shl) {
+  const StoreRepresentation rep(kRepWord16, kNoWriteBarrier);
+  Node* const base = Parameter(0);
+  Node* const index = Parameter(1);
+  Node* const value = Parameter(2);
+  Node* const effect = graph()->start();
+  Node* const control = graph()->start();
+  TRACED_FORRANGE(int32_t, x, 1, 16) {
+    Node* const node = graph()->NewNode(
+        machine()->Store(rep), base, index,
+        graph()->NewNode(
+            machine()->Word32Sar(),
+            graph()->NewNode(machine()->Word32Shl(), value, Int32Constant(x)),
+            Int32Constant(x)),
+        effect, control);
 
     Reduction r = Reduce(node);
     ASSERT_TRUE(r.Changed());

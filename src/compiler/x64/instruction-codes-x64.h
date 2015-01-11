@@ -29,6 +29,7 @@ namespace compiler {
   V(X64Imul)                       \
   V(X64Imul32)                     \
   V(X64ImulHigh32)                 \
+  V(X64UmulHigh32)                 \
   V(X64Idiv)                       \
   V(X64Idiv32)                     \
   V(X64Udiv)                       \
@@ -74,6 +75,8 @@ namespace compiler {
   V(X64Movss)                      \
   V(X64Lea32)                      \
   V(X64Lea)                        \
+  V(X64Dec32)                      \
+  V(X64Inc32)                      \
   V(X64Push)                       \
   V(X64StoreWriteBarrier)
 

@@ -19,6 +19,14 @@ namespace compiler {
 
 class Linkage;
 
+struct BranchInfo {
+  FlagsCondition condition;
+  Label* true_label;
+  Label* false_label;
+  bool fallthru;
+};
+
+
 // Generates native code for a sequence of instructions.
 class CodeGenerator FINAL : public GapResolver::Assembler {
  public:
@@ -32,6 +40,8 @@ class CodeGenerator FINAL : public GapResolver::Assembler {
   Frame* frame() const { return frame_; }
   Isolate* isolate() const { return zone()->isolate(); }
   Linkage* linkage() const { return linkage_; }
+
+  Label* GetLabel(BasicBlock::RpoNumber rpo) { return &labels_[rpo.ToSize()]; }
 
  private:
   MacroAssembler* masm() { return &masm_; }
@@ -58,7 +68,8 @@ class CodeGenerator FINAL : public GapResolver::Assembler {
   // ===========================================================================
 
   void AssembleArchInstruction(Instruction* instr);
-  void AssembleArchBranch(Instruction* instr, FlagsCondition condition);
+  void AssembleArchJump(BasicBlock::RpoNumber target);
+  void AssembleArchBranch(Instruction* instr, BranchInfo* branch);
   void AssembleArchBoolean(Instruction* instr, FlagsCondition condition);
 
   void AssembleDeoptimizerCall(int deoptimization_id);
@@ -122,6 +133,7 @@ class CodeGenerator FINAL : public GapResolver::Assembler {
   Linkage* const linkage_;
   InstructionSequence* const code_;
   CompilationInfo* const info_;
+  Label* const labels_;
   BasicBlock::RpoNumber current_block_;
   SourcePosition current_source_position_;
   MacroAssembler masm_;

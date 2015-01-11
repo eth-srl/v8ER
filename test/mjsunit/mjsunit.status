@@ -59,13 +59,6 @@
   # from the deoptimizer to do that.
   'arguments-indirect': [PASS, NO_VARIANTS],
 
-  # TODO(rossberg): Typer doesn't like contexts very much.
-  'harmony/block-conflicts': [PASS, NO_VARIANTS],
-  'harmony/block-for': [PASS, NO_VARIANTS],
-  'harmony/block-leave': [PASS, NO_VARIANTS],
-  'harmony/block-let-crankshaft': [PASS, NO_VARIANTS],
-  'harmony/empty-for': [PASS, NO_VARIANTS],
-
   # TODO(verwaest): Some tests are over-restrictive about object layout.
   'array-constructor-feedback': [PASS, NO_VARIANTS],
   'array-feedback': [PASS, NO_VARIANTS],
@@ -123,6 +116,9 @@
   'regress/regress-269': [PASS, NO_VARIANTS],
   'regress/regress-crbug-259300': [PASS, NO_VARIANTS],
   'regress/regress-frame-details-null-receiver': [PASS, NO_VARIANTS],
+
+  # TODO(arv): TurboFan does not yet add [[HomeObject]] as needed.
+  'harmony/object-literals-super': [PASS, NO_VARIANTS],
 
   ##############################################################################
   # Too slow in debug mode with --stress-opt mode.
@@ -200,6 +196,9 @@
 
   # This test variant makes only sense on arm.
   'math-floor-of-div-nosudiv': [PASS, SLOW, ['arch not in [arm, arm64, android_arm, android_arm64]', SKIP]],
+
+  # Too slow for slow variants.
+  'asm/embenchen/*': [PASS, SLOW, FAST_VARIANTS],
 }],  # ALWAYS
 
 ##############################################################################
@@ -214,10 +213,12 @@
   'elements-kind': [SKIP],
   'elements-transition-hoisting': [SKIP],
   'fast-prototype': [SKIP],
+  'field-type-tracking': [SKIP],
   'getters-on-elements': [SKIP],
   'harmony/block-let-crankshaft': [SKIP],
   'opt-elements-kind': [SKIP],
   'osr-elements-kind': [SKIP],
+  'regress/regress-crbug-137689': [SKIP],
   'regress/regress-165637': [SKIP],
   'regress/regress-2249': [SKIP],
   # Tests taking too long
@@ -236,10 +237,18 @@
   # TODO(mstarzinger): Takes too long with TF.
   'array-sort': [PASS, NO_VARIANTS],
   'regress/regress-91008': [PASS, NO_VARIANTS],
+  'regress/regress-417709a': [PASS, ['arch == arm64', NO_VARIANTS]],
+  'regress/regress-transcendental': [PASS, ['arch == arm64', NO_VARIANTS]],
   'compiler/osr-regress-max-locals': [PASS, NO_VARIANTS],
   'math-floor-of-div': [PASS, NO_VARIANTS],
   'unicodelctest': [PASS, NO_VARIANTS],
   'unicodelctest-no-optimization': [PASS, NO_VARIANTS],
+
+  # Too slow for gc stress.
+  'asm/embenchen/box2d': [SKIP],
+
+  # Issue 3723.
+  'regress/regress-3717': [SKIP],
 }],  # 'gc_stress == True'
 
 ##############################################################################
@@ -256,6 +265,8 @@
   # Pass but take too long to run. Skip.
   # Some similar tests (with fewer iterations) may be included in arm64-js
   # tests.
+  'asm/embenchen/box2d': [SKIP],
+  'asm/embenchen/lua_binarytrees': [SKIP],
   'big-object-literal': [SKIP],
   'compiler/regress-arguments': [SKIP],
   'compiler/regress-gvn': [SKIP],
@@ -424,6 +435,15 @@
   # Currently always deopt on minus zero
   'math-floor-of-div-minus-zero': [SKIP],
 }],  # 'arch == mipsel or arch == mips'
+
+##############################################################################
+['arch == mips', {
+  # Flaky with TF.
+  'mirror-script': [PASS, NO_VARIANTS],
+
+  # Emscripten requires little-endian, skip all tests on MIPS EB.
+  'asm/embenchen/*': [SKIP],
+}],  # 'arch == mips'
 
 ##############################################################################
 ['arch == mips64el', {

@@ -1375,6 +1375,98 @@ TEST(TestCodeFlushingIncrementalAbort) {
 }
 
 
+TEST(CompilationCacheCachingBehavior) {
+  // If we do not flush code, or have the compilation cache turned off, this
+  // test is invalid.
+  if (!FLAG_flush_code || !FLAG_flush_code_incrementally ||
+      !FLAG_compilation_cache) {
+    return;
+  }
+  CcTest::InitializeVM();
+  Isolate* isolate = CcTest::i_isolate();
+  Factory* factory = isolate->factory();
+  Heap* heap = isolate->heap();
+  CompilationCache* compilation_cache = isolate->compilation_cache();
+
+  v8::HandleScope scope(CcTest::isolate());
+  const char* raw_source =
+      "function foo() {"
+      "  var x = 42;"
+      "  var y = 42;"
+      "  var z = x + y;"
+      "};"
+      "foo()";
+  Handle<String> source = factory->InternalizeUtf8String(raw_source);
+  Handle<Context> native_context = isolate->native_context();
+
+  {
+    v8::HandleScope scope(CcTest::isolate());
+    CompileRun(raw_source);
+  }
+
+  // On first compilation, only a hash is inserted in the code cache. We can't
+  // find that value.
+  MaybeHandle<SharedFunctionInfo> info = compilation_cache->LookupScript(
+      source, Handle<Object>(), 0, 0, true, native_context);
+  CHECK(info.is_null());
+
+  {
+    v8::HandleScope scope(CcTest::isolate());
+    CompileRun(raw_source);
+  }
+
+  // On second compilation, the hash is replaced by a real cache entry mapping
+  // the source to the shared function info containing the code.
+  info = compilation_cache->LookupScript(source, Handle<Object>(), 0, 0, true,
+                                         native_context);
+  CHECK(!info.is_null());
+
+  heap->CollectAllGarbage(Heap::kNoGCFlags);
+
+  // On second compilation, the hash is replaced by a real cache entry mapping
+  // the source to the shared function info containing the code.
+  info = compilation_cache->LookupScript(source, Handle<Object>(), 0, 0, true,
+                                         native_context);
+  CHECK(!info.is_null());
+
+  while (!info.ToHandleChecked()->code()->IsOld()) {
+    info.ToHandleChecked()->code()->MakeOlder(NO_MARKING_PARITY);
+  }
+
+  heap->CollectAllGarbage(Heap::kNoGCFlags);
+  // Ensure code aging cleared the entry from the cache.
+  info = compilation_cache->LookupScript(source, Handle<Object>(), 0, 0, true,
+                                         native_context);
+  CHECK(info.is_null());
+
+  {
+    v8::HandleScope scope(CcTest::isolate());
+    CompileRun(raw_source);
+  }
+
+  // On first compilation, only a hash is inserted in the code cache. We can't
+  // find that value.
+  info = compilation_cache->LookupScript(source, Handle<Object>(), 0, 0, true,
+                                         native_context);
+  CHECK(info.is_null());
+
+  for (int i = 0; i < CompilationCacheTable::kHashGenerations; i++) {
+    compilation_cache->MarkCompactPrologue();
+  }
+
+  {
+    v8::HandleScope scope(CcTest::isolate());
+    CompileRun(raw_source);
+  }
+
+  // If we aged the cache before caching the script, ensure that we didn't cache
+  // on next compilation.
+  info = compilation_cache->LookupScript(source, Handle<Object>(), 0, 0, true,
+                                         native_context);
+  CHECK(info.is_null());
+}
+
+
 // Count the number of native contexts in the weak list of native contexts.
 int CountNativeContexts() {
   int count = 0;
@@ -2246,7 +2338,8 @@ TEST(OptimizedAllocationAlwaysInNewSpace) {
       "f(1); f(2); f(3);"
       "%OptimizeFunctionOnNextCall(f);"
       "f(4);");
-  CHECK_EQ(4, res->ToObject()->GetRealNamedProperty(v8_str("x"))->Int32Value());
+  CHECK_EQ(
+      4, res.As<v8::Object>()->GetRealNamedProperty(v8_str("x"))->Int32Value());
 
   Handle<JSObject> o =
       v8::Utils::OpenHandle(*v8::Handle<v8::Object>::Cast(res));
@@ -2384,12 +2477,21 @@ TEST(OptimizedPretenuringMixedInObjectProperties) {
   FieldIndex idx1 = FieldIndex::ForPropertyIndex(o->map(), 0);
   FieldIndex idx2 = FieldIndex::ForPropertyIndex(o->map(), 1);
   CHECK(CcTest::heap()->InOldPointerSpace(o->RawFastPropertyAt(idx1)));
-  CHECK(CcTest::heap()->InOldDataSpace(o->RawFastPropertyAt(idx2)));
+  if (!o->IsUnboxedDoubleField(idx2)) {
+    CHECK(CcTest::heap()->InOldDataSpace(o->RawFastPropertyAt(idx2)));
+  } else {
+    CHECK_EQ(1.1, o->RawFastDoublePropertyAt(idx2));
+  }
 
   JSObject* inner_object =
       reinterpret_cast<JSObject*>(o->RawFastPropertyAt(idx1));
   CHECK(CcTest::heap()->InOldPointerSpace(inner_object));
-  CHECK(CcTest::heap()->InOldDataSpace(inner_object->RawFastPropertyAt(idx1)));
+  if (!inner_object->IsUnboxedDoubleField(idx1)) {
+    CHECK(
+        CcTest::heap()->InOldDataSpace(inner_object->RawFastPropertyAt(idx1)));
+  } else {
+    CHECK_EQ(2.2, inner_object->RawFastDoublePropertyAt(idx1));
+  }
   CHECK(CcTest::heap()->InOldPointerSpace(
       inner_object->RawFastPropertyAt(idx2)));
 }
@@ -2848,6 +2950,7 @@ TEST(TransitionArrayShrinksDuringAllocToZero) {
              "root = new F");
   root = GetByName("root");
   AddPropertyTo(2, root, "funny");
+  CcTest::heap()->CollectGarbage(NEW_SPACE);
 
   // Count number of live transitions after marking.  Note that one transition
   // is left, because 'o' still holds an instance of one transition target.
@@ -2874,6 +2977,7 @@ TEST(TransitionArrayShrinksDuringAllocToOne) {
 
   root = GetByName("root");
   AddPropertyTo(2, root, "funny");
+  CcTest::heap()->CollectGarbage(NEW_SPACE);
 
   // Count number of live transitions after marking.  Note that one transition
   // is left, because 'o' still holds an instance of one transition target.
@@ -3191,18 +3295,18 @@ TEST(IncrementalMarkingClearsTypeFeedbackInfo) {
 
   int expected_slots = 2;
   CHECK_EQ(expected_slots, feedback_vector->ICSlots());
-  for (int i = 0; i < expected_slots; i++) {
-    CHECK(feedback_vector->Get(FeedbackVectorICSlot(i))->IsJSFunction());
-  }
+  int slot1 = 0;
+  int slot2 = 1;
+  CHECK(feedback_vector->Get(FeedbackVectorICSlot(slot1))->IsJSFunction());
+  CHECK(feedback_vector->Get(FeedbackVectorICSlot(slot2))->IsJSFunction());
 
   SimulateIncrementalMarking(CcTest::heap());
   CcTest::heap()->CollectAllGarbage(Heap::kNoGCFlags);
 
-  CHECK_EQ(expected_slots, feedback_vector->ICSlots());
-  for (int i = 0; i < expected_slots; i++) {
-    CHECK_EQ(feedback_vector->Get(FeedbackVectorICSlot(i)),
-             *TypeFeedbackVector::UninitializedSentinel(CcTest::i_isolate()));
-  }
+  CHECK_EQ(feedback_vector->Get(FeedbackVectorICSlot(slot1)),
+           *TypeFeedbackVector::UninitializedSentinel(CcTest::i_isolate()));
+  CHECK_EQ(feedback_vector->Get(FeedbackVectorICSlot(slot2)),
+           *TypeFeedbackVector::UninitializedSentinel(CcTest::i_isolate()));
 }
 
 
@@ -3221,6 +3325,25 @@ static Code* FindFirstIC(Code* code, Code::Kind kind) {
 }
 
 
+static void CheckVectorIC(Handle<JSFunction> f, int ic_slot_index,
+                          InlineCacheState desired_state) {
+  Handle<TypeFeedbackVector> vector =
+      Handle<TypeFeedbackVector>(f->shared()->feedback_vector());
+  FeedbackVectorICSlot slot(ic_slot_index);
+  LoadICNexus nexus(vector, slot);
+  CHECK(nexus.StateFromFeedback() == desired_state);
+}
+
+
+static void CheckVectorICCleared(Handle<JSFunction> f, int ic_slot_index) {
+  Handle<TypeFeedbackVector> vector =
+      Handle<TypeFeedbackVector>(f->shared()->feedback_vector());
+  FeedbackVectorICSlot slot(ic_slot_index);
+  LoadICNexus nexus(vector, slot);
+  CHECK(IC::IsCleared(&nexus));
+}
+
+
 TEST(IncrementalMarkingPreservesMonomorphicIC) {
   if (i::FLAG_always_opt) return;
   CcTest::InitializeVM();
@@ -3236,13 +3359,23 @@ TEST(IncrementalMarkingPreservesMonomorphicIC) {
               CcTest::global()->Get(v8_str("f"))));
 
   Code* ic_before = FindFirstIC(f->shared()->code(), Code::LOAD_IC);
-  CHECK(ic_before->ic_state() == MONOMORPHIC);
+  if (FLAG_vector_ics) {
+    CheckVectorIC(f, 0, MONOMORPHIC);
+    CHECK(ic_before->ic_state() == DEFAULT);
+  } else {
+    CHECK(ic_before->ic_state() == MONOMORPHIC);
+  }
 
   SimulateIncrementalMarking(CcTest::heap());
   CcTest::heap()->CollectAllGarbage(Heap::kNoGCFlags);
 
   Code* ic_after = FindFirstIC(f->shared()->code(), Code::LOAD_IC);
-  CHECK(ic_after->ic_state() == MONOMORPHIC);
+  if (FLAG_vector_ics) {
+    CheckVectorIC(f, 0, MONOMORPHIC);
+    CHECK(ic_after->ic_state() == DEFAULT);
+  } else {
+    CHECK(ic_after->ic_state() == MONOMORPHIC);
+  }
 }
 
 
@@ -3268,7 +3401,12 @@ TEST(IncrementalMarkingClearsMonomorphicIC) {
               CcTest::global()->Get(v8_str("f"))));
 
   Code* ic_before = FindFirstIC(f->shared()->code(), Code::LOAD_IC);
-  CHECK(ic_before->ic_state() == MONOMORPHIC);
+  if (FLAG_vector_ics) {
+    CheckVectorIC(f, 0, MONOMORPHIC);
+    CHECK(ic_before->ic_state() == DEFAULT);
+  } else {
+    CHECK(ic_before->ic_state() == MONOMORPHIC);
+  }
 
   // Fire context dispose notification.
   CcTest::isolate()->ContextDisposedNotification();
@@ -3276,7 +3414,12 @@ TEST(IncrementalMarkingClearsMonomorphicIC) {
   CcTest::heap()->CollectAllGarbage(Heap::kNoGCFlags);
 
   Code* ic_after = FindFirstIC(f->shared()->code(), Code::LOAD_IC);
-  CHECK(IC::IsCleared(ic_after));
+  if (FLAG_vector_ics) {
+    CheckVectorICCleared(f, 0);
+    CHECK(ic_after->ic_state() == DEFAULT);
+  } else {
+    CHECK(IC::IsCleared(ic_after));
+  }
 }
 
 
@@ -3309,7 +3452,12 @@ TEST(IncrementalMarkingClearsPolymorphicIC) {
               CcTest::global()->Get(v8_str("f"))));
 
   Code* ic_before = FindFirstIC(f->shared()->code(), Code::LOAD_IC);
-  CHECK(ic_before->ic_state() == POLYMORPHIC);
+  if (FLAG_vector_ics) {
+    CheckVectorIC(f, 0, POLYMORPHIC);
+    CHECK(ic_before->ic_state() == DEFAULT);
+  } else {
+    CHECK(ic_before->ic_state() == POLYMORPHIC);
+  }
 
   // Fire context dispose notification.
   CcTest::isolate()->ContextDisposedNotification();
@@ -3317,7 +3465,12 @@ TEST(IncrementalMarkingClearsPolymorphicIC) {
   CcTest::heap()->CollectAllGarbage(Heap::kNoGCFlags);
 
   Code* ic_after = FindFirstIC(f->shared()->code(), Code::LOAD_IC);
-  CHECK(IC::IsCleared(ic_after));
+  if (FLAG_vector_ics) {
+    CheckVectorICCleared(f, 0);
+    CHECK(ic_before->ic_state() == DEFAULT);
+  } else {
+    CHECK(IC::IsCleared(ic_after));
+  }
 }
 
 
@@ -3943,6 +4096,10 @@ TEST(EnsureAllocationSiteDependentCodesProcessed) {
     heap->CollectAllGarbage(Heap::kNoGCFlags);
   }
 
+  // TODO(mvstanton): this test fails when FLAG_vector_ics is true because
+  // monomorphic load ics are preserved, but also strongly walked. They
+  // end up keeping function bar alive.
+
   // The site still exists because of our global handle, but the code is no
   // longer referred to by dependent_code().
   DependentCode::GroupStartIndexes starts(site->dependent_code());
@@ -4194,7 +4351,7 @@ void CheckWeakness(const char* source) {
   v8::Persistent<v8::Object> garbage;
   {
     v8::HandleScope scope(isolate);
-    garbage.Reset(isolate, CompileRun(source)->ToObject());
+    garbage.Reset(isolate, CompileRun(source)->ToObject(isolate));
   }
   weak_ic_cleared = false;
   garbage.SetWeak(static_cast<void*>(&garbage), &ClearWeakIC);
@@ -4207,6 +4364,8 @@ void CheckWeakness(const char* source) {
 // Each of the following "weak IC" tests creates an IC that embeds a map with
 // the prototype pointing to _proto_ and checks that the _proto_ dies on GC.
 TEST(WeakMapInMonomorphicLoadIC) {
+  // TODO(mvstanton): vector ics need weak support!
+  if (FLAG_vector_ics) return;
   CheckWeakness("function loadIC(obj) {"
                 "  return obj.name;"
                 "}"
@@ -4222,6 +4381,8 @@ TEST(WeakMapInMonomorphicLoadIC) {
 
 
 TEST(WeakMapInMonomorphicKeyedLoadIC) {
+  // TODO(mvstanton): vector ics need weak support!
+  if (FLAG_vector_ics) return;
   CheckWeakness("function keyedLoadIC(obj, field) {"
                 "  return obj[field];"
                 "}"
@@ -4439,7 +4600,7 @@ TEST(Regress357137) {
       "eval('function f() {' + locals + 'return function() { return v0; }; }');"
       "interrupt();"  // This triggers a fake stack overflow in f.
       "f()()");
-  CHECK_EQ(42.0, result->ToNumber()->Value());
+  CHECK_EQ(42.0, result->ToNumber(isolate)->Value());
 }
 
 
@@ -4605,6 +4766,46 @@ TEST(Regress388880) {
   // Now everything is set up for crashing in JSObject::MigrateFastToFast()
   // when it calls heap->AdjustLiveBytes(...).
   JSObject::MigrateToMap(o, map2);
+}
+
+
+TEST(Regress3631) {
+  i::FLAG_expose_gc = true;
+  CcTest::InitializeVM();
+  v8::HandleScope scope(CcTest::isolate());
+  Isolate* isolate = CcTest::i_isolate();
+  Heap* heap = isolate->heap();
+  IncrementalMarking* marking = CcTest::heap()->incremental_marking();
+  v8::Local<v8::Value> result = CompileRun(
+      "var weak_map = new WeakMap();"
+      "var future_keys = [];"
+      "for (var i = 0; i < 50; i++) {"
+      "  var key = {'k' : i + 0.1};"
+      "  weak_map.set(key, 1);"
+      "  future_keys.push({'x' : i + 0.2});"
+      "}"
+      "weak_map");
+  if (marking->IsStopped()) {
+    marking->Start();
+  }
+  // Incrementally mark the backing store.
+  Handle<JSObject> obj =
+      v8::Utils::OpenHandle(*v8::Handle<v8::Object>::Cast(result));
+  Handle<JSWeakCollection> weak_map(reinterpret_cast<JSWeakCollection*>(*obj));
+  while (!Marking::IsBlack(
+             Marking::MarkBitFrom(HeapObject::cast(weak_map->table()))) &&
+         !marking->IsStopped()) {
+    marking->Step(MB, IncrementalMarking::NO_GC_VIA_STACK_GUARD);
+  }
+  // Stash the backing store in a handle.
+  Handle<Object> save(weak_map->table(), isolate);
+  // The following line will update the backing store.
+  CompileRun(
+      "for (var i = 0; i < 50; i++) {"
+      "  weak_map.set(future_keys[i], i);"
+      "}");
+  heap->incremental_marking()->set_should_hurry(true);
+  heap->CollectGarbage(OLD_POINTER_SPACE);
 }
 
 

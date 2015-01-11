@@ -66,11 +66,11 @@ void InstructionSelector::SelectInstructions() {
         sequence()->InstructionBlockAt(block->GetRpoNumber());
     size_t end = instruction_block->code_end();
     size_t start = instruction_block->code_start();
-    sequence()->StartBlock(block);
+    sequence()->StartBlock(block->GetRpoNumber());
     while (start-- > end) {
       sequence()->AddInstruction(instructions_[start]);
     }
-    sequence()->EndBlock(block);
+    sequence()->EndBlock(block->GetRpoNumber());
   }
 }
 
@@ -295,7 +295,7 @@ void InstructionSelector::InitializeCallBuffer(Node* call, CallBuffer* buffer,
                                                bool call_code_immediate,
                                                bool call_address_immediate) {
   OperandGenerator g(this);
-  DCHECK_EQ(call->op()->OutputCount(),
+  DCHECK_EQ(call->op()->ValueOutputCount(),
             static_cast<int>(buffer->descriptor->ReturnCount()));
   DCHECK_EQ(
       call->op()->ValueInputCount(),
@@ -738,6 +738,8 @@ void InstructionSelector::VisitNode(Node* node) {
       return VisitUint32LessThanOrEqual(node);
     case IrOpcode::kUint32Mod:
       return VisitUint32Mod(node);
+    case IrOpcode::kUint32MulHigh:
+      return VisitUint32MulHigh(node);
     case IrOpcode::kInt64Add:
       return VisitInt64Add(node);
     case IrOpcode::kInt64Sub:
@@ -831,7 +833,7 @@ void InstructionSelector::VisitLoadStackPointer(Node* node) {
 #endif  // V8_TURBOFAN_BACKEND
 
 // 32 bit targets do not implement the following instructions.
-#if V8_TARGET_ARCH_32_BIT && V8_TURBOFAN_BACKEND
+#if V8_TARGET_ARCH_32_BIT && !V8_TARGET_ARCH_X64 && V8_TURBOFAN_BACKEND
 
 void InstructionSelector::VisitWord64And(Node* node) { UNIMPLEMENTED(); }
 
@@ -903,7 +905,7 @@ void InstructionSelector::VisitTruncateInt64ToInt32(Node* node) {
   UNIMPLEMENTED();
 }
 
-#endif  // V8_TARGET_ARCH_32_BIT && V8_TURBOFAN_BACKEND
+#endif  // V8_TARGET_ARCH_32_BIT && !V8_TARGET_ARCH_X64 && V8_TURBOFAN_BACKEND
 
 
 void InstructionSelector::VisitFinish(Node* node) {
@@ -923,16 +925,15 @@ void InstructionSelector::VisitParameter(Node* node) {
 
 
 void InstructionSelector::VisitPhi(Node* node) {
-  // TODO(bmeurer): Emit a PhiInstruction here.
+  const int input_count = node->op()->ValueInputCount();
   PhiInstruction* phi = new (instruction_zone())
-      PhiInstruction(instruction_zone(), GetVirtualRegister(node));
+      PhiInstruction(instruction_zone(), GetVirtualRegister(node),
+                     static_cast<size_t>(input_count));
   sequence()->InstructionBlockAt(current_block_->GetRpoNumber())->AddPhi(phi);
-  const int input_count = node->op()->InputCount();
-  phi->operands().reserve(static_cast<size_t>(input_count));
   for (int i = 0; i < input_count; ++i) {
     Node* const input = node->InputAt(i);
     MarkAsUsed(input);
-    phi->operands().push_back(GetVirtualRegister(input));
+    phi->Extend(instruction_zone(), GetVirtualRegister(input));
   }
 }
 
@@ -965,14 +966,9 @@ void InstructionSelector::VisitConstant(Node* node) {
 
 
 void InstructionSelector::VisitGoto(BasicBlock* target) {
-  if (IsNextInAssemblyOrder(target)) {
-    // fall through to the next block.
-    Emit(kArchNop, NULL)->MarkAsControl();
-  } else {
-    // jump to the next block.
-    OperandGenerator g(this);
-    Emit(kArchJmp, NULL, g.Label(target))->MarkAsControl();
-  }
+  // jump to the next block.
+  OperandGenerator g(this);
+  Emit(kArchJmp, NULL, g.Label(target))->MarkAsControl();
 }
 
 

@@ -159,7 +159,7 @@ private:
   CompilationInfo *info_;
   ContextScope *current_context_;
 
-  AstNodeFactory<AstNullVisitor> factory_;
+  AstNodeFactory factory_;
   const AstRawString *o_string_, *k_string_, *v_string_, *getctx_string_;
   ZoneList<const AstRawString *> *arg_names_;
 
@@ -196,20 +196,15 @@ public:
 #undef DECLARE_VISIT
 
   void add_materialized_literal(MaterializedLiteral *);
-  void add_feedback_slot(AstNode *);
 
 private:
   struct FunctionState {
     FunctionState()
         : prev(NULL),
-          materialized_literal_count(JSFunction::kLiteralsPrefixSize),
-          feedback_slot_count(0),
-          ic_feedback_slot_count(0) {}
+          materialized_literal_count(JSFunction::kLiteralsPrefixSize) {}
 
     FunctionState *prev;
     int materialized_literal_count;
-    int feedback_slot_count;
-    int ic_feedback_slot_count;
 
     static FunctionState guard;
   };

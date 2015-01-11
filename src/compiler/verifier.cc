@@ -9,6 +9,7 @@
 #include <sstream>
 #include <string>
 
+#include "src/bit-vector.h"
 #include "src/compiler/generic-algorithm.h"
 #include "src/compiler/generic-node-inl.h"
 #include "src/compiler/generic-node.h"
@@ -21,7 +22,6 @@
 #include "src/compiler/operator.h"
 #include "src/compiler/schedule.h"
 #include "src/compiler/simplified-operator.h"
-#include "src/data-flow.h"
 #include "src/ostreams.h"
 
 namespace v8 {
@@ -52,7 +52,7 @@ class Verifier::Visitor : public NullNodeVisitor {
   Visitor(Zone* z, Typing typed) : zone(z), typing(typed) {}
 
   // Fulfills the PreNodeCallback interface.
-  GenericGraphVisit::Control Pre(Node* node);
+  void Pre(Node* node);
 
   Zone* zone;
   Typing typing;
@@ -120,7 +120,7 @@ class Verifier::Visitor : public NullNodeVisitor {
 };
 
 
-GenericGraphVisit::Control Verifier::Visitor::Pre(Node* node) {
+void Verifier::Visitor::Pre(Node* node) {
   int value_count = node->op()->ValueInputCount();
   int context_count = OperatorProperties::GetContextInputCount(node->op());
   int frame_state_count =
@@ -460,7 +460,7 @@ GenericGraphVisit::Control Verifier::Visitor::Pre(Node* node) {
     case IrOpcode::kJSCreateWithContext:
     case IrOpcode::kJSCreateBlockContext:
     case IrOpcode::kJSCreateModuleContext:
-    case IrOpcode::kJSCreateGlobalContext: {
+    case IrOpcode::kJSCreateScriptContext: {
       // Type is Context, and operand is Internal.
       Node* context = NodeProperties::GetContextInput(node);
       // TODO(rossberg): This should really be Is(Internal), but the typer
@@ -688,6 +688,7 @@ GenericGraphVisit::Control Verifier::Visitor::Pre(Node* node) {
     case IrOpcode::kInt32LessThanOrEqual:
     case IrOpcode::kUint32Div:
     case IrOpcode::kUint32Mod:
+    case IrOpcode::kUint32MulHigh:
     case IrOpcode::kUint32LessThan:
     case IrOpcode::kUint32LessThanOrEqual:
     case IrOpcode::kInt64Add:
@@ -727,8 +728,6 @@ GenericGraphVisit::Control Verifier::Visitor::Pre(Node* node) {
       // TODO(rossberg): Check.
       break;
   }
-
-  return GenericGraphVisit::CONTINUE;
 }
 
 

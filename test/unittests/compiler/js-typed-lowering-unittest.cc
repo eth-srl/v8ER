@@ -26,6 +26,10 @@ const ExternalArrayType kExternalArrayTypes[] = {
 };
 
 
+Type* const kJSTypes[] = {Type::Undefined(), Type::Null(),   Type::Boolean(),
+                          Type::Number(),    Type::String(), Type::Object()};
+
+
 const StrictMode kStrictModes[] = {SLOPPY, STRICT};
 
 }  // namespace
@@ -38,7 +42,7 @@ class JSTypedLoweringTest : public TypedGraphTest {
 
  protected:
   Reduction Reduce(Node* node) {
-    MachineOperatorBuilder machine;
+    MachineOperatorBuilder machine(zone());
     JSGraph jsgraph(graph(), common(), javascript(), &machine);
     JSTypedLowering reducer(&jsgraph);
     return reducer.Reduce(node);
@@ -109,6 +113,124 @@ TEST_F(JSTypedLoweringTest, JSToBooleanWithOrderedNumberAndBoolean) {
 
 
 // -----------------------------------------------------------------------------
+// JSStrictEqual
+
+
+TEST_F(JSTypedLoweringTest, JSStrictEqualWithTheHole) {
+  Node* const the_hole = HeapConstant(factory()->the_hole_value());
+  Node* const context = UndefinedConstant();
+  Node* const effect = graph()->start();
+  Node* const control = graph()->start();
+  TRACED_FOREACH(Type*, type, kJSTypes) {
+    Node* const lhs = Parameter(type);
+    Reduction r = Reduce(graph()->NewNode(javascript()->StrictEqual(), lhs,
+                                          the_hole, context, effect, control));
+    ASSERT_TRUE(r.Changed());
+    EXPECT_THAT(r.replacement(), IsFalseConstant());
+  }
+}
+
+
+// -----------------------------------------------------------------------------
+// JSShiftLeft
+
+
+TEST_F(JSTypedLoweringTest, JSShiftLeftWithSigned32AndConstant) {
+  Node* const lhs = Parameter(Type::Signed32());
+  Node* const context = UndefinedConstant();
+  Node* const effect = graph()->start();
+  Node* const control = graph()->start();
+  TRACED_FORRANGE(int32_t, rhs, 0, 31) {
+    Reduction r =
+        Reduce(graph()->NewNode(javascript()->ShiftLeft(), lhs,
+                                NumberConstant(rhs), context, effect, control));
+    ASSERT_TRUE(r.Changed());
+    EXPECT_THAT(r.replacement(), IsWord32Shl(lhs, IsNumberConstant(rhs)));
+  }
+}
+
+
+TEST_F(JSTypedLoweringTest, JSShiftLeftWithSigned32AndUnsigned32) {
+  Node* const lhs = Parameter(Type::Signed32());
+  Node* const rhs = Parameter(Type::Unsigned32());
+  Node* const context = UndefinedConstant();
+  Node* const effect = graph()->start();
+  Node* const control = graph()->start();
+  Reduction r = Reduce(graph()->NewNode(javascript()->ShiftLeft(), lhs, rhs,
+                                        context, effect, control));
+  ASSERT_TRUE(r.Changed());
+  EXPECT_THAT(r.replacement(),
+              IsWord32Shl(lhs, IsWord32And(rhs, IsInt32Constant(0x1f))));
+}
+
+
+// -----------------------------------------------------------------------------
+// JSShiftRight
+
+
+TEST_F(JSTypedLoweringTest, JSShiftRightWithSigned32AndConstant) {
+  Node* const lhs = Parameter(Type::Signed32());
+  Node* const context = UndefinedConstant();
+  Node* const effect = graph()->start();
+  Node* const control = graph()->start();
+  TRACED_FORRANGE(int32_t, rhs, 0, 31) {
+    Reduction r =
+        Reduce(graph()->NewNode(javascript()->ShiftRight(), lhs,
+                                NumberConstant(rhs), context, effect, control));
+    ASSERT_TRUE(r.Changed());
+    EXPECT_THAT(r.replacement(), IsWord32Sar(lhs, IsNumberConstant(rhs)));
+  }
+}
+
+
+TEST_F(JSTypedLoweringTest, JSShiftRightWithSigned32AndUnsigned32) {
+  Node* const lhs = Parameter(Type::Signed32());
+  Node* const rhs = Parameter(Type::Unsigned32());
+  Node* const context = UndefinedConstant();
+  Node* const effect = graph()->start();
+  Node* const control = graph()->start();
+  Reduction r = Reduce(graph()->NewNode(javascript()->ShiftRight(), lhs, rhs,
+                                        context, effect, control));
+  ASSERT_TRUE(r.Changed());
+  EXPECT_THAT(r.replacement(),
+              IsWord32Sar(lhs, IsWord32And(rhs, IsInt32Constant(0x1f))));
+}
+
+
+// -----------------------------------------------------------------------------
+// JSShiftRightLogical
+
+
+TEST_F(JSTypedLoweringTest, JSShiftRightLogicalWithUnsigned32AndConstant) {
+  Node* const lhs = Parameter(Type::Unsigned32());
+  Node* const context = UndefinedConstant();
+  Node* const effect = graph()->start();
+  Node* const control = graph()->start();
+  TRACED_FORRANGE(int32_t, rhs, 0, 31) {
+    Reduction r =
+        Reduce(graph()->NewNode(javascript()->ShiftRightLogical(), lhs,
+                                NumberConstant(rhs), context, effect, control));
+    ASSERT_TRUE(r.Changed());
+    EXPECT_THAT(r.replacement(), IsWord32Shr(lhs, IsNumberConstant(rhs)));
+  }
+}
+
+
+TEST_F(JSTypedLoweringTest, JSShiftRightLogicalWithUnsigned32AndUnsigned32) {
+  Node* const lhs = Parameter(Type::Unsigned32());
+  Node* const rhs = Parameter(Type::Unsigned32());
+  Node* const context = UndefinedConstant();
+  Node* const effect = graph()->start();
+  Node* const control = graph()->start();
+  Reduction r = Reduce(graph()->NewNode(javascript()->ShiftRightLogical(), lhs,
+                                        rhs, context, effect, control));
+  ASSERT_TRUE(r.Changed());
+  EXPECT_THAT(r.replacement(),
+              IsWord32Shr(lhs, IsWord32And(rhs, IsInt32Constant(0x1f))));
+}
+
+
+// -----------------------------------------------------------------------------
 // JSLoadProperty
 
 
@@ -163,7 +285,8 @@ TEST_F(JSTypedLoweringTest, JSStorePropertyToExternalTypedArray) {
 
       Node* key = Parameter(Type::Integral32());
       Node* base = HeapConstant(array);
-      Node* value = Parameter(Type::Any());
+      Node* value =
+          Parameter(AccessBuilder::ForTypedArrayElement(type, true).type);
       Node* context = UndefinedConstant();
       Node* effect = graph()->start();
       Node* control = graph()->start();
@@ -183,6 +306,54 @@ TEST_F(JSTypedLoweringTest, JSStorePropertyToExternalTypedArray) {
                       IsIntPtrConstant(bit_cast<intptr_t>(&backing_store[0])),
                       key, IsNumberConstant(array->length()->Number()), value,
                       effect, control));
+    }
+  }
+}
+
+
+TEST_F(JSTypedLoweringTest, JSStorePropertyToExternalTypedArrayWithConversion) {
+  const size_t kLength = 17;
+  double backing_store[kLength];
+  Handle<JSArrayBuffer> buffer =
+      NewArrayBuffer(backing_store, sizeof(backing_store));
+  TRACED_FOREACH(ExternalArrayType, type, kExternalArrayTypes) {
+    TRACED_FOREACH(StrictMode, strict_mode, kStrictModes) {
+      Handle<JSTypedArray> array =
+          factory()->NewJSTypedArray(type, buffer, 0, kLength);
+
+      Node* key = Parameter(Type::Integral32());
+      Node* base = HeapConstant(array);
+      Node* value = Parameter(Type::Any());
+      Node* context = UndefinedConstant();
+      Node* effect = graph()->start();
+      Node* control = graph()->start();
+      Node* node = graph()->NewNode(javascript()->StoreProperty(strict_mode),
+                                    base, key, value, context);
+      if (FLAG_turbo_deoptimization) {
+        node->AppendInput(zone(), UndefinedConstant());
+      }
+      node->AppendInput(zone(), effect);
+      node->AppendInput(zone(), control);
+      Reduction r = Reduce(node);
+
+      Matcher<Node*> value_matcher =
+          IsToNumber(value, context, effect, control);
+      Matcher<Node*> effect_matcher = value_matcher;
+      if (AccessBuilder::ForTypedArrayElement(type, true)
+              .type->Is(Type::Signed32())) {
+        value_matcher = IsNumberToInt32(value_matcher);
+      } else if (AccessBuilder::ForTypedArrayElement(type, true)
+                     .type->Is(Type::Unsigned32())) {
+        value_matcher = IsNumberToUint32(value_matcher);
+      }
+
+      ASSERT_TRUE(r.Changed());
+      EXPECT_THAT(r.replacement(),
+                  IsStoreElement(
+                      AccessBuilder::ForTypedArrayElement(type, true),
+                      IsIntPtrConstant(bit_cast<intptr_t>(&backing_store[0])),
+                      key, IsNumberConstant(array->length()->Number()),
+                      value_matcher, effect_matcher, control));
     }
   }
 }

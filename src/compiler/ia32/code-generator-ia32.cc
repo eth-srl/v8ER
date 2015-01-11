@@ -69,6 +69,8 @@ class IA32OperandConverter : public InstructionOperandConverter {
         return Immediate(constant.ToHeapObject());
       case Constant::kInt64:
         break;
+      case Constant::kRpoNumber:
+        return Immediate::CodeRelativeOffset(ToLabel(operand));
     }
     UNREACHABLE();
     return Immediate(-1);
@@ -195,7 +197,7 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       break;
     }
     case kArchJmp:
-      __ jmp(code()->GetLabel(i.InputRpo(0)));
+      AssembleArchJump(i.InputRpo(0));
       break;
     case kArchNop:
       // don't emit code for nops.
@@ -246,6 +248,9 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       break;
     case kIA32ImulHigh:
       __ imul(i.InputRegister(1));
+      break;
+    case kIA32UmulHigh:
+      __ mul(i.InputRegister(1));
       break;
     case kIA32Idiv:
       __ cdq();
@@ -314,16 +319,16 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       __ ucomisd(i.InputDoubleRegister(0), i.InputOperand(1));
       break;
     case kSSEFloat64Add:
-      __ addsd(i.InputDoubleRegister(0), i.InputDoubleRegister(1));
+      __ addsd(i.InputDoubleRegister(0), i.InputOperand(1));
       break;
     case kSSEFloat64Sub:
-      __ subsd(i.InputDoubleRegister(0), i.InputDoubleRegister(1));
+      __ subsd(i.InputDoubleRegister(0), i.InputOperand(1));
       break;
     case kSSEFloat64Mul:
-      __ mulsd(i.InputDoubleRegister(0), i.InputDoubleRegister(1));
+      __ mulsd(i.InputDoubleRegister(0), i.InputOperand(1));
       break;
     case kSSEFloat64Div:
-      __ divsd(i.InputDoubleRegister(0), i.InputDoubleRegister(1));
+      __ divsd(i.InputDoubleRegister(0), i.InputOperand(1));
       break;
     case kSSEFloat64Mod: {
       // TODO(dcarney): alignment is wrong.
@@ -482,23 +487,14 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
 }
 
 
-// Assembles branches after an instruction.
-void CodeGenerator::AssembleArchBranch(Instruction* instr,
-                                       FlagsCondition condition) {
+// Assembles a branch after an instruction.
+void CodeGenerator::AssembleArchBranch(Instruction* instr, BranchInfo* branch) {
   IA32OperandConverter i(this, instr);
-  Label done;
-
-  // Emit a branch. The true and false targets are always the last two inputs
-  // to the instruction.
-  BasicBlock::RpoNumber tblock =
-      i.InputRpo(static_cast<int>(instr->InputCount()) - 2);
-  BasicBlock::RpoNumber fblock =
-      i.InputRpo(static_cast<int>(instr->InputCount()) - 1);
-  bool fallthru = IsNextInAssemblyOrder(fblock);
-  Label* tlabel = code()->GetLabel(tblock);
-  Label* flabel = fallthru ? &done : code()->GetLabel(fblock);
-  Label::Distance flabel_distance = fallthru ? Label::kNear : Label::kFar;
-  switch (condition) {
+  Label::Distance flabel_distance =
+      branch->fallthru ? Label::kNear : Label::kFar;
+  Label* tlabel = branch->true_label;
+  Label* flabel = branch->false_label;
+  switch (branch->condition) {
     case kUnorderedEqual:
       __ j(parity_even, flabel, flabel_distance);
     // Fall through.
@@ -554,8 +550,13 @@ void CodeGenerator::AssembleArchBranch(Instruction* instr,
       __ j(no_overflow, tlabel);
       break;
   }
-  if (!fallthru) __ jmp(flabel, flabel_distance);  // no fallthru to flabel.
-  __ bind(&done);
+  // Add a jump if not falling through to the next block.
+  if (!branch->fallthru) __ jmp(flabel);
+}
+
+
+void CodeGenerator::AssembleArchJump(BasicBlock::RpoNumber target) {
+  if (!IsNextInAssemblyOrder(target)) __ jmp(GetLabel(target));
 }
 
 
@@ -815,24 +816,6 @@ void CodeGenerator::AssemblePrologue() {
     __ Prologue(info->IsCodePreAgingActive());
     frame->SetRegisterSaveAreaSize(
         StandardFrameConstants::kFixedFrameSizeFromFp);
-
-    // Sloppy mode functions and builtins need to replace the receiver with the
-    // global proxy when called as functions (without an explicit receiver
-    // object).
-    // TODO(mstarzinger/verwaest): Should this be moved back into the CallIC?
-    if (info->strict_mode() == SLOPPY && !info->is_native()) {
-      Label ok;
-      // +2 for return address and saved frame pointer.
-      int receiver_slot = info->scope()->num_parameters() + 2;
-      __ mov(ecx, Operand(ebp, receiver_slot * kPointerSize));
-      __ cmp(ecx, isolate()->factory()->undefined_value());
-      __ j(not_equal, &ok, Label::kNear);
-      __ mov(ecx, GlobalObjectOperand());
-      __ mov(ecx, FieldOperand(ecx, GlobalObject::kGlobalProxyOffset));
-      __ mov(Operand(ebp, receiver_slot * kPointerSize), ecx);
-      __ bind(&ok);
-    }
-
   } else {
     __ StubPrologue();
     frame->SetRegisterSaveAreaSize(

@@ -32,7 +32,7 @@ class InlinerVisitor : public NullNodeVisitor {
  public:
   explicit InlinerVisitor(JSInliner* inliner) : inliner_(inliner) {}
 
-  GenericGraphVisit::Control Post(Node* node) {
+  void Post(Node* node) {
     switch (node->opcode()) {
       case IrOpcode::kJSCallFunction:
         inliner_->TryInlineJSCall(node);
@@ -45,7 +45,6 @@ class InlinerVisitor : public NullNodeVisitor {
       default:
         break;
     }
-    return GenericGraphVisit::CONTINUE;
   }
 
  private:
@@ -88,7 +87,7 @@ class Inlinee {
   }
 
   // Counts JSFunction, Receiver, arguments, context but not effect, control.
-  size_t total_parameters() { return start_->op()->OutputCount(); }
+  size_t total_parameters() { return start_->op()->ValueOutputCount(); }
 
   // Counts only formal parameters.
   size_t formal_parameters() {
@@ -167,7 +166,7 @@ class CopyVisitor : public NullNodeVisitor {
         sentinel_op_(IrOpcode::kDead, Operator::kNoProperties, "sentinel", 0, 0,
                      0, 0, 0, 0) {}
 
-  GenericGraphVisit::Control Post(Node* original) {
+  void Post(Node* original) {
     NodeVector inputs(temp_zone_);
     for (InputIter it = original->inputs().begin();
          it != original->inputs().end(); ++it) {
@@ -180,7 +179,6 @@ class CopyVisitor : public NullNodeVisitor {
         target_graph_->NewNode(original->op(), static_cast<int>(inputs.size()),
                                (inputs.empty() ? NULL : &inputs.front()));
     copies_[original->id()] = copy;
-    return GenericGraphVisit::CONTINUE;
   }
 
   Node* GetCopy(Node* original) {
@@ -211,11 +209,10 @@ class CopyVisitor : public NullNodeVisitor {
   }
 
   Node* GetSentinel(Node* original) {
-    Node* sentinel = sentinels_[original->id()];
-    if (sentinel == NULL) {
-      sentinel = target_graph_->NewNode(&sentinel_op_);
+    if (sentinels_[original->id()] == NULL) {
+      sentinels_[original->id()] = target_graph_->NewNode(&sentinel_op_);
     }
-    return sentinel;
+    return sentinels_[original->id()];
   }
 
   NodeVector copies_;
@@ -408,19 +405,21 @@ void JSInliner::TryInlineJSCall(Node* call_node) {
 
   Inlinee inlinee(visitor.GetCopy(graph.start()), visitor.GetCopy(graph.end()));
 
-  Node* outer_frame_state = call.frame_state();
-  // Insert argument adaptor frame if required.
-  if (call.formal_arguments() != inlinee.formal_parameters()) {
-    outer_frame_state =
-        CreateArgumentsAdaptorFrameState(&call, function, info.zone());
-  }
+  if (FLAG_turbo_deoptimization) {
+    Node* outer_frame_state = call.frame_state();
+    // Insert argument adaptor frame if required.
+    if (call.formal_arguments() != inlinee.formal_parameters()) {
+      outer_frame_state =
+          CreateArgumentsAdaptorFrameState(&call, function, info.zone());
+    }
 
-  for (NodeVectorConstIter it = visitor.copies().begin();
-       it != visitor.copies().end(); ++it) {
-    Node* node = *it;
-    if (node != NULL && node->opcode() == IrOpcode::kFrameState) {
-      AddClosureToFrameState(node, function);
-      NodeProperties::ReplaceFrameStateInput(node, outer_frame_state);
+    for (NodeVectorConstIter it = visitor.copies().begin();
+         it != visitor.copies().end(); ++it) {
+      Node* node = *it;
+      if (node != NULL && node->opcode() == IrOpcode::kFrameState) {
+        AddClosureToFrameState(node, function);
+        NodeProperties::ReplaceFrameStateInput(node, outer_frame_state);
+      }
     }
   }
 

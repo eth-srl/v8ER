@@ -44,6 +44,7 @@ import time
 from testrunner.local import execution
 from testrunner.local import progress
 from testrunner.local import testsuite
+from testrunner.local.testsuite import VARIANT_FLAGS
 from testrunner.local import utils
 from testrunner.local import verbose
 from testrunner.network import network_execution
@@ -82,13 +83,6 @@ TEST_MAP = {
 TIMEOUT_DEFAULT = 60
 TIMEOUT_SCALEFACTOR = {"debug"   : 4,
                        "release" : 1 }
-
-# Use this to run several variants of the tests.
-VARIANT_FLAGS = {
-    "default": [],
-    "stress": ["--stress-opt", "--always-opt"],
-    "turbofan": ["--turbo-asm", "--turbo-filter=*", "--always-opt"],
-    "nocrankshaft": ["--nocrankshaft"]}
 
 VARIANTS = ["default", "stress", "turbofan", "nocrankshaft"]
 
@@ -497,7 +491,8 @@ def Execute(arch, mode, args, options, suites, workspace):
 
   # TODO(all): Combine "simulator" and "simulator_run".
   simulator_run = not options.dont_skip_simulator_slow_tests and \
-      arch in ['arm64', 'arm', 'mips'] and ARCH_GUESS and arch != ARCH_GUESS
+      arch in ['arm64', 'arm', 'mipsel', 'mips', 'mips64el'] and \
+      ARCH_GUESS and arch != ARCH_GUESS
   # Find available test suites and read test cases from them.
   variables = {
     "arch": arch,

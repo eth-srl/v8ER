@@ -47,7 +47,7 @@ MarkCompactCollector::MarkCompactCollector(Heap* heap)
       was_marked_incrementally_(false),
       sweeping_in_progress_(false),
       pending_sweeper_jobs_semaphore_(0),
-      sequential_sweeping_(false),
+      evacuation_(false),
       migration_slots_buffer_(NULL),
       heap_(heap),
       code_flusher_(NULL),
@@ -456,7 +456,6 @@ class MarkCompactCollector::SweeperTask : public v8::Task {
 void MarkCompactCollector::StartSweeperThreads() {
   DCHECK(free_list_old_pointer_space_.get()->IsEmpty());
   DCHECK(free_list_old_data_space_.get()->IsEmpty());
-  sweeping_in_progress_ = true;
   V8::GetCurrentPlatform()->CallOnBackgroundThread(
       new SweeperTask(heap(), heap()->old_data_space()),
       v8::Platform::kShortRunningTask);
@@ -471,13 +470,15 @@ void MarkCompactCollector::EnsureSweepingCompleted() {
 
   // If sweeping is not completed or not running at all, we try to complete it
   // here.
-  if (!IsSweepingCompleted()) {
+  if (!FLAG_concurrent_sweeping || !IsSweepingCompleted()) {
     SweepInParallel(heap()->paged_space(OLD_DATA_SPACE), 0);
     SweepInParallel(heap()->paged_space(OLD_POINTER_SPACE), 0);
   }
   // Wait twice for both jobs.
-  pending_sweeper_jobs_semaphore_.Wait();
-  pending_sweeper_jobs_semaphore_.Wait();
+  if (FLAG_concurrent_sweeping) {
+    pending_sweeper_jobs_semaphore_.Wait();
+    pending_sweeper_jobs_semaphore_.Wait();
+  }
   ParallelSweepSpacesComplete();
   sweeping_in_progress_ = false;
   RefillFreeList(heap()->paged_space(OLD_DATA_SPACE));
@@ -486,7 +487,7 @@ void MarkCompactCollector::EnsureSweepingCompleted() {
   heap()->paged_space(OLD_POINTER_SPACE)->ResetUnsweptFreeBytes();
 
 #ifdef VERIFY_HEAP
-  if (FLAG_verify_heap) {
+  if (FLAG_verify_heap && !evacuation()) {
     VerifyEvacuation(heap_);
   }
 #endif
@@ -1205,7 +1206,6 @@ static inline HeapObject* ShortCircuitConsString(Object** p) {
   // except the maps for the object and its possible substrings might be
   // marked.
   HeapObject* object = HeapObject::cast(*p);
-  if (!FLAG_clever_optimizations) return object;
   Map* map = object->map();
   InstanceType type = map->instance_type();
   if (!IsShortcutCandidate(type)) return object;
@@ -2231,12 +2231,6 @@ void MarkCompactCollector::MarkLiveObjects() {
 
 
 void MarkCompactCollector::AfterMarking() {
-  // Object literal map caches reference strings (cache keys) and maps
-  // (cache values). At this point still useful maps have already been
-  // marked. Mark the keys for the alive values before we process the
-  // string table.
-  ProcessMapCaches();
-
   // Prune the string table removing all strings only pointed to by the
   // string table.  Cannot use string_table() here because the string
   // table is marked.
@@ -2270,57 +2264,6 @@ void MarkCompactCollector::AfterMarking() {
   if (FLAG_track_gc_object_stats) {
     heap()->CheckpointObjectStats();
   }
-}
-
-
-void MarkCompactCollector::ProcessMapCaches() {
-  Object* raw_context = heap()->native_contexts_list();
-  while (raw_context != heap()->undefined_value()) {
-    Context* context = reinterpret_cast<Context*>(raw_context);
-    if (IsMarked(context)) {
-      HeapObject* raw_map_cache =
-          HeapObject::cast(context->get(Context::MAP_CACHE_INDEX));
-      // A map cache may be reachable from the stack. In this case
-      // it's already transitively marked and it's too late to clean
-      // up its parts.
-      if (!IsMarked(raw_map_cache) &&
-          raw_map_cache != heap()->undefined_value()) {
-        MapCache* map_cache = reinterpret_cast<MapCache*>(raw_map_cache);
-        int existing_elements = map_cache->NumberOfElements();
-        int used_elements = 0;
-        for (int i = MapCache::kElementsStartIndex; i < map_cache->length();
-             i += MapCache::kEntrySize) {
-          Object* raw_key = map_cache->get(i);
-          if (raw_key == heap()->undefined_value() ||
-              raw_key == heap()->the_hole_value())
-            continue;
-          STATIC_ASSERT(MapCache::kEntrySize == 2);
-          Object* raw_map = map_cache->get(i + 1);
-          if (raw_map->IsHeapObject() && IsMarked(raw_map)) {
-            ++used_elements;
-          } else {
-            // Delete useless entries with unmarked maps.
-            DCHECK(raw_map->IsMap());
-            map_cache->set_the_hole(i);
-            map_cache->set_the_hole(i + 1);
-          }
-        }
-        if (used_elements == 0) {
-          context->set(Context::MAP_CACHE_INDEX, heap()->undefined_value());
-        } else {
-          // Note: we don't actually shrink the cache here to avoid
-          // extra complexity during GC. We rely on subsequent cache
-          // usages (EnsureCapacity) to do this.
-          map_cache->ElementsRemoved(existing_elements - used_elements);
-          MarkBit map_cache_markbit = Marking::MarkBitFrom(map_cache);
-          MarkObject(map_cache, map_cache_markbit);
-        }
-      }
-    }
-    // Move to next element in the list.
-    raw_context = context->get(Context::NEXT_CONTEXT_LINK);
-  }
-  ProcessMarkingDeque();
 }
 
 
@@ -2521,13 +2464,14 @@ void MarkCompactCollector::ClearMapTransitions(Map* map) {
 
   // Note that we never eliminate a transition array, though we might right-trim
   // such that number_of_transitions() == 0. If this assumption changes,
-  // TransitionArray::CopyInsert() will need to deal with the case that a
-  // transition array disappeared during GC.
-  int trim = t->number_of_transitions() - transition_index;
+  // TransitionArray::Insert() will need to deal with the case that a transition
+  // array disappeared during GC.
+  int trim = t->number_of_transitions_storage() - transition_index;
   if (trim > 0) {
     heap_->RightTrimFixedArray<Heap::FROM_GC>(
         t, t->IsSimpleTransition() ? trim
                                    : trim * TransitionArray::kTransitionSize);
+    t->SetNumberOfTransitions(transition_index);
   }
   DCHECK(map->HasTransitionArray());
 }
@@ -2808,12 +2752,24 @@ void MarkCompactCollector::MigrateObject(HeapObject* dst, HeapObject* src,
     Address dst_slot = dst_addr;
     DCHECK(IsAligned(size, kPointerSize));
 
+    bool may_contain_raw_values = src->MayContainRawValues();
+#if V8_DOUBLE_FIELDS_UNBOXING
+    InobjectPropertiesHelper helper(src->map());
+    bool has_only_tagged_fields = helper.all_fields_tagged();
+#endif
     for (int remaining = size / kPointerSize; remaining > 0; remaining--) {
       Object* value = Memory::Object_at(src_slot);
 
       Memory::Object_at(dst_slot) = value;
 
-      if (!src->MayContainRawValues()) {
+#if V8_DOUBLE_FIELDS_UNBOXING
+      if (!may_contain_raw_values &&
+          (has_only_tagged_fields ||
+           helper.IsTagged(static_cast<int>(src_slot - src_addr))))
+#else
+      if (!may_contain_raw_values)
+#endif
+      {
         RecordMigratedSlot(value, dst_slot);
       }
 
@@ -2926,7 +2882,8 @@ class PointersUpdatingVisitor : public ObjectVisitor {
   }
 
   static inline void UpdateSlot(Heap* heap, Object** slot) {
-    Object* obj = *slot;
+    Object* obj = reinterpret_cast<Object*>(
+        base::NoBarrier_Load(reinterpret_cast<base::AtomicWord*>(slot)));
 
     if (!obj->IsHeapObject()) return;
 
@@ -2937,7 +2894,10 @@ class PointersUpdatingVisitor : public ObjectVisitor {
       DCHECK(heap->InFromSpace(heap_obj) ||
              MarkCompactCollector::IsOnEvacuationCandidate(heap_obj));
       HeapObject* target = map_word.ToForwardingAddress();
-      *slot = target;
+      base::NoBarrier_CompareAndSwap(
+          reinterpret_cast<base::AtomicWord*>(slot),
+          reinterpret_cast<base::AtomicWord>(obj),
+          reinterpret_cast<base::AtomicWord>(target));
       DCHECK(!heap->InFromSpace(target) &&
              !MarkCompactCollector::IsOnEvacuationCandidate(target));
     }
@@ -3434,6 +3394,7 @@ void MarkCompactCollector::EvacuateNewSpaceAndCandidates() {
   {
     GCTracer::Scope gc_scope(heap()->tracer(),
                              GCTracer::Scope::MC_EVACUATE_PAGES);
+    EvacuationScope evacuation_scope(this);
     EvacuatePages();
   }
 
@@ -4180,12 +4141,11 @@ void MarkCompactCollector::SweepSpaces() {
     GCTracer::Scope sweep_scope(heap()->tracer(),
                                 GCTracer::Scope::MC_SWEEP_OLDSPACE);
     {
-      SequentialSweepingScope scope(this);
       SweepSpace(heap()->old_pointer_space(), CONCURRENT_SWEEPING);
       SweepSpace(heap()->old_data_space(), CONCURRENT_SWEEPING);
     }
-
-    if (!FLAG_predictable) {
+    sweeping_in_progress_ = true;
+    if (FLAG_concurrent_sweeping) {
       StartSweeperThreads();
     }
   }
@@ -4220,6 +4180,10 @@ void MarkCompactCollector::SweepSpaces() {
 
   // Deallocate evacuated candidate pages.
   ReleaseEvacuationCandidates();
+  CodeRange* code_range = heap()->isolate()->code_range();
+  if (code_range != NULL && code_range->valid()) {
+    code_range->ReserveEmergencyBlock();
+  }
 
   if (FLAG_print_cumulative_gc_stat) {
     heap_->tracer()->AddSweepingTime(base::OS::TimeCurrentMillis() -

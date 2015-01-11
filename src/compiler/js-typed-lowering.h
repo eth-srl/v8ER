@@ -18,8 +18,7 @@ namespace compiler {
 // Lowers JS-level operators to simplified operators based on types.
 class JSTypedLowering FINAL : public Reducer {
  public:
-  explicit JSTypedLowering(JSGraph* jsgraph)
-      : jsgraph_(jsgraph), simplified_(jsgraph->zone()) {}
+  explicit JSTypedLowering(JSGraph* jsgraph);
   virtual ~JSTypedLowering();
 
   virtual Reduction Reduce(Node* node) OVERRIDE;
@@ -34,14 +33,18 @@ class JSTypedLowering FINAL : public Reducer {
   Reduction ReplaceEagerly(Node* old, Node* node);
   Reduction ReplaceWith(Node* node) { return Reducer::Replace(node); }
   Reduction ReduceJSAdd(Node* node);
+  Reduction ReduceJSBitwiseOr(Node* node);
+  Reduction ReduceJSMultiply(Node* node);
   Reduction ReduceJSComparison(Node* node);
   Reduction ReduceJSLoadProperty(Node* node);
   Reduction ReduceJSStoreProperty(Node* node);
   Reduction ReduceJSEqual(Node* node, bool invert);
   Reduction ReduceJSStrictEqual(Node* node, bool invert);
   Reduction ReduceJSToNumberInput(Node* input);
+  Reduction ReduceJSToNumber(Node* node);
   Reduction ReduceJSToStringInput(Node* input);
   Reduction ReduceJSToBooleanInput(Node* input);
+  Reduction ReduceJSToBoolean(Node* node);
   Reduction ReduceNumberBinop(Node* node, const Operator* numberOp);
   Reduction ReduceI32Binop(Node* node, bool left_signed, bool right_signed,
                            const Operator* intOp);
@@ -55,6 +58,9 @@ class JSTypedLowering FINAL : public Reducer {
 
   JSGraph* jsgraph_;
   SimplifiedOperatorBuilder simplified_;
+  Type* zero_range_;
+  Type* one_range_;
+  Type* zero_thirtyone_range_;
 };
 
 }  // namespace compiler

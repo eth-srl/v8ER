@@ -233,8 +233,12 @@ void JSObject::PrintProperties(std::ostream& os) {  // NOLINT
       switch (descs->GetType(i)) {
         case FIELD: {
           FieldIndex index = FieldIndex::ForDescriptor(map(), i);
-          os << Brief(RawFastPropertyAt(index)) << " (field at offset "
-             << index.property_index() << ")\n";
+          if (IsUnboxedDoubleField(index)) {
+            os << "<unboxed double> " << RawFastDoublePropertyAt(index);
+          } else {
+            os << Brief(RawFastPropertyAt(index));
+          }
+          os << " (field at offset " << index.property_index() << ")\n";
           break;
         }
         case CONSTANT:
@@ -242,9 +246,6 @@ void JSObject::PrintProperties(std::ostream& os) {  // NOLINT
           break;
         case CALLBACKS:
           os << Brief(descs->GetCallbacksObject(i)) << " (callback)\n";
-          break;
-        case NORMAL:  // only in slow mode
-          UNREACHABLE();
           break;
       }
     }
@@ -430,6 +431,9 @@ void Map::MapPrint(std::ostream& os) {  // NOLINT
   os << "\n - instance descriptors " << (owns_descriptors() ? "(own) " : "")
      << "#" << NumberOfOwnDescriptors() << ": "
      << Brief(instance_descriptors());
+  if (FLAG_unbox_double_fields) {
+    os << "\n - layout descriptor: " << Brief(layout_descriptor());
+  }
   if (HasTransitionArray()) {
     os << "\n - transitions: " << Brief(transitions());
   }
@@ -1066,11 +1070,49 @@ void DescriptorArray::Print() {
 
 
 void DescriptorArray::PrintDescriptors(std::ostream& os) {  // NOLINT
+  HandleScope scope(GetIsolate());
   os << "Descriptor array " << number_of_descriptors() << "\n";
   for (int i = 0; i < number_of_descriptors(); i++) {
     Descriptor desc;
     Get(i, &desc);
     os << " " << i << ": " << desc << "\n";
+  }
+  os << "\n";
+}
+
+
+static void PrintBitMask(std::ostream& os, uint32_t value) {  // NOLINT
+  for (int i = 0; i < 32; i++) {
+    if ((i & 7) == 0) os << " ";
+    os << (((value & 1) == 0) ? "_" : "x");
+    value >>= 1;
+  }
+}
+
+
+void LayoutDescriptor::Print() {
+  OFStream os(stdout);
+  this->Print(os);
+  os << std::flush;
+}
+
+
+void LayoutDescriptor::Print(std::ostream& os) {  // NOLINT
+  os << "Layout descriptor: ";
+  if (IsUninitialized()) {
+    os << "<uninitialized>";
+  } else if (IsFastPointerLayout()) {
+    os << "<all tagged>";
+  } else if (IsSmi()) {
+    os << "fast";
+    PrintBitMask(os, static_cast<uint32_t>(Smi::cast(this)->value()));
+  } else {
+    os << "slow";
+    int len = length();
+    for (int i = 0; i < len; i++) {
+      if (i > 0) os << " |";
+      PrintBitMask(os, get_scalar(i));
+    }
   }
   os << "\n";
 }
@@ -1113,10 +1155,6 @@ void TransitionArray::PrintTransitions(std::ostream& os,
         case CALLBACKS:
           os << " (transition to callback " << Brief(GetTargetValue(i)) << ")";
           break;
-        // Values below are never in the target descriptor array.
-        case NORMAL:
-          UNREACHABLE();
-          break;
       }
       os << ", attrs: " << details.attributes();
     }
@@ -1128,4 +1166,38 @@ void TransitionArray::PrintTransitions(std::ostream& os,
 #endif  // OBJECT_PRINT
 
 
+#if TRACE_MAPS
+
+
+void Name::NameShortPrint() {
+  if (this->IsString()) {
+    PrintF("%s", String::cast(this)->ToCString().get());
+  } else {
+    DCHECK(this->IsSymbol());
+    Symbol* s = Symbol::cast(this);
+    if (s->name()->IsUndefined()) {
+      PrintF("#<%s>", s->PrivateSymbolToName());
+    } else {
+      PrintF("<%s>", String::cast(s->name())->ToCString().get());
+    }
+  }
+}
+
+
+int Name::NameShortPrint(Vector<char> str) {
+  if (this->IsString()) {
+    return SNPrintF(str, "%s", String::cast(this)->ToCString().get());
+  } else {
+    DCHECK(this->IsSymbol());
+    Symbol* s = Symbol::cast(this);
+    if (s->name()->IsUndefined()) {
+      return SNPrintF(str, "#<%s>", s->PrivateSymbolToName());
+    } else {
+      return SNPrintF(str, "<%s>", String::cast(s->name())->ToCString().get());
+    }
+  }
+}
+
+
+#endif  // TRACE_MAPS
 } }  // namespace v8::internal

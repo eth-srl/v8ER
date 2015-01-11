@@ -26,13 +26,14 @@
 # define V8_INFINITY INFINITY
 #endif
 
-#if V8_TARGET_ARCH_IA32 || V8_TARGET_ARCH_X64 || V8_TARGET_ARCH_ARM || \
-    V8_TARGET_ARCH_ARM64 || V8_TARGET_ARCH_MIPS
+#if V8_TARGET_ARCH_IA32 || (V8_TARGET_ARCH_X64 && !V8_TARGET_ARCH_32_BIT) || \
+    V8_TARGET_ARCH_ARM || V8_TARGET_ARCH_ARM64 || V8_TARGET_ARCH_MIPS ||     \
+    V8_TARGET_ARCH_MIPS64
 #define V8_TURBOFAN_BACKEND 1
 #else
 #define V8_TURBOFAN_BACKEND 0
 #endif
-#if V8_TURBOFAN_BACKEND && !(V8_OS_WIN && V8_TARGET_ARCH_X64)
+#if V8_TURBOFAN_BACKEND
 #define V8_TURBOFAN_TARGET 1
 #else
 #define V8_TURBOFAN_TARGET 0
@@ -80,6 +81,13 @@ namespace internal {
 #define V8_DEFAULT_STACK_SIZE_KB 984
 #endif
 
+
+// Determine whether double field unboxing feature is enabled.
+#if (V8_TARGET_ARCH_X64 || V8_TARGET_ARCH_ARM64)
+#define V8_DOUBLE_FIELDS_UNBOXING 1
+#else
+#define V8_DOUBLE_FIELDS_UNBOXING 0
+#endif
 
 // Support for alternative bool type. This is only enabled if the code is
 // compiled with USE_MYBOOL defined. This catches some nasty type bugs.
@@ -288,6 +296,7 @@ const uint32_t kFreeListZapValue = 0xfeed1eaf;
 #endif
 
 const int kCodeZapValue = 0xbadc0de;
+const uint32_t kPhantomReferenceZap = 0xca11bac;
 
 // On Intel architecture, cache line size is 64 bytes.
 // On ARM it may be less (32 bytes), but as far this constant is
@@ -376,7 +385,6 @@ enum AllocationSpace {
   CELL_SPACE,           // Only and all cell objects.
   PROPERTY_CELL_SPACE,  // Only and all global property cell objects.
   LO_SPACE,             // Promoted large objects.
-  INVALID_SPACE,        // Only used in AllocationResult to signal success.
 
   FIRST_SPACE = NEW_SPACE,
   LAST_SPACE = LO_SPACE,
@@ -609,6 +617,8 @@ enum CpuFeature {
   SSE4_1,
   SSE3,
   SAHF,
+  AVX,
+  FMA3,
   // ARM
   VFP3,
   ARMv7,
@@ -643,7 +653,7 @@ enum ScopeType {
   EVAL_SCOPE,      // The top-level scope for an eval source.
   FUNCTION_SCOPE,  // The top-level scope for a function.
   MODULE_SCOPE,    // The scope introduced by a module literal
-  GLOBAL_SCOPE,    // The top-level scope for a program or a top-level eval.
+  SCRIPT_SCOPE,    // The top-level scope for a script or a top-level eval.
   CATCH_SCOPE,     // The scope introduced by catch.
   BLOCK_SCOPE,     // The scope introduced by a new block.
   WITH_SCOPE,      // The scope introduced by with.
@@ -775,7 +785,8 @@ enum FunctionKind {
   kArrowFunction = 1,
   kGeneratorFunction = 2,
   kConciseMethod = 4,
-  kConciseGeneratorMethod = kGeneratorFunction | kConciseMethod
+  kConciseGeneratorMethod = kGeneratorFunction | kConciseMethod,
+  kDefaultConstructor = 8
 };
 
 
@@ -784,7 +795,8 @@ inline bool IsValidFunctionKind(FunctionKind kind) {
          kind == FunctionKind::kArrowFunction ||
          kind == FunctionKind::kGeneratorFunction ||
          kind == FunctionKind::kConciseMethod ||
-         kind == FunctionKind::kConciseGeneratorMethod;
+         kind == FunctionKind::kConciseGeneratorMethod ||
+         kind == FunctionKind::kDefaultConstructor;
 }
 
 
@@ -804,6 +816,14 @@ inline bool IsConciseMethod(FunctionKind kind) {
   DCHECK(IsValidFunctionKind(kind));
   return kind & FunctionKind::kConciseMethod;
 }
+
+
+inline bool IsDefaultConstructor(FunctionKind kind) {
+  DCHECK(IsValidFunctionKind(kind));
+  return kind & FunctionKind::kDefaultConstructor;
+}
+
+
 } }  // namespace v8::internal
 
 namespace i = v8::internal;

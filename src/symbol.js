@@ -8,6 +8,14 @@
 // in runtime.js:
 // var $Array = global.Array;
 
+// And requires following symbols to be set in the bootstrapper during genesis:
+// - symbolHasInstance
+// - symbolIsConcatSpreadable
+// - symbolIsRegExp
+// - symbolIterator
+// - symbolToStringTag
+// - symbolUnscopables
+
 var $Symbol = global.Symbol;
 
 // -------------------------------------------------------------------
@@ -40,15 +48,6 @@ function SymbolValueOf() {
 }
 
 
-function InternalSymbol(key) {
-  var internal_registry = %SymbolRegistry().for_intern;
-  if (IS_UNDEFINED(internal_registry[key])) {
-    internal_registry[key] = %CreateSymbol(key);
-  }
-  return internal_registry[key];
-}
-
-
 function SymbolFor(key) {
   key = TO_STRING_INLINE(key);
   var registry = %SymbolRegistry();
@@ -73,19 +72,8 @@ function ObjectGetOwnPropertySymbols(obj) {
 
   // TODO(arv): Proxies use a shared trap for String and Symbol keys.
 
-  return ObjectGetOwnPropertyKeys(obj, true);
+  return ObjectGetOwnPropertyKeys(obj, PROPERTY_ATTRIBUTES_STRING);
 }
-
-
-//-------------------------------------------------------------------
-
-var symbolHasInstance = InternalSymbol("Symbol.hasInstance");
-var symbolIsConcatSpreadable = InternalSymbol("Symbol.isConcatSpreadable");
-var symbolIsRegExp = InternalSymbol("Symbol.isRegExp");
-var symbolIterator = InternalSymbol("Symbol.iterator");
-var symbolToStringTag = InternalSymbol("Symbol.toStringTag");
-var symbolUnscopables = InternalSymbol("Symbol.unscopables");
-
 
 //-------------------------------------------------------------------
 

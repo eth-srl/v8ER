@@ -58,10 +58,6 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
   typedef StructuredGraphBuilder::Environment BaseEnvironment;
   virtual BaseEnvironment* CopyEnvironment(BaseEnvironment* env) OVERRIDE;
 
-  // TODO(mstarzinger): The pipeline only needs to be a friend to access the
-  // function context. Remove as soon as the context is a parameter.
-  friend class Pipeline;
-
   // Getters for values in the activation record.
   Node* GetFunctionClosure();
   Node* GetFunctionContext();
@@ -72,6 +68,9 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
   // other dependencies tracked by the environment might be mutated though.
   //
 
+  // Builder to create a receiver check for sloppy mode.
+  Node* BuildPatchReceiverToGlobalProxy(Node* receiver);
+
   // Builder to create a local function context.
   Node* BuildLocalFunctionContext(Node* context, Node* closure);
 
@@ -80,7 +79,9 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
 
   // Builders for variable load and assignment.
   Node* BuildVariableAssignment(Variable* var, Node* value, Token::Value op,
-                                BailoutId bailout_id);
+                                BailoutId bailout_id,
+                                OutputFrameStateCombine state_combine =
+                                    OutputFrameStateCombine::Ignore());
   Node* BuildVariableDelete(Variable* var, BailoutId bailout_id,
                             OutputFrameStateCombine state_combine);
   Node* BuildVariableLoad(Variable* var, BailoutId bailout_id,
@@ -90,6 +91,7 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
   // Builders for accessing the function context.
   Node* BuildLoadBuiltinsObject();
   Node* BuildLoadGlobalObject();
+  Node* BuildLoadGlobalProxy();
   Node* BuildLoadClosure();
   Node* BuildLoadObjectField(Node* object, int offset);
 
@@ -98,6 +100,7 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
 
   // Builders for error reporting at runtime.
   Node* BuildThrowReferenceError(Variable* var, BailoutId bailout_id);
+  Node* BuildThrowConstAssignError(BailoutId bailout_id);
 
   // Builders for dynamic hole-checks at runtime.
   Node* BuildHoleCheckSilent(Node* value, Node* for_hole, Node* not_hole);
@@ -124,7 +127,7 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
   JSGraph* jsgraph_;
 
   // List of global declarations for functions and variables.
-  ZoneList<Handle<Object> > globals_;
+  ZoneVector<Handle<Object>> globals_;
 
   // Stack of breakable statements entered by the visitor.
   BreakableScope* breakable_;
@@ -143,7 +146,7 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
   inline StrictMode strict_mode() const;
   JSGraph* jsgraph() { return jsgraph_; }
   JSOperatorBuilder* javascript() { return jsgraph_->javascript(); }
-  ZoneList<Handle<Object> >* globals() { return &globals_; }
+  ZoneVector<Handle<Object>>* globals() { return &globals_; }
 
   // Current scope during visitation.
   inline Scope* current_scope() const;
@@ -159,6 +162,7 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
   void VisitIfNotNull(Statement* stmt);
 
   // Visit expressions.
+  void Visit(Expression* expr);
   void VisitForTest(Expression* expr);
   void VisitForEffect(Expression* expr);
   void VisitForValue(Expression* expr);

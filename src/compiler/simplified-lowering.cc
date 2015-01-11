@@ -9,6 +9,7 @@
 #include "src/base/bits.h"
 #include "src/code-factory.h"
 #include "src/compiler/common-operator.h"
+#include "src/compiler/diamond.h"
 #include "src/compiler/graph-inl.h"
 #include "src/compiler/node-matchers.h"
 #include "src/compiler/node-properties-inl.h"
@@ -296,61 +297,46 @@ class RepresentationSelector {
   void VisitInt64Cmp(Node* node) { VisitBinop(node, kMachInt64, kRepBit); }
   void VisitUint64Cmp(Node* node) { VisitBinop(node, kMachUint64, kRepBit); }
 
+  // Infer representation for phi-like nodes.
+  MachineType GetRepresentationForPhi(Node* node, MachineTypeUnion use) {
+    // Phis adapt to the output representation their uses demand.
+    Type* upper = NodeProperties::GetBounds(node).upper;
+    if ((use & kRepMask) == kRepTagged) {
+      // only tagged uses.
+      return kRepTagged;
+    } else if (IsSafeIntAdditiveOperand(node)) {
+      // Integer within [-2^52, 2^52] range.
+      if ((use & kRepMask) == kRepFloat64) {
+        // only float64 uses.
+        return kRepFloat64;
+      } else if (upper->Is(Type::Signed32()) || upper->Is(Type::Unsigned32())) {
+        // multiple uses, but we are within 32 bits range => pick kRepWord32.
+        return kRepWord32;
+      } else if ((use & kRepMask) == kRepWord32 ||
+                 (use & kTypeMask) == kTypeInt32 ||
+                 (use & kTypeMask) == kTypeUint32) {
+        // The type is a safe integer, but we only use 32 bits.
+        return kRepWord32;
+      } else {
+        return kRepFloat64;
+      }
+    } else if (upper->Is(Type::Boolean())) {
+      // multiple uses => pick kRepBit.
+      return kRepBit;
+    } else if (upper->Is(Type::Number())) {
+      // multiple uses => pick kRepFloat64.
+      return kRepFloat64;
+    }
+    return kRepTagged;
+  }
+
   // Helper for handling selects.
-  // TODO(turbofan): Share some code with VisitPhi() below?
   void VisitSelect(Node* node, MachineTypeUnion use,
                    SimplifiedLowering* lowering) {
     ProcessInput(node, 0, kRepBit);
+    MachineType output = GetRepresentationForPhi(node, use);
 
-    // Selects adapt to the output representation their uses demand, pushing
-    // representation changes to their inputs.
     Type* upper = NodeProperties::GetBounds(node).upper;
-    MachineType output = kMachNone;
-    MachineType propagate = kMachNone;
-
-    if (upper->Is(Type::Signed32()) || upper->Is(Type::Unsigned32())) {
-      // legal = kRepTagged | kRepFloat64 | kRepWord32;
-      if ((use & kRepMask) == kRepTagged) {
-        // only tagged uses.
-        output = kRepTagged;
-        propagate = kRepTagged;
-      } else if ((use & kRepMask) == kRepFloat64) {
-        // only float64 uses.
-        output = kRepFloat64;
-        propagate = kRepFloat64;
-      } else {
-        // multiple uses.
-        output = kRepWord32;
-        propagate = kRepWord32;
-      }
-    } else if (upper->Is(Type::Boolean())) {
-      // legal = kRepTagged | kRepBit;
-      if ((use & kRepMask) == kRepTagged) {
-        // only tagged uses.
-        output = kRepTagged;
-        propagate = kRepTagged;
-      } else {
-        // multiple uses.
-        output = kRepBit;
-        propagate = kRepBit;
-      }
-    } else if (upper->Is(Type::Number())) {
-      // legal = kRepTagged | kRepFloat64;
-      if ((use & kRepMask) == kRepTagged) {
-        // only tagged uses.
-        output = kRepTagged;
-        propagate = kRepTagged;
-      } else {
-        // multiple uses.
-        output = kRepFloat64;
-        propagate = kRepFloat64;
-      }
-    } else {
-      // legal = kRepTagged;
-      output = kRepTagged;
-      propagate = kRepTagged;
-    }
-
     MachineType output_type =
         static_cast<MachineType>(changer_->TypeFromUpperBound(upper) | output);
     SetOutput(node, output_type);
@@ -369,7 +355,7 @@ class RepresentationSelector {
     } else {
       // Propagate {use} of the select to value inputs.
       MachineType use_type =
-          static_cast<MachineType>((use & kTypeMask) | propagate);
+          static_cast<MachineType>((use & kTypeMask) | output);
       ProcessInput(node, 1, use_type);
       ProcessInput(node, 2, use_type);
     }
@@ -378,55 +364,9 @@ class RepresentationSelector {
   // Helper for handling phis.
   void VisitPhi(Node* node, MachineTypeUnion use,
                 SimplifiedLowering* lowering) {
-    // Phis adapt to the output representation their uses demand, pushing
-    // representation changes to their inputs.
+    MachineType output = GetRepresentationForPhi(node, use);
+
     Type* upper = NodeProperties::GetBounds(node).upper;
-    MachineType output = kMachNone;
-    MachineType propagate = kMachNone;
-
-    if (upper->Is(Type::Signed32()) || upper->Is(Type::Unsigned32())) {
-      // legal = kRepTagged | kRepFloat64 | kRepWord32;
-      if ((use & kRepMask) == kRepTagged) {
-        // only tagged uses.
-        output = kRepTagged;
-        propagate = kRepTagged;
-      } else if ((use & kRepMask) == kRepFloat64) {
-        // only float64 uses.
-        output = kRepFloat64;
-        propagate = kRepFloat64;
-      } else {
-        // multiple uses.
-        output = kRepWord32;
-        propagate = kRepWord32;
-      }
-    } else if (upper->Is(Type::Boolean())) {
-      // legal = kRepTagged | kRepBit;
-      if ((use & kRepMask) == kRepTagged) {
-        // only tagged uses.
-        output = kRepTagged;
-        propagate = kRepTagged;
-      } else {
-        // multiple uses.
-        output = kRepBit;
-        propagate = kRepBit;
-      }
-    } else if (upper->Is(Type::Number())) {
-      // legal = kRepTagged | kRepFloat64;
-      if ((use & kRepMask) == kRepTagged) {
-        // only tagged uses.
-        output = kRepTagged;
-        propagate = kRepTagged;
-      } else {
-        // multiple uses.
-        output = kRepFloat64;
-        propagate = kRepFloat64;
-      }
-    } else {
-      // legal = kRepTagged;
-      output = kRepTagged;
-      propagate = kRepTagged;
-    }
-
     MachineType output_type =
         static_cast<MachineType>(changer_->TypeFromUpperBound(upper) | output);
     SetOutput(node, output_type);
@@ -451,7 +391,7 @@ class RepresentationSelector {
       // Propagate {use} of the phi to value inputs, and 0 to control.
       Node::Inputs inputs = node->inputs();
       MachineType use_type =
-          static_cast<MachineType>((use & kTypeMask) | propagate);
+          static_cast<MachineType>((use & kTypeMask) | output);
       for (Node::Inputs::iterator iter(inputs.begin()); iter != inputs.end();
            ++iter, --values) {
         // TODO(titzer): it'd be nice to have distinguished edge kinds here.
@@ -693,7 +633,7 @@ class RepresentationSelector {
           if (lower()) DeferReplacement(node, lowering->Int32Div(node));
           break;
         }
-        if (CanLowerToUint32Binop(node, use)) {
+        if (BothInputsAre(node, Type::Unsigned32()) && !CanObserveNaN(use)) {
           // => unsigned Uint32Div
           VisitUint32Binop(node);
           if (lower()) DeferReplacement(node, lowering->Uint32Div(node));
@@ -725,13 +665,18 @@ class RepresentationSelector {
       case IrOpcode::kNumberToInt32: {
         MachineTypeUnion use_rep = use & kRepMask;
         Node* input = node->InputAt(0);
+        Type* in_upper = NodeProperties::GetBounds(input).upper;
         MachineTypeUnion in = GetInfo(input)->output;
-        if (NodeProperties::GetBounds(input).upper->Is(Type::Signed32())) {
+        if (in_upper->Is(Type::Signed32())) {
           // If the input has type int32, pass through representation.
           VisitUnop(node, kTypeInt32 | use_rep, kTypeInt32 | use_rep);
           if (lower()) DeferReplacement(node, node->InputAt(0));
         } else if ((in & kTypeMask) == kTypeUint32 ||
-                   (in & kTypeMask) == kTypeInt32 ||
+                   in_upper->Is(Type::Unsigned32())) {
+          // Just change representation if necessary.
+          VisitUnop(node, kTypeUint32 | kRepWord32, kTypeInt32 | kRepWord32);
+          if (lower()) DeferReplacement(node, node->InputAt(0));
+        } else if ((in & kTypeMask) == kTypeInt32 ||
                    (in & kRepMask) == kRepWord32) {
           // Just change representation if necessary.
           VisitUnop(node, kTypeInt32 | kRepWord32, kTypeInt32 | kRepWord32);
@@ -748,16 +693,21 @@ class RepresentationSelector {
       case IrOpcode::kNumberToUint32: {
         MachineTypeUnion use_rep = use & kRepMask;
         Node* input = node->InputAt(0);
+        Type* in_upper = NodeProperties::GetBounds(input).upper;
         MachineTypeUnion in = GetInfo(input)->output;
-        if (NodeProperties::GetBounds(input).upper->Is(Type::Unsigned32())) {
+        if (in_upper->Is(Type::Unsigned32())) {
           // If the input has type uint32, pass through representation.
           VisitUnop(node, kTypeUint32 | use_rep, kTypeUint32 | use_rep);
           if (lower()) DeferReplacement(node, node->InputAt(0));
         } else if ((in & kTypeMask) == kTypeUint32 ||
-                   (in & kTypeMask) == kTypeInt32 ||
-                   (in & kRepMask) == kRepWord32) {
+                   in_upper->Is(Type::Unsigned32())) {
           // Just change representation if necessary.
           VisitUnop(node, kTypeUint32 | kRepWord32, kTypeUint32 | kRepWord32);
+          if (lower()) DeferReplacement(node, node->InputAt(0));
+        } else if ((in & kTypeMask) == kTypeInt32 ||
+                   (in & kRepMask) == kRepWord32) {
+          // Just change representation if necessary.
+          VisitUnop(node, kTypeInt32 | kRepWord32, kTypeUint32 | kRepWord32);
           if (lower()) DeferReplacement(node, node->InputAt(0));
         } else {
           // Require the input in float64 format and perform truncation.
@@ -914,11 +864,13 @@ class RepresentationSelector {
       case IrOpcode::kInt32Add:
       case IrOpcode::kInt32Sub:
       case IrOpcode::kInt32Mul:
+      case IrOpcode::kInt32MulHigh:
       case IrOpcode::kInt32Div:
       case IrOpcode::kInt32Mod:
         return VisitInt32Binop(node);
       case IrOpcode::kUint32Div:
       case IrOpcode::kUint32Mod:
+      case IrOpcode::kUint32MulHigh:
         return VisitUint32Binop(node);
       case IrOpcode::kInt32LessThan:
       case IrOpcode::kInt32LessThanOrEqual:
@@ -1227,11 +1179,9 @@ void SimplifiedLowering::DoLoadElement(Node* node, MachineType output_type) {
       node->ReplaceInput(2, effect);
       node->ReplaceInput(3, graph()->start());
     } else {
-      Node* branch = graph()->NewNode(common()->Branch(BranchHint::kTrue),
-                                      check, graph()->start());
+      Diamond d(graph(), common(), check, BranchHint::kTrue);
 
-      Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-      Node* load = graph()->NewNode(op, base, index, effect, if_true);
+      Node* load = graph()->NewNode(op, base, index, effect, d.if_true);
       Node* result = load;
       if (output_type & kRepTagged) {
         // TODO(turbofan): This is ugly as hell!
@@ -1242,7 +1192,6 @@ void SimplifiedLowering::DoLoadElement(Node* node, MachineType output_type) {
             changer.GetTaggedRepresentationFor(result, access.machine_type);
       }
 
-      Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
       Node* undefined;
       if (output_type & kRepTagged) {
         DCHECK_EQ(0, access.machine_type & kRepTagged);
@@ -1257,23 +1206,10 @@ void SimplifiedLowering::DoLoadElement(Node* node, MachineType output_type) {
         undefined = jsgraph()->Int32Constant(0);
       }
 
-      Node* merge = graph()->NewNode(common()->Merge(2), if_true, if_false);
-      Node* phi = graph()->NewNode(common()->EffectPhi(2), load, effect, merge);
-
       // Replace effect uses of node with the effect phi.
-      for (UseIter i = node->uses().begin(); i != node->uses().end();) {
-        if (NodeProperties::IsEffectEdge(i.edge())) {
-          i = i.UpdateToAndIncrement(phi);
-        } else {
-          ++i;
-        }
-      }
+      NodeProperties::ReplaceWithValue(node, node, d.EffectPhi(load, effect));
 
-      node->set_op(common()->Phi(output_type, 2));
-      node->ReplaceInput(0, result);
-      node->ReplaceInput(1, undefined);
-      node->ReplaceInput(2, merge);
-      node->TrimInputCount(3);
+      d.OverwriteWithPhi(node, output_type, result, undefined);
     }
   }
 }
@@ -1312,21 +1248,10 @@ void SimplifiedLowering::DoStoreElement(Node* node) {
       node->ReplaceInput(1, select);
       node->RemoveInput(2);
     } else {
-      Node* branch =
-          graph()->NewNode(common()->Branch(BranchHint::kTrue), check, control);
-
-      Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-      Node* store = graph()->NewNode(op, base, index, value, effect, if_true);
-
-      Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-
-      Node* merge = graph()->NewNode(common()->Merge(2), if_true, if_false);
-
-      node->set_op(common()->EffectPhi(2));
-      node->ReplaceInput(0, store);
-      node->ReplaceInput(1, effect);
-      node->ReplaceInput(2, merge);
-      node->TrimInputCount(3);
+      Diamond d(graph(), common(), check, BranchHint::kTrue);
+      d.Chain(control);
+      Node* store = graph()->NewNode(op, base, index, value, effect, d.if_true);
+      d.OverwriteWithEffectPhi(node, store, effect);
     }
   }
 }
@@ -1380,77 +1305,118 @@ Node* SimplifiedLowering::Int32Div(Node* const node) {
     return graph()->NewNode(machine()->Int32Div(), lhs, rhs, graph()->start());
   }
 
-  Node* check0 = graph()->NewNode(machine()->Word32Equal(), rhs, zero);
-  Node* branch0 = graph()->NewNode(common()->Branch(BranchHint::kFalse), check0,
-                                   graph()->start());
+  Diamond if_zero(graph(), common(),
+                  graph()->NewNode(machine()->Word32Equal(), rhs, zero),
+                  BranchHint::kFalse);
 
-  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
-  Node* true0 = zero;
+  Diamond if_minus_one(graph(), common(),
+                       graph()->NewNode(machine()->Word32Equal(), rhs,
+                                        jsgraph()->Int32Constant(-1)),
+                       BranchHint::kFalse);
+  if_minus_one.Nest(if_zero, false);
+  Node* sub = graph()->NewNode(machine()->Int32Sub(), zero, lhs);
+  Node* div =
+      graph()->NewNode(machine()->Int32Div(), lhs, rhs, if_minus_one.if_false);
 
-  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
-  Node* false0 = nullptr;
-  {
-    Node* check1 = graph()->NewNode(machine()->Word32Equal(), rhs,
-                                    jsgraph()->Int32Constant(-1));
-    Node* branch1 = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                     check1, if_false0);
-
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* true1 = graph()->NewNode(machine()->Int32Sub(), zero, lhs);
-
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* false1 = graph()->NewNode(machine()->Int32Div(), lhs, rhs, if_false1);
-
-    if_false0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    false0 = graph()->NewNode(common()->Phi(kMachInt32, 2), true1, false1,
-                              if_false0);
-  }
-
-  Node* merge0 = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
-  return graph()->NewNode(common()->Phi(kMachInt32, 2), true0, false0, merge0);
+  return if_zero.Phi(kMachInt32, zero, if_minus_one.Phi(kMachInt32, sub, div));
 }
 
 
 Node* SimplifiedLowering::Int32Mod(Node* const node) {
   Int32BinopMatcher m(node);
   Node* const zero = jsgraph()->Int32Constant(0);
+  Node* const minus_one = jsgraph()->Int32Constant(-1);
   Node* const lhs = m.left().node();
   Node* const rhs = m.right().node();
 
   if (m.right().Is(-1) || m.right().Is(0)) {
     return zero;
-  } else if (machine()->Int32ModIsSafe() || m.right().HasValue()) {
+  } else if (m.right().HasValue()) {
     return graph()->NewNode(machine()->Int32Mod(), lhs, rhs, graph()->start());
   }
 
-  Node* check0 = graph()->NewNode(machine()->Word32Equal(), rhs, zero);
-  Node* branch0 = graph()->NewNode(common()->Branch(BranchHint::kFalse), check0,
+  // General case for signed integer modulus, with optimization for (unknown)
+  // power of 2 right hand side.
+  //
+  //   if 0 < rhs then
+  //     msk = rhs - 1
+  //     if rhs & msk != 0 then
+  //       lhs % rhs
+  //     else
+  //       if lhs < 0 then
+  //         -(-lhs & msk)
+  //       else
+  //         lhs & msk
+  //   else
+  //     if rhs < -1 then
+  //       lhs % rhs
+  //     else
+  //       zero
+  //
+  // Note: We do not use the Diamond helper class here, because it really hurts
+  // readability with nested diamonds.
+  const Operator* const merge_op = common()->Merge(2);
+  const Operator* const phi_op = common()->Phi(kMachInt32, 2);
+
+  Node* check0 = graph()->NewNode(machine()->Int32LessThan(), zero, rhs);
+  Node* branch0 = graph()->NewNode(common()->Branch(BranchHint::kTrue), check0,
                                    graph()->start());
 
   Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
-  Node* true0 = zero;
+  Node* true0;
+  {
+    Node* msk = graph()->NewNode(machine()->Int32Add(), rhs, minus_one);
+
+    Node* check1 = graph()->NewNode(machine()->Word32And(), rhs, msk);
+    Node* branch1 = graph()->NewNode(common()->Branch(), check1, if_true0);
+
+    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
+    Node* true1 = graph()->NewNode(machine()->Int32Mod(), lhs, rhs, if_true1);
+
+    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
+    Node* false1;
+    {
+      Node* check2 = graph()->NewNode(machine()->Int32LessThan(), lhs, zero);
+      Node* branch2 = graph()->NewNode(common()->Branch(BranchHint::kFalse),
+                                       check2, if_false1);
+
+      Node* if_true2 = graph()->NewNode(common()->IfTrue(), branch2);
+      Node* true2 = graph()->NewNode(
+          machine()->Int32Sub(), zero,
+          graph()->NewNode(machine()->Word32And(),
+                           graph()->NewNode(machine()->Int32Sub(), zero, lhs),
+                           msk));
+
+      Node* if_false2 = graph()->NewNode(common()->IfFalse(), branch2);
+      Node* false2 = graph()->NewNode(machine()->Word32And(), lhs, msk);
+
+      if_false1 = graph()->NewNode(merge_op, if_true2, if_false2);
+      false1 = graph()->NewNode(phi_op, true2, false2, if_false1);
+    }
+
+    if_true0 = graph()->NewNode(merge_op, if_true1, if_false1);
+    true0 = graph()->NewNode(phi_op, true1, false1, if_true0);
+  }
 
   Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
-  Node* false0 = nullptr;
+  Node* false0;
   {
-    Node* check1 = graph()->NewNode(machine()->Word32Equal(), rhs,
-                                    jsgraph()->Int32Constant(-1));
-    Node* branch1 = graph()->NewNode(common()->Branch(BranchHint::kFalse),
+    Node* check1 = graph()->NewNode(machine()->Int32LessThan(), rhs, minus_one);
+    Node* branch1 = graph()->NewNode(common()->Branch(BranchHint::kTrue),
                                      check1, if_false0);
 
     Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* true1 = zero;
+    Node* true1 = graph()->NewNode(machine()->Int32Mod(), lhs, rhs, if_true1);
 
     Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* false1 = graph()->NewNode(machine()->Int32Mod(), lhs, rhs, if_false1);
+    Node* false1 = zero;
 
-    if_false0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    false0 = graph()->NewNode(common()->Phi(kMachInt32, 2), true1, false1,
-                              if_false0);
+    if_false0 = graph()->NewNode(merge_op, if_true1, if_false1);
+    false0 = graph()->NewNode(phi_op, true1, false1, if_false0);
   }
 
-  Node* merge0 = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
-  return graph()->NewNode(common()->Phi(kMachInt32, 2), true0, false0, merge0);
+  Node* merge0 = graph()->NewNode(merge_op, if_true0, if_false0);
+  return graph()->NewNode(phi_op, true0, false0, merge0);
 }
 
 
@@ -1467,44 +1433,68 @@ Node* SimplifiedLowering::Uint32Div(Node* const node) {
   }
 
   Node* check = graph()->NewNode(machine()->Word32Equal(), rhs, zero);
-  Node* branch = graph()->NewNode(common()->Branch(BranchHint::kFalse), check,
-                                  graph()->start());
-
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* vtrue = zero;
-
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* vfalse = graph()->NewNode(machine()->Uint32Div(), lhs, rhs, if_false);
-
-  Node* merge = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  return graph()->NewNode(common()->Phi(kMachUint32, 2), vtrue, vfalse, merge);
+  Diamond d(graph(), common(), check, BranchHint::kFalse);
+  Node* div = graph()->NewNode(machine()->Uint32Div(), lhs, rhs, d.if_false);
+  return d.Phi(kMachUint32, zero, div);
 }
 
 
 Node* SimplifiedLowering::Uint32Mod(Node* const node) {
   Uint32BinopMatcher m(node);
+  Node* const minus_one = jsgraph()->Int32Constant(-1);
   Node* const zero = jsgraph()->Uint32Constant(0);
   Node* const lhs = m.left().node();
   Node* const rhs = m.right().node();
 
   if (m.right().Is(0)) {
     return zero;
-  } else if (machine()->Uint32ModIsSafe() || m.right().HasValue()) {
+  } else if (m.right().HasValue()) {
     return graph()->NewNode(machine()->Uint32Mod(), lhs, rhs, graph()->start());
   }
 
-  Node* check = graph()->NewNode(machine()->Word32Equal(), rhs, zero);
-  Node* branch = graph()->NewNode(common()->Branch(BranchHint::kFalse), check,
-                                  graph()->start());
+  // General case for unsigned integer modulus, with optimization for (unknown)
+  // power of 2 right hand side.
+  //
+  //   if rhs then
+  //     msk = rhs - 1
+  //     if rhs & msk != 0 then
+  //       lhs % rhs
+  //     else
+  //       lhs & msk
+  //   else
+  //     zero
+  //
+  // Note: We do not use the Diamond helper class here, because it really hurts
+  // readability with nested diamonds.
+  const Operator* const merge_op = common()->Merge(2);
+  const Operator* const phi_op = common()->Phi(kMachInt32, 2);
 
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* vtrue = zero;
+  Node* branch0 = graph()->NewNode(common()->Branch(BranchHint::kTrue), rhs,
+                                   graph()->start());
 
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* vfalse = graph()->NewNode(machine()->Uint32Mod(), lhs, rhs, if_false);
+  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
+  Node* true0;
+  {
+    Node* msk = graph()->NewNode(machine()->Int32Add(), rhs, minus_one);
 
-  Node* merge = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  return graph()->NewNode(common()->Phi(kMachUint32, 2), vtrue, vfalse, merge);
+    Node* check1 = graph()->NewNode(machine()->Word32And(), rhs, msk);
+    Node* branch1 = graph()->NewNode(common()->Branch(), check1, if_true0);
+
+    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
+    Node* true1 = graph()->NewNode(machine()->Uint32Mod(), lhs, rhs, if_true1);
+
+    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
+    Node* false1 = graph()->NewNode(machine()->Word32And(), lhs, msk);
+
+    if_true0 = graph()->NewNode(merge_op, if_true1, if_false1);
+    true0 = graph()->NewNode(phi_op, true1, false1, if_true0);
+  }
+
+  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
+  Node* false0 = zero;
+
+  Node* merge0 = graph()->NewNode(merge_op, if_true0, if_false0);
+  return graph()->NewNode(phi_op, true0, false0, merge0);
 }
 
 

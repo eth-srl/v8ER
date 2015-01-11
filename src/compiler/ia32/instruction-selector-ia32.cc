@@ -524,13 +524,6 @@ static inline void VisitShift(InstructionSelector* selector, Node* node,
     selector->Emit(opcode, g.DefineSameAsFirst(node), g.UseRegister(left),
                    g.UseImmediate(right));
   } else {
-    Int32BinopMatcher m(node);
-    if (m.right().IsWord32And()) {
-      Int32BinopMatcher mright(right);
-      if (mright.right().Is(0x1F)) {
-        right = mright.left().node();
-      }
-    }
     selector->Emit(opcode, g.DefineSameAsFirst(node), g.UseRegister(left),
                    g.UseFixed(right, ecx));
   }
@@ -646,23 +639,43 @@ void InstructionSelector::VisitInt32Mul(Node* node) {
 }
 
 
-void InstructionSelector::VisitInt32MulHigh(Node* node) {
-  IA32OperandGenerator g(this);
-  InstructionOperand* temps[] = {g.TempRegister(eax)};
-  Emit(kIA32ImulHigh, g.DefineAsFixed(node, edx),
-       g.UseFixed(node->InputAt(0), eax), g.UseUniqueRegister(node->InputAt(1)),
-       arraysize(temps), temps);
+namespace {
+
+void VisitMulHigh(InstructionSelector* selector, Node* node,
+                  ArchOpcode opcode) {
+  IA32OperandGenerator g(selector);
+  selector->Emit(opcode, g.DefineAsFixed(node, edx),
+                 g.UseFixed(node->InputAt(0), eax),
+                 g.UseUniqueRegister(node->InputAt(1)));
 }
 
 
-static inline void VisitDiv(InstructionSelector* selector, Node* node,
-                            ArchOpcode opcode) {
+void VisitDiv(InstructionSelector* selector, Node* node, ArchOpcode opcode) {
   IA32OperandGenerator g(selector);
   InstructionOperand* temps[] = {g.TempRegister(edx)};
-  size_t temp_count = arraysize(temps);
   selector->Emit(opcode, g.DefineAsFixed(node, eax),
                  g.UseFixed(node->InputAt(0), eax),
-                 g.UseUnique(node->InputAt(1)), temp_count, temps);
+                 g.UseUnique(node->InputAt(1)), arraysize(temps), temps);
+}
+
+
+void VisitMod(InstructionSelector* selector, Node* node, ArchOpcode opcode) {
+  IA32OperandGenerator g(selector);
+  selector->Emit(opcode, g.DefineAsFixed(node, edx),
+                 g.UseFixed(node->InputAt(0), eax),
+                 g.UseUnique(node->InputAt(1)));
+}
+
+}  // namespace
+
+
+void InstructionSelector::VisitInt32MulHigh(Node* node) {
+  VisitMulHigh(this, node, kIA32ImulHigh);
+}
+
+
+void InstructionSelector::VisitUint32MulHigh(Node* node) {
+  VisitMulHigh(this, node, kIA32UmulHigh);
 }
 
 
@@ -673,17 +686,6 @@ void InstructionSelector::VisitInt32Div(Node* node) {
 
 void InstructionSelector::VisitUint32Div(Node* node) {
   VisitDiv(this, node, kIA32Udiv);
-}
-
-
-static inline void VisitMod(InstructionSelector* selector, Node* node,
-                            ArchOpcode opcode) {
-  IA32OperandGenerator g(selector);
-  InstructionOperand* temps[] = {g.TempRegister(eax), g.TempRegister(edx)};
-  size_t temp_count = arraysize(temps);
-  selector->Emit(opcode, g.DefineAsFixed(node, edx),
-                 g.UseFixed(node->InputAt(0), eax),
-                 g.UseUnique(node->InputAt(1)), temp_count, temps);
 }
 
 
@@ -736,28 +738,28 @@ void InstructionSelector::VisitTruncateFloat64ToFloat32(Node* node) {
 void InstructionSelector::VisitFloat64Add(Node* node) {
   IA32OperandGenerator g(this);
   Emit(kSSEFloat64Add, g.DefineSameAsFirst(node),
-       g.UseRegister(node->InputAt(0)), g.UseRegister(node->InputAt(1)));
+       g.UseRegister(node->InputAt(0)), g.Use(node->InputAt(1)));
 }
 
 
 void InstructionSelector::VisitFloat64Sub(Node* node) {
   IA32OperandGenerator g(this);
   Emit(kSSEFloat64Sub, g.DefineSameAsFirst(node),
-       g.UseRegister(node->InputAt(0)), g.UseRegister(node->InputAt(1)));
+       g.UseRegister(node->InputAt(0)), g.Use(node->InputAt(1)));
 }
 
 
 void InstructionSelector::VisitFloat64Mul(Node* node) {
   IA32OperandGenerator g(this);
   Emit(kSSEFloat64Mul, g.DefineSameAsFirst(node),
-       g.UseRegister(node->InputAt(0)), g.UseRegister(node->InputAt(1)));
+       g.UseRegister(node->InputAt(0)), g.Use(node->InputAt(1)));
 }
 
 
 void InstructionSelector::VisitFloat64Div(Node* node) {
   IA32OperandGenerator g(this);
   Emit(kSSEFloat64Div, g.DefineSameAsFirst(node),
-       g.UseRegister(node->InputAt(0)), g.UseRegister(node->InputAt(1)));
+       g.UseRegister(node->InputAt(0)), g.Use(node->InputAt(1)));
 }
 
 
@@ -1001,10 +1003,6 @@ void VisitWordCompareZero(InstructionSelector* selector, Node* user,
 void InstructionSelector::VisitBranch(Node* branch, BasicBlock* tbranch,
                                       BasicBlock* fbranch) {
   FlagsContinuation cont(kNotEqual, tbranch, fbranch);
-  if (IsNextInAssemblyOrder(tbranch)) {  // We can fallthru to the true block.
-    cont.Negate();
-    cont.SwapBlocks();
-  }
   VisitWordCompareZero(this, branch, branch->InputAt(0), &cont);
 }
 
@@ -1087,7 +1085,8 @@ InstructionSelector::SupportedMachineOperatorFlags() {
   if (CpuFeatures::IsSupported(SSE4_1)) {
     return MachineOperatorBuilder::kFloat64Floor |
            MachineOperatorBuilder::kFloat64Ceil |
-           MachineOperatorBuilder::kFloat64RoundTruncate;
+           MachineOperatorBuilder::kFloat64RoundTruncate |
+           MachineOperatorBuilder::kWord32ShiftIsSafe;
   }
   return MachineOperatorBuilder::Flag::kNoFlags;
 }

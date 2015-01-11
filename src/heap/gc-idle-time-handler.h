@@ -92,8 +92,17 @@ class GCIdleTimeHandler {
   // conservative lower bound for the mark-compact speed.
   static const size_t kInitialConservativeMarkCompactSpeed = 2 * MB;
 
+  // If we haven't recorded any final incremental mark-compact events yet, we
+  // use conservative lower bound for the mark-compact speed.
+  static const size_t kInitialConservativeFinalIncrementalMarkCompactSpeed =
+      2 * MB;
+
   // Maximum mark-compact time returned by EstimateMarkCompactTime.
   static const size_t kMaxMarkCompactTimeInMs;
+
+  // Maximum final incremental mark-compact time returned by
+  // EstimateFinalIncrementalMarkCompactTime.
+  static const size_t kMaxFinalIncrementalMarkCompactTimeInMs;
 
   // Minimum time to finalize sweeping phase. The main thread may wait for
   // sweeper threads.
@@ -106,10 +115,6 @@ class GCIdleTimeHandler {
   // Number of scavenges that will trigger start of new idle round.
   static const int kIdleScavengeThreshold;
 
-  // Heap size threshold below which we prefer mark-compact over incremental
-  // step.
-  static const size_t kSmallHeapSize = 4 * kPointerSize * MB;
-
   // That is the maximum idle time we will have during frame rendering.
   static const size_t kMaxFrameRenderingIdleTime = 16;
 
@@ -117,14 +122,22 @@ class GCIdleTimeHandler {
   // lower bound for the scavenger speed.
   static const size_t kInitialConservativeScavengeSpeed = 100 * KB;
 
-  struct HeapState {
+  // If contexts are disposed at a higher rate a full gc is triggered.
+  static const double kHighContextDisposalRate;
+
+  class HeapState {
+   public:
+    void Print();
+
     int contexts_disposed;
+    double contexts_disposal_rate;
     size_t size_of_objects;
     bool incremental_marking_stopped;
     bool can_start_incremental_marking;
     bool sweeping_in_progress;
     size_t mark_compact_speed_in_bytes_per_ms;
     size_t incremental_marking_speed_in_bytes_per_ms;
+    size_t final_incremental_mark_compact_speed_in_bytes_per_ms;
     size_t scavenge_speed_in_bytes_per_ms;
     size_t used_new_space_size;
     size_t new_space_capacity;
@@ -155,9 +168,19 @@ class GCIdleTimeHandler {
   static size_t EstimateMarkCompactTime(
       size_t size_of_objects, size_t mark_compact_speed_in_bytes_per_ms);
 
+  static size_t EstimateFinalIncrementalMarkCompactTime(
+      size_t size_of_objects, size_t mark_compact_speed_in_bytes_per_ms);
+
   static bool ShouldDoMarkCompact(size_t idle_time_in_ms,
                                   size_t size_of_objects,
                                   size_t mark_compact_speed_in_bytes_per_ms);
+
+  static bool ShouldDoContextDisposalMarkCompact(bool context_disposed,
+                                                 double contexts_disposal_rate);
+
+  static bool ShouldDoFinalIncrementalMarkCompact(
+      size_t idle_time_in_ms, size_t size_of_objects,
+      size_t final_incremental_mark_compact_speed_in_bytes_per_ms);
 
   static bool ShouldDoScavenge(
       size_t idle_time_in_ms, size_t new_space_size, size_t used_new_space_size,

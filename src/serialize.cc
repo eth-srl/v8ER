@@ -807,11 +807,27 @@ Object* Deserializer::ProcessBackRefInSerializedCode(Object* obj) {
 // The reason for this strange interface is that otherwise the object is
 // written very late, which means the FreeSpace map is not set up by the
 // time we need to use it to mark the space at the end of a page free.
-void Deserializer::ReadObject(int space_number,
-                              Object** write_back) {
-  int size = source_->GetInt() << kObjectAlignmentBits;
-  Address address = Allocate(space_number, size);
-  HeapObject* obj = HeapObject::FromAddress(address);
+void Deserializer::ReadObject(int space_number, Object** write_back) {
+  Address address;
+  HeapObject* obj;
+  int next_int = source_->GetInt();
+
+  bool double_align = false;
+#ifndef V8_HOST_ARCH_64_BIT
+  double_align = next_int == kDoubleAlignmentSentinel;
+  if (double_align) next_int = source_->GetInt();
+#endif
+
+  DCHECK_NE(kDoubleAlignmentSentinel, next_int);
+  int size = next_int << kObjectAlignmentBits;
+  int reserved_size = size + (double_align ? kPointerSize : 0);
+  address = Allocate(space_number, reserved_size);
+  obj = HeapObject::FromAddress(address);
+  if (double_align) {
+    obj = isolate_->heap()->DoubleAlignForDeserialization(obj, reserved_size);
+    address = obj->address();
+  }
+
   isolate_->heap()->OnAllocationEvent(obj, size);
   Object** current = reinterpret_cast<Object**>(address);
   Object** limit = current + (size >> kPointerSizeLog2);
@@ -1258,10 +1274,15 @@ Serializer::Serializer(Isolate* isolate, SnapshotByteSink* sink)
       external_reference_encoder_(new ExternalReferenceEncoder(isolate)),
       root_index_map_(isolate),
       code_address_map_(NULL),
+      large_objects_total_size_(0),
       seen_large_objects_index_(0) {
   // The serializer is meant to be used only to generate initial heap images
   // from a context in which there is only one isolate.
-  for (int i = 0; i < kNumberOfSpaces; i++) pending_chunk_[i] = 0;
+  for (int i = 0; i < kNumberOfPreallocatedSpaces; i++) {
+    pending_chunk_[i] = 0;
+    max_chunk_size_[i] = static_cast<uint32_t>(
+        MemoryAllocator::PageAreaSize(static_cast<AllocationSpace>(i)));
+  }
 }
 
 
@@ -1336,8 +1357,7 @@ void Serializer::VisitPointers(Object** start, Object** end) {
 
 
 void Serializer::FinalizeAllocation() {
-  DCHECK_EQ(0, completed_chunks_[LO_SPACE].length());  // Not yet finalized.
-  for (int i = 0; i < kNumberOfSpaces; i++) {
+  for (int i = 0; i < kNumberOfPreallocatedSpaces; i++) {
     // Complete the last pending chunk and if there are no completed chunks,
     // make sure there is at least one empty chunk.
     if (pending_chunk_[i] > 0 || completed_chunks_[i].length() == 0) {
@@ -1545,9 +1565,19 @@ void PartialSerializer::SerializeObject(HeapObject* obj, HowToCode how_to_code,
 
 void Serializer::ObjectSerializer::SerializePrologue(AllocationSpace space,
                                                      int size, Map* map) {
+  int reserved_size = size;
+
   sink_->Put(kNewObject + reference_representation_ + space,
              "ObjectSerialization");
-  sink_->PutInt(size >> kObjectAlignmentBits, "Size in words");
+  // Objects on the large object space are always double-aligned.
+  if (space != LO_SPACE && object_->NeedsToEnsureDoubleAlignment()) {
+    sink_->PutInt(kDoubleAlignmentSentinel, "double align next object");
+    // Add wriggle room for double alignment padding.
+    reserved_size += kPointerSize;
+  }
+  int encoded_size = size >> kObjectAlignmentBits;
+  DCHECK_NE(kDoubleAlignmentSentinel, encoded_size);
+  sink_->PutInt(encoded_size, "Size in words");
 
   if (serializer_->code_address_map_) {
     const char* code_name =
@@ -1568,7 +1598,7 @@ void Serializer::ObjectSerializer::SerializePrologue(AllocationSpace space,
     }
     back_reference = serializer_->AllocateLargeObject(size);
   } else {
-    back_reference = serializer_->Allocate(space, size);
+    back_reference = serializer_->Allocate(space, reserved_size);
   }
   serializer_->back_reference_map()->Add(object_, back_reference);
 
@@ -1870,6 +1900,8 @@ int Serializer::ObjectSerializer::OutputRawData(
     // To make snapshots reproducible, we need to wipe out all pointers in code.
     if (code_object_) {
       Code* code = CloneCodeObject(object_);
+      // Code age headers are not serializable.
+      code->MakeYoung(serializer_->isolate());
       WipeOutRelocations(code);
       // We need to wipe out the header fields *after* wiping out the
       // relocations, because some of these fields are needed for the latter.
@@ -1899,23 +1931,23 @@ AllocationSpace Serializer::SpaceOfObject(HeapObject* object) {
     }
   }
   UNREACHABLE();
-  return INVALID_SPACE;
+  return FIRST_SPACE;
 }
 
 
 BackReference Serializer::AllocateLargeObject(int size) {
   // Large objects are allocated one-by-one when deserializing. We do not
   // have to keep track of multiple chunks.
-  pending_chunk_[LO_SPACE] += size;
+  large_objects_total_size_ += size;
   return BackReference::LargeObjectReference(seen_large_objects_index_++);
 }
 
 
 BackReference Serializer::Allocate(AllocationSpace space, int size) {
-  CHECK(space >= 0 && space < kNumberOfPreallocatedSpaces);
-  DCHECK(size > 0 && size <= Page::kMaxRegularHeapObjectSize);
+  DCHECK(space >= 0 && space < kNumberOfPreallocatedSpaces);
+  DCHECK(size > 0 && size <= static_cast<int>(max_chunk_size(space)));
   uint32_t new_chunk_size = pending_chunk_[space] + size;
-  if (new_chunk_size > static_cast<uint32_t>(Page::kMaxRegularHeapObjectSize)) {
+  if (new_chunk_size > max_chunk_size(space)) {
     // The new chunk size would not fit onto a single page. Complete the
     // current chunk and start a new one.
     completed_chunks_[space].Add(pending_chunk_[space]);
@@ -1926,15 +1958,6 @@ BackReference Serializer::Allocate(AllocationSpace space, int size) {
   pending_chunk_[space] = new_chunk_size;
   return BackReference::Reference(space, completed_chunks_[space].length(),
                                   offset);
-}
-
-
-int Serializer::SpaceAreaSize(int space) {
-  if (space == CODE_SPACE) {
-    return isolate_->memory_allocator()->CodePageAreaSize();
-  } else {
-    return Page::kPageSize - Page::kObjectStartOffset;
-  }
 }
 
 
@@ -2047,13 +2070,13 @@ void CodeSerializer::SerializeObject(HeapObject* obj, HowToCode how_to_code,
         SerializeIC(code_object, how_to_code, where_to_point);
         return;
       case Code::FUNCTION:
-        // Only serialize the code for the toplevel function. Replace code
-        // of included function literals by the lazy compile builtin.
+        DCHECK(code_object->has_reloc_info_for_serialization());
+        // Only serialize the code for the toplevel function unless specified
+        // by flag. Replace code of inner functions by the lazy compile builtin.
         // This is safe, as checked in Compiler::BuildFunctionInfo.
-        if (code_object != main_code_) {
+        if (code_object != main_code_ && !FLAG_serialize_inner) {
           SerializeBuiltin(Builtins::kCompileLazy, how_to_code, where_to_point);
         } else {
-          code_object->MakeYoung();
           SerializeGeneric(code_object, how_to_code, where_to_point);
         }
         return;
@@ -2067,6 +2090,8 @@ void CodeSerializer::SerializeObject(HeapObject* obj, HowToCode how_to_code,
   CHECK(!obj->IsJSGlobalProxy() && !obj->IsGlobalObject());
   // There should be no hash table embedded. They would require rehashing.
   CHECK(!obj->IsHashTable());
+  // We expect no instantiated function objects or contexts.
+  CHECK(!obj->IsJSFunction() && !obj->IsContext());
 
   SerializeGeneric(obj, how_to_code, where_to_point);
 }
@@ -2190,7 +2215,7 @@ void CodeSerializer::SerializeSourceObject(HowToCode how_to_code,
 
 
 MaybeHandle<SharedFunctionInfo> CodeSerializer::Deserialize(
-    Isolate* isolate, ScriptData* data, Handle<String> source) {
+    Isolate* isolate, ScriptData* cached_data, Handle<String> source) {
   base::ElapsedTimer timer;
   if (FLAG_profile_deserialization) timer.Start();
 
@@ -2199,18 +2224,24 @@ MaybeHandle<SharedFunctionInfo> CodeSerializer::Deserialize(
   {
     HandleScope scope(isolate);
 
-    SerializedCodeData scd(data, *source);
-    SnapshotByteSource payload(scd.Payload(), scd.PayloadLength());
+    SmartPointer<SerializedCodeData> scd(
+        SerializedCodeData::FromCachedData(cached_data, *source));
+    if (scd.is_empty()) {
+      if (FLAG_profile_deserialization) PrintF("[Cached code failed check]\n");
+      DCHECK(cached_data->rejected());
+      return MaybeHandle<SharedFunctionInfo>();
+    }
+    SnapshotByteSource payload(scd->Payload(), scd->PayloadLength());
     Deserializer deserializer(&payload);
 
     // Eagerly expand string table to avoid allocations during deserialization.
-    StringTable::EnsureCapacityForDeserialization(isolate,
-                                                  scd.NumInternalizedStrings());
+    StringTable::EnsureCapacityForDeserialization(
+        isolate, scd->NumInternalizedStrings());
 
     // Set reservations.
     STATIC_ASSERT(NEW_SPACE == 0);
     int current_space = NEW_SPACE;
-    Vector<const SerializedCodeData::Reservation> res = scd.Reservations();
+    Vector<const SerializedCodeData::Reservation> res = scd->Reservations();
     for (const auto& r : res) {
       deserializer.AddReservation(current_space, r.chunk_size());
       if (r.is_last_chunk()) current_space++;
@@ -2218,7 +2249,7 @@ MaybeHandle<SharedFunctionInfo> CodeSerializer::Deserialize(
     DCHECK_EQ(kNumberOfSpaces, current_space);
 
     // Prepare and register list of attached objects.
-    Vector<const uint32_t> code_stub_keys = scd.CodeStubKeys();
+    Vector<const uint32_t> code_stub_keys = scd->CodeStubKeys();
     Vector<Handle<Object> > attached_objects = Vector<Handle<Object> >::New(
         code_stub_keys.length() + kCodeStubsBaseIndex);
     attached_objects[kSourceObjectIndex] = source;
@@ -2240,7 +2271,7 @@ MaybeHandle<SharedFunctionInfo> CodeSerializer::Deserialize(
 
   if (FLAG_profile_deserialization) {
     double ms = timer.Elapsed().InMillisecondsF();
-    int length = data->length();
+    int length = cached_data->length();
     PrintF("[Deserializing from %d bytes took %0.3f ms]\n", length, ms);
   }
   Handle<SharedFunctionInfo> result(SharedFunctionInfo::cast(root), isolate);
@@ -2273,9 +2304,6 @@ SerializedCodeData::SerializedCodeData(const List<byte>& payload,
   for (int i = 0; i < SerializerDeserializer::kNumberOfSpaces; i++) {
     Vector<const uint32_t> chunks = cs->FinalAllocationChunks(i);
     for (int j = 0; j < chunks.length(); j++) {
-      DCHECK(i == LO_SPACE ||
-             chunks[j] <=
-                 static_cast<uint32_t>(Page::kMaxRegularHeapObjectSize));
       uint32_t chunk = ChunkSizeBits::encode(chunks[j]) |
                        IsLastChunkBits::encode(j == chunks.length() - 1);
       reservations.Add(chunk);
@@ -2323,11 +2351,6 @@ bool SerializedCodeData::IsSane(String* source) {
 
 
 int SerializedCodeData::CheckSum(String* string) {
-  int checksum = Version::Hash();
-#ifdef DEBUG
-  uint32_t seed = static_cast<uint32_t>(checksum);
-  checksum = static_cast<int>(IteratingStringHasher::Hash(string, seed));
-#endif  // DEBUG
-  return checksum;
+  return Version::Hash() ^ string->length();
 }
 } }  // namespace v8::internal

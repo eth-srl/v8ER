@@ -32,13 +32,14 @@ class DebugScope;
 // Step actions. NOTE: These values are in macros.py as well.
 enum StepAction {
   StepNone = -1,  // Stepping not prepared.
-  StepOut = 0,   // Step out of the current function.
-  StepNext = 1,  // Step to the next statement in the current function.
-  StepIn = 2,    // Step into new functions invoked or the next statement
-                 // in the current function.
-  StepMin = 3,   // Perform a minimum step in the current function.
-  StepInMin = 4  // Step into new functions invoked or perform a minimum step
-                 // in the current function.
+  StepOut = 0,    // Step out of the current function.
+  StepNext = 1,   // Step to the next statement in the current function.
+  StepIn = 2,     // Step into new functions invoked or the next statement
+                  // in the current function.
+  StepMin = 3,    // Perform a minimum step in the current function.
+  StepInMin = 4,  // Step into new functions invoked or perform a minimum step
+                  // in the current function.
+  StepFrame = 5   // Step into a new frame or return to previous frame.
 };
 
 
@@ -49,10 +50,11 @@ enum ExceptionBreakType {
 };
 
 
-// Type of exception break. NOTE: These values are in macros.py as well.
+// Type of exception break.
 enum BreakLocatorType {
   ALL_BREAK_LOCATIONS = 0,
-  SOURCE_BREAK_LOCATIONS = 1
+  SOURCE_BREAK_LOCATIONS = 1,
+  CALLS_AND_RETURNS = 2
 };
 
 
@@ -385,8 +387,12 @@ class Debug {
                               BreakPositionAlignment alignment);
   void ClearBreakPoint(Handle<Object> break_point_object);
   void ClearAllBreakPoints();
-  void FloodWithOneShot(Handle<JSFunction> function);
+  void FloodWithOneShot(Handle<JSFunction> function,
+                        BreakLocatorType type = ALL_BREAK_LOCATIONS);
   void FloodBoundFunctionWithOneShot(Handle<JSFunction> function);
+  void FloodDefaultConstructorWithOneShot(Handle<JSFunction> function);
+  void FloodWithOneShotGeneric(Handle<JSFunction> function,
+                               Handle<Object> holder = Handle<Object>());
   void FloodHandlerWithOneShot();
   void ChangeBreakOnException(ExceptionBreakType type, bool enable);
   bool IsBreakOnException(ExceptionBreakType type);
@@ -401,10 +407,8 @@ class Debug {
   bool StepNextContinue(BreakLocationIterator* break_location_iterator,
                         JavaScriptFrame* frame);
   bool StepInActive() { return thread_local_.step_into_fp_ != 0; }
-  void HandleStepIn(Handle<JSFunction> function,
-                    Handle<Object> holder,
-                    Address fp,
-                    bool is_constructor);
+  void HandleStepIn(Handle<Object> function_obj, Handle<Object> holder,
+                    Address fp, bool is_constructor);
   bool StepOutActive() { return thread_local_.step_out_fp_ != 0; }
 
   // Purge all code objects that have no debug break slots.
@@ -499,6 +503,8 @@ class Debug {
     return reinterpret_cast<Address>(&thread_local_.step_into_fp_);
   }
 
+  StepAction last_step_action() { return thread_local_.last_step_action_; }
+
  private:
   explicit Debug(Isolate* isolate);
 
@@ -511,6 +517,9 @@ class Debug {
   // Check whether there are commands in the command queue.
   inline bool has_commands() const { return !command_queue_.IsEmpty(); }
   inline bool ignore_events() const { return is_suppressed_ || !is_active_; }
+  inline bool break_disabled() const {
+    return break_disabled_ || in_debug_event_listener_;
+  }
 
   void OnException(Handle<Object> exception, bool uncaught,
                    Handle<Object> promise);
@@ -559,8 +568,8 @@ class Debug {
   void ClearStepIn();
   void ActivateStepOut(StackFrame* frame);
   void ClearStepNext();
-  // Returns whether the compile succeeded.
-  void RemoveDebugInfo(Handle<DebugInfo> debug_info);
+  void RemoveDebugInfoAndClearFromShared(Handle<DebugInfo> debug_info);
+  void RemoveDebugInfo(DebugInfo** debug_info);
   Handle<Object> CheckBreakPoints(Handle<Object> break_point);
   bool CheckBreakPoint(Handle<Object> break_point_object);
 
@@ -588,6 +597,7 @@ class Debug {
   bool live_edit_enabled_;
   bool has_break_points_;
   bool break_disabled_;
+  bool in_debug_event_listener_;
   bool break_on_exception_;
   bool break_on_uncaught_exception_;
 
@@ -623,7 +633,7 @@ class Debug {
     // Number of steps left to perform before debug event.
     int step_count_;
 
-    // Frame pointer from last step next action.
+    // Frame pointer from last step next or step frame action.
     Address last_fp_;
 
     // Number of queued steps left to perform before debug event.
@@ -698,14 +708,21 @@ class DebugScope BASE_EMBEDDED {
 class DisableBreak BASE_EMBEDDED {
  public:
   explicit DisableBreak(Debug* debug, bool disable_break)
-    : debug_(debug), old_state_(debug->break_disabled_) {
+      : debug_(debug),
+        previous_break_disabled_(debug->break_disabled_),
+        previous_in_debug_event_listener_(debug->in_debug_event_listener_) {
     debug_->break_disabled_ = disable_break;
+    debug_->in_debug_event_listener_ = disable_break;
   }
-  ~DisableBreak() { debug_->break_disabled_ = old_state_; }
+  ~DisableBreak() {
+    debug_->break_disabled_ = previous_break_disabled_;
+    debug_->in_debug_event_listener_ = previous_in_debug_event_listener_;
+  }
 
  private:
   Debug* debug_;
-  bool old_state_;
+  bool previous_break_disabled_;
+  bool previous_in_debug_event_listener_;
   DISALLOW_COPY_AND_ASSIGN(DisableBreak);
 };
 

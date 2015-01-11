@@ -487,6 +487,7 @@ class Isolate {
 
   // Returns the isolate inside which the current thread is running.
   INLINE(static Isolate* Current()) {
+    DCHECK(base::NoBarrier_Load(&isolate_key_created_) == 1);
     Isolate* isolate = reinterpret_cast<Isolate*>(
         base::Thread::GetExistingThreadLocal(isolate_key_));
     DCHECK(isolate != NULL);
@@ -494,6 +495,7 @@ class Isolate {
   }
 
   INLINE(static Isolate* UncheckedCurrent()) {
+    DCHECK(base::NoBarrier_Load(&isolate_key_created_) == 1);
     return reinterpret_cast<Isolate*>(
         base::Thread::GetThreadLocal(isolate_key_));
   }
@@ -802,7 +804,7 @@ class Isolate {
   // Attempts to compute the current source location, storing the
   // result in the target out parameter.
   void ComputeLocation(MessageLocation* target);
-  void ComputeLocationFromStackTrace(MessageLocation* target,
+  bool ComputeLocationFromStackTrace(MessageLocation* target,
                                      Handle<Object> exception);
 
   Handle<JSMessageObject> CreateMessage(Handle<Object> exception,
@@ -822,9 +824,8 @@ class Isolate {
   void IterateThread(ThreadVisitor* v, char* t);
 
 
-  // Returns the current native and global context.
+  // Returns the current native context.
   Handle<Context> native_context();
-  Handle<Context> global_context();
 
   // Returns the native context of the calling JavaScript code.  That
   // is, the native context of the top-most JavaScript frame.
@@ -1066,6 +1067,8 @@ class Isolate {
   HTracer* GetHTracer();
   CodeTracer* GetCodeTracer();
 
+  void DumpAndResetCompilationStats();
+
   FunctionEntryHook function_entry_hook() { return function_entry_hook_; }
   void set_function_entry_hook(FunctionEntryHook function_entry_hook) {
     function_entry_hook_ = function_entry_hook;
@@ -1109,6 +1112,10 @@ class Isolate {
   static Isolate* NewForTesting() { return new Isolate(false); }
 
   std::string GetTurboCfgFileName();
+
+#if TRACE_MAPS
+  int GetNextUniqueSharedFunctionInfoId() { return next_unique_sfi_id_++; }
+#endif
 
  private:
   explicit Isolate(bool enable_serializer);
@@ -1172,6 +1179,10 @@ class Isolate {
 
   // A global counter for all generated Isolates, might overflow.
   static base::Atomic32 isolate_counter_;
+
+#if DEBUG
+  static base::Atomic32 isolate_key_created_;
+#endif
 
   void Deinit();
 
@@ -1311,6 +1322,10 @@ class Isolate {
   unsigned int stress_deopt_count_;
 
   int next_optimization_id_;
+
+#if TRACE_MAPS
+  int next_unique_sfi_id_;
+#endif
 
   // List of callbacks when a Call completes.
   List<CallCompletedCallback> call_completed_callbacks_;

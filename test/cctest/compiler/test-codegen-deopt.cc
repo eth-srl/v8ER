@@ -31,6 +31,7 @@ using namespace v8::internal::compiler;
 #if V8_TURBOFAN_TARGET
 
 typedef RawMachineAssembler::Label MLabel;
+typedef v8::internal::compiler::InstructionSequence TestInstrSeq;
 
 static Handle<JSFunction> NewFunction(const char* source) {
   return v8::Utils::OpenHandle(
@@ -55,41 +56,14 @@ class DeoptCodegenTester {
     graph = new (scope_->main_zone()) Graph(scope_->main_zone());
   }
 
-  virtual ~DeoptCodegenTester() { delete code; }
+  virtual ~DeoptCodegenTester() {}
 
   void GenerateCodeFromSchedule(Schedule* schedule) {
     OFStream os(stdout);
     if (FLAG_trace_turbo) {
       os << *schedule;
     }
-
-    // Initialize the codegen and generate code.
-    Linkage* linkage = new (scope_->main_zone()) Linkage(info.zone(), &info);
-    code = new v8::internal::compiler::InstructionSequence(scope_->main_zone(),
-                                                           schedule);
-    SourcePositionTable source_positions(graph);
-    InstructionSelector selector(scope_->main_zone(), graph, linkage, code,
-                                 schedule, &source_positions);
-    selector.SelectInstructions();
-
-    if (FLAG_trace_turbo) {
-      os << "----- Instruction sequence before register allocation -----\n"
-         << *code;
-    }
-
-    Frame frame;
-    RegisterAllocator allocator(RegisterAllocator::PlatformConfig(),
-                                scope_->main_zone(), &frame, code);
-    CHECK(allocator.Allocate());
-
-    if (FLAG_trace_turbo) {
-      os << "----- Instruction sequence after register allocation -----\n"
-         << *code;
-    }
-
-    compiler::CodeGenerator generator(&frame, linkage, code, &info);
-    result_code = generator.GenerateCode();
-
+    result_code = Pipeline::GenerateCodeForTesting(&info, graph, schedule);
 #ifdef OBJECT_PRINT
     if (FLAG_print_opt_code || FLAG_trace_turbo) {
       result_code->Print();
@@ -104,7 +78,7 @@ class DeoptCodegenTester {
   CompilationInfo info;
   BailoutId bailout_id;
   Handle<Code> result_code;
-  v8::internal::compiler::InstructionSequence* code;
+  TestInstrSeq* code;
   Graph* graph;
 };
 

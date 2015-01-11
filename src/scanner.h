@@ -458,6 +458,8 @@ class Scanner {
   void SetHarmonyClasses(bool classes) {
     harmony_classes_ = classes;
   }
+  bool HarmonyTemplates() const { return harmony_templates_; }
+  void SetHarmonyTemplates(bool templates) { harmony_templates_ = templates; }
 
   // Returns true if there was a line terminator before the peek'ed token,
   // possibly inside a multi-line comment.
@@ -472,6 +474,9 @@ class Scanner {
   // Returns true if regexp flags are scanned (always since flags can
   // be empty).
   bool ScanRegExpFlags();
+
+  // Scans the input as a template literal
+  Token::Value ScanTemplateSpan();
 
   const LiteralBuffer* source_url() const { return &source_url_; }
   const LiteralBuffer* source_mapping_url() const {
@@ -637,10 +642,6 @@ class Scanner {
   // Decodes a Unicode escape-sequence which is part of an identifier.
   // If the escape sequence cannot be decoded the result is kBadChar.
   uc32 ScanIdentifierUnicodeEscape();
-  // Scans a Unicode escape-sequence and adds its characters,
-  // uninterpreted, to the current literal. Used for parsing RegExp
-  // flags.
-  bool ScanLiteralUnicodeEscape();
 
   // Return the current source position.
   int source_pos() {
@@ -685,6 +686,8 @@ class Scanner {
   bool harmony_numeric_literals_;
   // Whether we scan 'class', 'extends', 'static' and 'super' as keywords.
   bool harmony_classes_;
+  // Whether we scan TEMPLATE_SPAN and TEMPLATE_TAIL
+  bool harmony_templates_;
 };
 
 } }  // namespace v8::internal

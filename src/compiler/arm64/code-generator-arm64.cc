@@ -100,8 +100,7 @@ class Arm64OperandConverter FINAL : public InstructionOperandConverter {
         return MemOperand(InputRegister(index + 0), InputInt32(index + 1));
       case kMode_MRR:
         *first_index += 2;
-        return MemOperand(InputRegister(index + 0), InputRegister(index + 1),
-                          SXTW);
+        return MemOperand(InputRegister(index + 0), InputRegister(index + 1));
     }
     UNREACHABLE();
     return MemOperand(no_reg);
@@ -143,6 +142,9 @@ class Arm64OperandConverter FINAL : public InstructionOperandConverter {
         return Operand(constant.ToExternalReference());
       case Constant::kHeapObject:
         return Operand(constant.ToHeapObject());
+      case Constant::kRpoNumber:
+        UNREACHABLE();  // TODO(dcarney): RPO immediates on arm64.
+        break;
     }
     UNREACHABLE();
     return Operand(-1);
@@ -170,7 +172,14 @@ class Arm64OperandConverter FINAL : public InstructionOperandConverter {
       int64_t imm = i.InputOperand##width(1).immediate().value();              \
       __ asm_instr(i.OutputRegister##width(), i.InputRegister##width(0), imm); \
     }                                                                          \
-  } while (0);
+  } while (0)
+
+
+#define ASSEMBLE_BRANCH_TO(target)                    \
+  do {                                                \
+    bool fallthrough = IsNextInAssemblyOrder(target); \
+    if (!fallthrough) __ B(GetLabel(target));         \
+  } while (0)
 
 
 // Assembles an instruction after register allocation, producing machine code.
@@ -208,7 +217,7 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       break;
     }
     case kArchJmp:
-      __ B(code_->GetLabel(i.InputRpo(0)));
+      AssembleArchJump(i.InputRpo(0));
       break;
     case kArchNop:
       // don't emit code for nops.
@@ -266,6 +275,9 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       break;
     case kArm64Smull:
       __ Smull(i.OutputRegister(), i.InputRegister32(0), i.InputRegister32(1));
+      break;
+    case kArm64Umull:
+      __ Umull(i.OutputRegister(), i.InputRegister32(0), i.InputRegister32(1));
       break;
     case kArm64Madd:
       __ Madd(i.OutputRegister(), i.InputRegister(0), i.InputRegister(1),
@@ -407,6 +419,12 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
     case kArm64Mov32:
       __ Mov(i.OutputRegister32(), i.InputRegister32(0));
       break;
+    case kArm64Sxtb32:
+      __ Sxtb(i.OutputRegister32(), i.InputRegister32(0));
+      break;
+    case kArm64Sxth32:
+      __ Sxth(i.OutputRegister32(), i.InputRegister32(0));
+      break;
     case kArm64Sxtw:
       __ Sxtw(i.OutputRegister(), i.InputRegister32(0));
       break;
@@ -417,6 +435,30 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
     case kArm64Ubfx32:
       __ Ubfx(i.OutputRegister32(), i.InputRegister32(0), i.InputInt8(1),
               i.InputInt8(2));
+      break;
+    case kArm64Tbz:
+      __ Tbz(i.InputRegister64(0), i.InputInt6(1), GetLabel(i.InputRpo(2)));
+      ASSEMBLE_BRANCH_TO(i.InputRpo(3));
+      break;
+    case kArm64Tbz32:
+      __ Tbz(i.InputRegister32(0), i.InputInt5(1), GetLabel(i.InputRpo(2)));
+      ASSEMBLE_BRANCH_TO(i.InputRpo(3));
+      break;
+    case kArm64Tbnz:
+      __ Tbnz(i.InputRegister64(0), i.InputInt6(1), GetLabel(i.InputRpo(2)));
+      ASSEMBLE_BRANCH_TO(i.InputRpo(3));
+      break;
+    case kArm64Tbnz32:
+      __ Tbnz(i.InputRegister32(0), i.InputInt5(1), GetLabel(i.InputRpo(2)));
+      ASSEMBLE_BRANCH_TO(i.InputRpo(3));
+      break;
+    case kArm64Cbz32:
+      __ Cbz(i.InputRegister32(0), GetLabel(i.InputRpo(1)));
+      ASSEMBLE_BRANCH_TO(i.InputRpo(2));
+      break;
+    case kArm64Cbnz32:
+      __ Cbnz(i.InputRegister32(0), GetLabel(i.InputRpo(1)));
+      ASSEMBLE_BRANCH_TO(i.InputRpo(2));
       break;
     case kArm64Claim: {
       int words = MiscField::decode(instr->opcode());
@@ -579,21 +621,11 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
 
 
 // Assemble branches after this instruction.
-void CodeGenerator::AssembleArchBranch(Instruction* instr,
-                                       FlagsCondition condition) {
+void CodeGenerator::AssembleArchBranch(Instruction* instr, BranchInfo* branch) {
   Arm64OperandConverter i(this, instr);
-  Label done;
-
-  // Emit a branch. The true and false targets are always the last two inputs
-  // to the instruction.
-  BasicBlock::RpoNumber tblock =
-      i.InputRpo(static_cast<int>(instr->InputCount()) - 2);
-  BasicBlock::RpoNumber fblock =
-      i.InputRpo(static_cast<int>(instr->InputCount()) - 1);
-  bool fallthru = IsNextInAssemblyOrder(fblock);
-  Label* tlabel = code()->GetLabel(tblock);
-  Label* flabel = fallthru ? &done : code()->GetLabel(fblock);
-  switch (condition) {
+  Label* tlabel = branch->true_label;
+  Label* flabel = branch->false_label;
+  switch (branch->condition) {
     case kUnorderedEqual:
       __ B(vs, flabel);
     // Fall through.
@@ -649,8 +681,12 @@ void CodeGenerator::AssembleArchBranch(Instruction* instr,
       __ B(vc, tlabel);
       break;
   }
-  if (!fallthru) __ B(flabel);  // no fallthru to flabel.
-  __ Bind(&done);
+  if (!branch->fallthru) __ B(flabel);  // no fallthru to flabel.
+}
+
+
+void CodeGenerator::AssembleArchJump(BasicBlock::RpoNumber target) {
+  if (!IsNextInAssemblyOrder(target)) __ B(GetLabel(target));
 }
 
 
@@ -769,23 +805,6 @@ void CodeGenerator::AssemblePrologue() {
     __ Prologue(info->IsCodePreAgingActive());
     frame()->SetRegisterSaveAreaSize(
         StandardFrameConstants::kFixedFrameSizeFromFp);
-
-    // Sloppy mode functions and builtins need to replace the receiver with the
-    // global proxy when called as functions (without an explicit receiver
-    // object).
-    // TODO(mstarzinger/verwaest): Should this be moved back into the CallIC?
-    if (info->strict_mode() == SLOPPY && !info->is_native()) {
-      Label ok;
-      // +2 for return address and saved frame pointer.
-      int receiver_slot = info->scope()->num_parameters() + 2;
-      __ Ldr(x10, MemOperand(fp, receiver_slot * kXRegSize));
-      __ JumpIfNotRoot(x10, Heap::kUndefinedValueRootIndex, &ok);
-      __ Ldr(x10, GlobalObjectMemOperand());
-      __ Ldr(x10, FieldMemOperand(x10, GlobalObject::kGlobalProxyOffset));
-      __ Str(x10, MemOperand(fp, receiver_slot * kXRegSize));
-      __ Bind(&ok);
-    }
-
   } else {
     __ SetStackPointer(jssp);
     __ StubPrologue();
@@ -943,8 +962,8 @@ void CodeGenerator::AssembleSwap(InstructionOperand* source,
     }
   } else if (source->IsStackSlot() || source->IsDoubleStackSlot()) {
     UseScratchRegisterScope scope(masm());
-    CPURegister temp_0 = scope.AcquireX();
-    CPURegister temp_1 = scope.AcquireX();
+    DoubleRegister temp_0 = scope.AcquireD();
+    DoubleRegister temp_1 = scope.AcquireD();
     MemOperand src = g.ToMemOperand(source, masm());
     MemOperand dst = g.ToMemOperand(destination, masm());
     __ Ldr(temp_0, src);

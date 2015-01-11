@@ -41,8 +41,8 @@ class MachineOperatorReducer FINAL : public Reducer {
   Node* Int32Add(Node* lhs, Node* rhs);
   Node* Int32Sub(Node* lhs, Node* rhs);
   Node* Int32Mul(Node* lhs, Node* rhs);
-
-  Node* TruncatingDiv(Node* dividend, int32_t divisor);
+  Node* Int32Div(Node* dividend, int32_t divisor);
+  Node* Uint32Div(Node* dividend, uint32_t divisor);
 
   Reduction ReplaceBool(bool value) { return ReplaceInt32(value ? 1 : 0); }
   Reduction ReplaceFloat32(volatile float value) {
@@ -65,7 +65,11 @@ class MachineOperatorReducer FINAL : public Reducer {
   Reduction ReduceUint32Div(Node* node);
   Reduction ReduceInt32Mod(Node* node);
   Reduction ReduceUint32Mod(Node* node);
+  Reduction ReduceTruncateFloat64ToInt32(Node* node);
+  Reduction ReduceStore(Node* node);
   Reduction ReduceProjection(size_t index, Node* node);
+  Reduction ReduceWord32Shifts(Node* node);
+  Reduction ReduceWord32Or(Node* node);
 
   Graph* graph() const;
   JSGraph* jsgraph() const { return jsgraph_; }

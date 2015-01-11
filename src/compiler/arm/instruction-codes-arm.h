@@ -28,12 +28,21 @@ namespace compiler {
   V(ArmMls)                        \
   V(ArmSmmul)                      \
   V(ArmSmmla)                      \
+  V(ArmUmull)                      \
   V(ArmSdiv)                       \
   V(ArmUdiv)                       \
   V(ArmMov)                        \
   V(ArmMvn)                        \
   V(ArmBfc)                        \
   V(ArmUbfx)                       \
+  V(ArmSxtb)                       \
+  V(ArmSxth)                       \
+  V(ArmSxtab)                      \
+  V(ArmSxtah)                      \
+  V(ArmUxtb)                       \
+  V(ArmUxth)                       \
+  V(ArmUxtab)                      \
+  V(ArmUxtah)                      \
   V(ArmVcmpF64)                    \
   V(ArmVaddF64)                    \
   V(ArmVsubF64)                    \

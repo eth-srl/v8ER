@@ -748,7 +748,8 @@ class HOptimizedGraphBuilder;
 
 enum ArgumentsAllowedFlag {
   ARGUMENTS_NOT_ALLOWED,
-  ARGUMENTS_ALLOWED
+  ARGUMENTS_ALLOWED,
+  ARGUMENTS_FAKED
 };
 
 
@@ -1878,6 +1879,7 @@ class HGraphBuilder {
 
   HInstruction* BuildGetNativeContext(HValue* closure);
   HInstruction* BuildGetNativeContext();
+  HInstruction* BuildGetScriptContext(int context_index);
   HInstruction* BuildGetArrayFunction();
 
  protected:
@@ -2256,7 +2258,6 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
 #endif
     }
   }
-
   HValue* LookupAndMakeLive(Variable* var) {
     HEnvironment* env = environment();
     int index = env->IndexFor(var);
@@ -2285,6 +2286,8 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
 
   // Visit a list of expressions from left to right, each in a value context.
   void VisitExpressions(ZoneList<Expression*>* exprs);
+  void VisitExpressions(ZoneList<Expression*>* exprs,
+                        ArgumentsAllowedFlag flag);
 
   // Remove the arguments from the bailout environment and emit instructions
   // to push them as outgoing parameters.
@@ -2717,6 +2720,8 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
 
   HInstruction* BuildCallConstantFunction(Handle<JSFunction> target,
                                           int argument_count);
+
+  bool CanBeFunctionApplyArguments(Call* expr);
 
   // The translation state of the currently-being-translated function.
   FunctionState* function_state_;

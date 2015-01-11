@@ -24,14 +24,13 @@ void GraphReplayPrinter::PrintReplay(Graph* graph) {
 }
 
 
-GenericGraphVisit::Control GraphReplayPrinter::Pre(Node* node) {
+void GraphReplayPrinter::Pre(Node* node) {
   PrintReplayOpCreator(node->op());
   PrintF("  Node* n%d = graph.NewNode(op", node->id());
   for (int i = 0; i < node->InputCount(); ++i) {
     PrintF(", nil");
   }
   PrintF("); USE(n%d);\n", node->id());
-  return GenericGraphVisit::CONTINUE;
 }
 
 
@@ -60,7 +59,7 @@ void GraphReplayPrinter::PrintReplayOpCreator(const Operator* op) {
       PrintF("unique_constant");
       break;
     case IrOpcode::kPhi:
-      PrintF("%d", op->InputCount());
+      PrintF("%d", op->ValueInputCount());
       break;
     case IrOpcode::kEffectPhi:
       PrintF("%d", op->EffectInputCount());

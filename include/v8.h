@@ -516,6 +516,18 @@ template <class T> class PersistentBase {
       P* parameter,
       typename WeakCallbackData<S, P>::Callback callback);
 
+  // Phantom persistents work like weak persistents, except that the pointer to
+  // the object being collected is not available in the finalization callback.
+  // This enables the garbage collector to collect the object and any objects
+  // it references transitively in one GC cycle.
+  template <typename P>
+  V8_INLINE void SetPhantom(P* parameter,
+                            typename WeakCallbackData<T, P>::Callback callback);
+
+  template <typename S, typename P>
+  V8_INLINE void SetPhantom(P* parameter,
+                            typename WeakCallbackData<S, P>::Callback callback);
+
   template<typename P>
   V8_INLINE P* ClearWeak();
 
@@ -999,7 +1011,7 @@ class V8_EXPORT Script {
   /**
    * Runs the script returning the resulting value. It will be run in the
    * context in which it was created (ScriptCompiler::CompileBound or
-   * UnboundScript::BindToGlobalContext()).
+   * UnboundScript::BindToCurrentContext()).
    */
   Local<Value> Run();
 
@@ -1033,7 +1045,11 @@ class V8_EXPORT ScriptCompiler {
       BufferOwned
     };
 
-    CachedData() : data(NULL), length(0), buffer_policy(BufferNotOwned) {}
+    CachedData()
+        : data(NULL),
+          length(0),
+          rejected(false),
+          buffer_policy(BufferNotOwned) {}
 
     // If buffer_policy is BufferNotOwned, the caller keeps the ownership of
     // data and guarantees that it stays alive until the CachedData object is
@@ -1046,6 +1062,7 @@ class V8_EXPORT ScriptCompiler {
     // which will be called when V8 no longer needs the data.
     const uint8_t* data;
     int length;
+    bool rejected;
     BufferPolicy buffer_policy;
 
    private:
@@ -1226,6 +1243,26 @@ class V8_EXPORT ScriptCompiler {
   static Local<Script> Compile(Isolate* isolate, StreamedSource* source,
                                Handle<String> full_source_string,
                                const ScriptOrigin& origin);
+
+  /**
+   * Return a version tag for CachedData for the current V8 version & flags.
+   *
+   * This value is meant only for determining whether a previously generated
+   * CachedData instance is still valid; the tag has no other meaing.
+   *
+   * Background: The data carried by CachedData may depend on the exact
+   *   V8 version number or currently compiler flags. This means when
+   *   persisting CachedData, the embedder must take care to not pass in
+   *   data from another V8 version, or the same version with different
+   *   features enabled.
+   *
+   *   The easiest way to do so is to clear the embedder's cache on any
+   *   such change.
+   *
+   *   Alternatively, this tag can be stored alongside the cached data and
+   *   compared when it is being used.
+   */
+  static uint32_t CachedDataVersionTag();
 };
 
 
@@ -1612,6 +1649,18 @@ class V8_EXPORT Value : public Data {
    * This is an experimental feature.
    */
   bool IsSet() const;
+
+  /**
+   * Returns true if this value is a Map Iterator.
+   * This is an experimental feature.
+   */
+  bool IsMapIterator() const;
+
+  /**
+   * Returns true if this value is a Set Iterator.
+   * This is an experimental feature.
+   */
+  bool IsSetIterator() const;
 
   /**
    * Returns true if this value is a WeakMap.
@@ -3496,6 +3545,51 @@ typedef void (*NamedPropertyEnumeratorCallback)(
     const PropertyCallbackInfo<Array>& info);
 
 
+// TODO(dcarney): Deprecate and remove previous typedefs, and replace
+// GenericNamedPropertyFooCallback with just NamedPropertyFooCallback.
+/**
+ * GenericNamedProperty[Getter|Setter] are used as interceptors on object.
+ * See ObjectTemplate::SetNamedPropertyHandler.
+ */
+typedef void (*GenericNamedPropertyGetterCallback)(
+    Local<Name> property, const PropertyCallbackInfo<Value>& info);
+
+
+/**
+ * Returns the value if the setter intercepts the request.
+ * Otherwise, returns an empty handle.
+ */
+typedef void (*GenericNamedPropertySetterCallback)(
+    Local<Name> property, Local<Value> value,
+    const PropertyCallbackInfo<Value>& info);
+
+
+/**
+ * Returns a non-empty handle if the interceptor intercepts the request.
+ * The result is an integer encoding property attributes (like v8::None,
+ * v8::DontEnum, etc.)
+ */
+typedef void (*GenericNamedPropertyQueryCallback)(
+    Local<Name> property, const PropertyCallbackInfo<Integer>& info);
+
+
+/**
+ * Returns a non-empty handle if the deleter intercepts the request.
+ * The return value is true if the property could be deleted and false
+ * otherwise.
+ */
+typedef void (*GenericNamedPropertyDeleterCallback)(
+    Local<Name> property, const PropertyCallbackInfo<Boolean>& info);
+
+
+/**
+ * Returns an array containing the names of the properties the named
+ * property getter intercepts.
+ */
+typedef void (*GenericNamedPropertyEnumeratorCallback)(
+    const PropertyCallbackInfo<Array>& info);
+
+
 /**
  * Returns the value of the property if the getter intercepts the
  * request.  Otherwise, returns an empty handle.
@@ -3748,6 +3842,31 @@ class V8_EXPORT FunctionTemplate : public Template {
 };
 
 
+struct NamedPropertyHandlerConfiguration {
+  NamedPropertyHandlerConfiguration(
+      /** Note: getter is required **/
+      GenericNamedPropertyGetterCallback getter = 0,
+      GenericNamedPropertySetterCallback setter = 0,
+      GenericNamedPropertyQueryCallback query = 0,
+      GenericNamedPropertyDeleterCallback deleter = 0,
+      GenericNamedPropertyEnumeratorCallback enumerator = 0,
+      Handle<Value> data = Handle<Value>())
+      : getter(getter),
+        setter(setter),
+        query(query),
+        deleter(deleter),
+        enumerator(enumerator),
+        data(data) {}
+
+  GenericNamedPropertyGetterCallback getter;
+  GenericNamedPropertySetterCallback setter;
+  GenericNamedPropertyQueryCallback query;
+  GenericNamedPropertyDeleterCallback deleter;
+  GenericNamedPropertyEnumeratorCallback enumerator;
+  Handle<Value> data;
+};
+
+
 /**
  * An ObjectTemplate is used to create objects at runtime.
  *
@@ -3817,6 +3936,9 @@ class V8_EXPORT ObjectTemplate : public Template {
    * from this object template, the provided callback is invoked instead of
    * accessing the property directly on the JavaScript object.
    *
+   * Note that new code should use the second version that can intercept
+   * symbol-named properties as well as string-named properties.
+   *
    * \param getter The callback to invoke when getting a property.
    * \param setter The callback to invoke when setting a property.
    * \param query The callback to invoke to check if a property is present,
@@ -3834,6 +3956,7 @@ class V8_EXPORT ObjectTemplate : public Template {
       NamedPropertyDeleterCallback deleter = 0,
       NamedPropertyEnumeratorCallback enumerator = 0,
       Handle<Value> data = Handle<Value>());
+  void SetHandler(const NamedPropertyHandlerConfiguration& configuration);
 
   /**
    * Sets an indexed property handler on the object template.
@@ -4164,9 +4287,17 @@ class V8_EXPORT Exception {
   static Local<Value> TypeError(Handle<String> message);
   static Local<Value> Error(Handle<String> message);
 
-  static Local<Message> GetMessage(Handle<Value> exception);
+  /**
+   * Creates an error message for the given exception.
+   * Will try to reconstruct the original stack trace from the exception value,
+   * or capture the current stack trace if not available.
+   */
+  static Local<Message> CreateMessage(Handle<Value> exception);
 
-  // DEPRECATED. Use GetMessage()->GetStackTrace()
+  /**
+   * Returns the original stack trace that was captured at the creation time
+   * of a given exception, or an empty handle if not available.
+   */
   static Local<StackTrace> GetStackTrace(Handle<Value> exception);
 };
 
@@ -4228,7 +4359,7 @@ class PromiseRejectMessage {
   V8_INLINE PromiseRejectEvent GetEvent() const { return event_; }
   V8_INLINE Handle<Value> GetValue() const { return value_; }
 
-  // DEPRECATED. Use v8::Exception::GetMessage(GetValue())->GetStackTrace()
+  // DEPRECATED. Use v8::Exception::CreateMessage(GetValue())->GetStackTrace()
   V8_INLINE Handle<StackTrace> GetStackTrace() const { return stack_trace_; }
 
  private:
@@ -4593,6 +4724,8 @@ class V8_EXPORT Isolate {
   /**
    * Returns the entered isolate for the current thread or NULL in
    * case there is no current isolate.
+   *
+   * This method must not be invoked before V8::Initialize() was invoked.
    */
   static Isolate* GetCurrent();
 
@@ -5103,39 +5236,8 @@ class V8_EXPORT Isolate {
 
 class V8_EXPORT StartupData {
  public:
-  enum CompressionAlgorithm {
-    kUncompressed,
-    kBZip2
-  };
-
   const char* data;
-  int compressed_size;
   int raw_size;
-};
-
-
-/**
- * A helper class for driving V8 startup data decompression.  It is based on
- * "CompressedStartupData" API functions from the V8 class.  It isn't mandatory
- * for an embedder to use this class, instead, API functions can be used
- * directly.
- *
- * For an example of the class usage, see the "shell.cc" sample application.
- */
-class V8_EXPORT StartupDataDecompressor {  // NOLINT
- public:
-  StartupDataDecompressor();
-  virtual ~StartupDataDecompressor();
-  int Decompress();
-
- protected:
-  virtual int DecompressData(char* raw_data,
-                             int* raw_data_size,
-                             const char* compressed_data,
-                             int compressed_data_size) = 0;
-
- private:
-  char** raw_data;
 };
 
 
@@ -5194,30 +5296,6 @@ class V8_EXPORT V8 {
   */
   // TODO(dcarney): deprecate this.
   V8_INLINE static bool IsDead();
-
-  /**
-   * The following 4 functions are to be used when V8 is built with
-   * the 'compress_startup_data' flag enabled. In this case, the
-   * embedder must decompress startup data prior to initializing V8.
-   *
-   * This is how interaction with V8 should look like:
-   *   int compressed_data_count = v8::V8::GetCompressedStartupDataCount();
-   *   v8::StartupData* compressed_data =
-   *     new v8::StartupData[compressed_data_count];
-   *   v8::V8::GetCompressedStartupData(compressed_data);
-   *   ... decompress data (compressed_data can be updated in-place) ...
-   *   v8::V8::SetDecompressedStartupData(compressed_data);
-   *   ... now V8 can be initialized
-   *   ... make sure the decompressed data stays valid until V8 shutdown
-   *
-   * A helper class StartupDataDecompressor is provided. It implements
-   * the protocol of the interaction described above, and can be used in
-   * most cases instead of calling these API functions directly.
-   */
-  static StartupData::CompressionAlgorithm GetCompressedStartupDataAlgorithm();
-  static int GetCompressedStartupDataCount();
-  static void GetCompressedStartupData(StartupData* compressed_data);
-  static void SetDecompressedStartupData(StartupData* decompressed_data);
 
   /**
    * Hand startup data to V8, in case the embedder has chosen to build
@@ -5477,14 +5555,15 @@ class V8_EXPORT V8 {
  private:
   V8();
 
+  enum WeakHandleType { PhantomHandle, NonphantomHandle };
+
   static internal::Object** GlobalizeReference(internal::Isolate* isolate,
                                                internal::Object** handle);
   static internal::Object** CopyPersistent(internal::Object** handle);
   static void DisposeGlobal(internal::Object** global_handle);
   typedef WeakCallbackData<Value, void>::Callback WeakCallback;
-  static void MakeWeak(internal::Object** global_handle,
-                       void* data,
-                       WeakCallback weak_callback);
+  static void MakeWeak(internal::Object** global_handle, void* data,
+                       WeakCallback weak_callback, WeakHandleType phantom);
   static void* ClearWeak(internal::Object** global_handle);
   static void Eternalize(Isolate* isolate,
                          Value* handle,
@@ -6355,9 +6434,8 @@ void PersistentBase<T>::SetWeak(
     typename WeakCallbackData<S, P>::Callback callback) {
   TYPE_CHECK(S, T);
   typedef typename WeakCallbackData<Value, void>::Callback Callback;
-  V8::MakeWeak(reinterpret_cast<internal::Object**>(this->val_),
-               parameter,
-               reinterpret_cast<Callback>(callback));
+  V8::MakeWeak(reinterpret_cast<internal::Object**>(this->val_), parameter,
+               reinterpret_cast<Callback>(callback), V8::NonphantomHandle);
 }
 
 
@@ -6371,7 +6449,26 @@ void PersistentBase<T>::SetWeak(
 
 
 template <class T>
-template<typename P>
+template <typename S, typename P>
+void PersistentBase<T>::SetPhantom(
+    P* parameter, typename WeakCallbackData<S, P>::Callback callback) {
+  TYPE_CHECK(S, T);
+  typedef typename WeakCallbackData<Value, void>::Callback Callback;
+  V8::MakeWeak(reinterpret_cast<internal::Object**>(this->val_), parameter,
+               reinterpret_cast<Callback>(callback), V8::PhantomHandle);
+}
+
+
+template <class T>
+template <typename P>
+void PersistentBase<T>::SetPhantom(
+    P* parameter, typename WeakCallbackData<T, P>::Callback callback) {
+  SetPhantom<T, P>(parameter, callback);
+}
+
+
+template <class T>
+template <typename P>
 P* PersistentBase<T>::ClearWeak() {
   return reinterpret_cast<P*>(
     V8::ClearWeak(reinterpret_cast<internal::Object**>(this->val_)));

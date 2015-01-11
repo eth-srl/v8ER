@@ -18,6 +18,7 @@ CodeGenerator::CodeGenerator(Frame* frame, Linkage* linkage,
       linkage_(linkage),
       code_(code),
       info_(info),
+      labels_(zone()->NewArray<Label>(code->InstructionBlockCount())),
       current_block_(BasicBlock::RpoNumber::Invalid()),
       current_source_position_(SourcePosition::Invalid()),
       masm_(code->zone()->isolate(), NULL, 0),
@@ -26,7 +27,11 @@ CodeGenerator::CodeGenerator(Frame* frame, Linkage* linkage,
       deoptimization_states_(code->zone()),
       deoptimization_literals_(code->zone()),
       translations_(code->zone()),
-      last_lazy_deopt_pc_(0) {}
+      last_lazy_deopt_pc_(0) {
+  for (int i = 0; i < code->InstructionBlockCount(); ++i) {
+    new (&labels_[i]) Label;
+  }
+}
 
 
 Handle<Code> CodeGenerator::GenerateCode() {
@@ -45,19 +50,24 @@ Handle<Code> CodeGenerator::GenerateCode() {
   info->set_prologue_offset(masm()->pc_offset());
   AssemblePrologue();
 
-  // Assemble all non-deferred instructions.
-  for (auto const block : code()->instruction_blocks()) {
-    if (block->IsDeferred()) continue;
-    for (int i = block->code_start(); i < block->code_end(); ++i) {
-      AssembleInstruction(code()->InstructionAt(i));
-    }
-  }
-
-  // Assemble all deferred instructions.
-  for (auto const block : code()->instruction_blocks()) {
-    if (!block->IsDeferred()) continue;
-    for (int i = block->code_start(); i < block->code_end(); ++i) {
-      AssembleInstruction(code()->InstructionAt(i));
+  // Assemble all non-deferred blocks, followed by deferred ones.
+  for (int deferred = 0; deferred < 2; ++deferred) {
+    for (auto const block : code()->instruction_blocks()) {
+      if (block->IsDeferred() == (deferred == 0)) {
+        continue;
+      }
+      // Bind a label for a block.
+      current_block_ = block->rpo_number();
+      if (FLAG_code_comments) {
+        // TODO(titzer): these code comments are a giant memory leak.
+        Vector<char> buffer = Vector<char>::New(32);
+        SNPrintF(buffer, "-- B%d start --", block->id().ToInt());
+        masm()->RecordComment(buffer.start());
+      }
+      masm()->bind(GetLabel(current_block_));
+      for (int i = block->code_start(); i < block->code_end(); ++i) {
+        AssembleInstruction(code()->InstructionAt(i));
+      }
     }
   }
 
@@ -120,18 +130,6 @@ void CodeGenerator::RecordSafepoint(PointerMap* pointers, Safepoint::Kind kind,
 
 
 void CodeGenerator::AssembleInstruction(Instruction* instr) {
-  if (instr->IsBlockStart()) {
-    // Bind a label for a block start and handle parallel moves.
-    BlockStartInstruction* block_start = BlockStartInstruction::cast(instr);
-    current_block_ = block_start->rpo_number();
-    if (FLAG_code_comments) {
-      // TODO(titzer): these code comments are a giant memory leak.
-      Vector<char> buffer = Vector<char>::New(32);
-      SNPrintF(buffer, "-- B%d start --", block_start->id().ToInt());
-      masm()->RecordComment(buffer.start());
-    }
-    masm()->bind(block_start->label());
-  }
   if (instr->IsGapMoves()) {
     // Handle parallel moves associated with the gap instruction.
     AssembleGap(GapInstruction::cast(instr));
@@ -141,18 +139,39 @@ void CodeGenerator::AssembleInstruction(Instruction* instr) {
     // Assemble architecture-specific code for the instruction.
     AssembleArchInstruction(instr);
 
-    // Assemble branches or boolean materializations after this instruction.
     FlagsMode mode = FlagsModeField::decode(instr->opcode());
     FlagsCondition condition = FlagsConditionField::decode(instr->opcode());
-    switch (mode) {
-      case kFlags_none:
+    if (mode == kFlags_branch) {
+      // Assemble a branch after this instruction.
+      InstructionOperandConverter i(this, instr);
+      BasicBlock::RpoNumber true_rpo =
+          i.InputRpo(static_cast<int>(instr->InputCount()) - 2);
+      BasicBlock::RpoNumber false_rpo =
+          i.InputRpo(static_cast<int>(instr->InputCount()) - 1);
+
+      if (true_rpo == false_rpo) {
+        // redundant branch.
+        if (!IsNextInAssemblyOrder(true_rpo)) {
+          AssembleArchJump(true_rpo);
+        }
         return;
-      case kFlags_set:
-        return AssembleArchBoolean(instr, condition);
-      case kFlags_branch:
-        return AssembleArchBranch(instr, condition);
+      }
+      if (IsNextInAssemblyOrder(true_rpo)) {
+        // true block is next, can fall through if condition negated.
+        std::swap(true_rpo, false_rpo);
+        condition = NegateFlagsCondition(condition);
+      }
+      BranchInfo branch;
+      branch.condition = condition;
+      branch.true_label = GetLabel(true_rpo);
+      branch.false_label = GetLabel(false_rpo);
+      branch.fallthru = IsNextInAssemblyOrder(false_rpo);
+      // Assemble architecture-specific branch.
+      AssembleArchBranch(instr, &branch);
+    } else if (mode == kFlags_set) {
+      // Assemble a boolean materialization after this instruction.
+      AssembleArchBoolean(instr, condition);
     }
-    UNREACHABLE();
   }
 }
 
@@ -424,7 +443,8 @@ void CodeGenerator::AddTranslationForOperand(Translation* translation,
     if (type == kMachBool || type == kMachInt32 || type == kMachInt8 ||
         type == kMachInt16) {
       translation->StoreInt32StackSlot(op->index());
-    } else if (type == kMachUint32) {
+    } else if (type == kMachUint32 || type == kMachUint16 ||
+               type == kMachUint8) {
       translation->StoreUint32StackSlot(op->index());
     } else if ((type & kRepMask) == kRepTagged) {
       translation->StoreStackSlot(op->index());
@@ -439,7 +459,8 @@ void CodeGenerator::AddTranslationForOperand(Translation* translation,
     if (type == kMachBool || type == kMachInt32 || type == kMachInt8 ||
         type == kMachInt16) {
       translation->StoreInt32Register(converter.ToRegister(op));
-    } else if (type == kMachUint32) {
+    } else if (type == kMachUint32 || type == kMachUint16 ||
+               type == kMachUint8) {
       translation->StoreUint32Register(converter.ToRegister(op));
     } else if ((type & kRepMask) == kRepTagged) {
       translation->StoreRegister(converter.ToRegister(op));
@@ -491,13 +512,18 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
 
 
 void CodeGenerator::AssembleArchBranch(Instruction* instr,
-                                       FlagsCondition condition) {
+                                       BranchInfo* branch) {
   UNIMPLEMENTED();
 }
 
 
 void CodeGenerator::AssembleArchBoolean(Instruction* instr,
                                         FlagsCondition condition) {
+  UNIMPLEMENTED();
+}
+
+
+void CodeGenerator::AssembleArchJump(BasicBlock::RpoNumber target) {
   UNIMPLEMENTED();
 }
 

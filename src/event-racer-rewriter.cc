@@ -14,7 +14,7 @@ EventRacerRewriter::AstRewriterImpl(CompilationInfo *info)
 
   InitializeAstRewriter(info->zone());
 
-  Scope &globals = *info->global_scope();
+  Scope &globals = *info->script_scope();
   AstValueFactory &values = *info->ast_value_factory();
 
 #define FN(fn)  \
@@ -107,7 +107,7 @@ Expression *EventRacerRewriter::log_vp(VariableProxy *vp, Expression *value,
 }
 
 EventRacerRewriter::ScopeHack *EventRacerRewriter::NewScope(Scope* outer) {
-  return new (zone()) ScopeHack(outer ? outer : info_->global_scope(),
+  return new (zone()) ScopeHack(outer ? outer : info_->script_scope(),
                                 info_->ast_value_factory(), zone());
 }
 
@@ -1006,7 +1006,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
     if (op->is_compound()) {
       BinaryOperation *binop = op->binary_operation_;
       op->binary_operation_ = NULL;
-      op->op_ = Token::ASSIGN;
+      op->bit_field_ = Assignment::TokenField::update(op->bit_field_, Token::ASSIGN);
       op->target_ = factory_.NewVariableProxy(vp->var(), vp->position());
       value = binop;
     } else {
@@ -1299,18 +1299,6 @@ void AstSlotCounter::add_materialized_literal(MaterializedLiteral *lit) {
   lit->set_literal_index(state_->materialized_literal_count++);
 }
 
-void AstSlotCounter::add_feedback_slot(AstNode *nd) {
-  FeedbackVectorRequirements req = nd->ComputeFeedbackRequirements();
-  if (req.slots() > 0) {
-    nd->SetFirstFeedbackSlot(FeedbackVectorSlot(state_->feedback_slot_count));
-    state_->feedback_slot_count += req.slots();
-  }
-  if (req.ic_slots() > 0) {
-    nd->SetFirstFeedbackICSlot(FeedbackVectorICSlot(state_->ic_feedback_slot_count));
-    state_->ic_feedback_slot_count += req.ic_slots();
-  }
-}
-
 template<typename T> void traverse(AstVisitor *v, T *node) {
   if (node)
     node->Accept(v);
@@ -1405,7 +1393,6 @@ void AstSlotCounter::VisitForStatement(ForStatement *st) {
 }
 
 void AstSlotCounter::VisitForInStatement(ForInStatement *st) {
-  add_feedback_slot(st);
   traverse(this, st->each());
   traverse(this, st->subject());
   traverse(this, st->body());
@@ -1472,32 +1459,24 @@ void AstSlotCounter::VisitArrayLiteral(ArrayLiteral *lit) {
 }
 
 void AstSlotCounter::VisitVariableProxy(VariableProxy *vp) {
-  // We may encounter variables created with the AstNullVisitor,
-  // therefore without a feedback slot assigned.
-  if (!vp->VariableFeedbackSlot().IsInvalid())
-    add_feedback_slot(vp);
 }
 
 void AstSlotCounter::VisitProperty(Property *p) {
-  add_feedback_slot(p);
   traverse(this, p->obj());
   traverse(this, p->key());
 }
 
 void AstSlotCounter::VisitCall(Call *c) {
-  add_feedback_slot(c);
   traverse(this, c->expression());
   traverse(this, c->arguments());
 }
 
 void AstSlotCounter::VisitCallNew(CallNew *c) {
-  add_feedback_slot(c);
   traverse(this, c->expression());
   traverse(this, c->arguments());
 }
 
 void AstSlotCounter::VisitCallRuntime(CallRuntime *c) {
-  add_feedback_slot(c);
   traverse(this, c->arguments());
 }
 
@@ -1520,7 +1499,6 @@ void AstSlotCounter::VisitCompareOperation(CompareOperation *op) {
 }
 
 void AstSlotCounter::VisitSuperReference(SuperReference *sup) {
-  add_feedback_slot(sup);
   traverse(this, sup->this_var());
 }
 
@@ -1541,7 +1519,6 @@ void AstSlotCounter::VisitAssignment(Assignment *op) {
 
 void AstSlotCounter::VisitYield(Yield *op) {
   // FIXME:  if (op->yield_kind() == Yield::SUSPEND || op->yield_kind() == Yield::FINAL)
-  add_feedback_slot(op);
   traverse(this, op->expression());
 }
 
@@ -1565,12 +1542,6 @@ void AstSlotCounter::VisitFunctionLiteral(FunctionLiteral *fn) {
   traverse(this, scope->declarations());
   traverse(this, fn->body());
   fn->set_materialized_literal_count(state.materialized_literal_count - JSFunction::kLiteralsPrefixSize);
-
-  AstProperties props;
-  *props.flags() = *fn->flags();
-  props.increase_feedback_slots(state.feedback_slot_count);
-  props.increase_ic_feedback_slots(state.ic_feedback_slot_count);
-  fn->set_ast_properties(&props);
 
   end_function();
 }

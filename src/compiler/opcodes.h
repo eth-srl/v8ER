@@ -114,7 +114,7 @@
   V(JSCreateWithContext)      \
   V(JSCreateBlockContext)     \
   V(JSCreateModuleContext)    \
-  V(JSCreateGlobalContext)
+  V(JSCreateScriptContext)
 
 #define JS_OTHER_OP_LIST(V) \
   V(JSCallConstruct)        \
@@ -198,6 +198,7 @@
   V(Uint32LessThan)           \
   V(Uint32LessThanOrEqual)    \
   V(Uint32Mod)                \
+  V(Uint32MulHigh)            \
   V(Int64Add)                 \
   V(Int64Sub)                 \
   V(Int64Mul)                 \

@@ -44,11 +44,9 @@ void Builtins::Generate_Adaptor(MacroAssembler* masm,
     DCHECK(extra_args == NO_EXTRA_ARGUMENTS);
   }
 
-  // JumpToExternalReference expects s0 to contain the number of arguments
+  // JumpToExternalReference expects a0 to contain the number of arguments
   // including the receiver and the extra arguments.
-  __ Daddu(s0, a0, num_extra_args + 1);
-  __ dsll(s1, s0, kPointerSizeLog2);
-  __ Dsubu(s1, s1, kPointerSize);
+  __ Daddu(a0, a0, num_extra_args + 1);
   __ JumpToExternalReference(ExternalReference(id, masm->isolate()));
 }
 
@@ -782,11 +780,6 @@ static void Generate_JSEntryTrampolineHelper(MacroAssembler* masm,
     // a3: argc
     // s0: argv, i.e. points to first arg
     Label loop, entry;
-    // TODO(plind): At least on simulator, argc in a3 is an int32_t with junk
-    //    in upper bits. Should fix the root cause, rather than use below
-    //    workaround to clear upper bits.
-    __ dsll32(a3, a3, 0);  // int32_t -> int64_t.
-    __ dsrl32(a3, a3, 0);
     __ dsll(a4, a3, kPointerSizeLog2);
     __ daddu(a6, s0, a4);
     __ b(&entry);

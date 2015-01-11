@@ -45,10 +45,11 @@ import urllib2
 from git_recipes import GitRecipesMixin
 from git_recipes import GitFailedException
 
+CHANGELOG_FILE = "ChangeLog"
 VERSION_FILE = os.path.join("src", "version.cc")
 
 # V8 base directory.
-DEFAULT_CWD = os.path.dirname(
+V8_BASE = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -271,12 +272,6 @@ class VCInterface(object):
   def GetBranches(self):
     raise NotImplementedError()
 
-  def GitSvn(self, hsh, branch=""):
-    raise NotImplementedError()
-
-  def SvnGit(self, rev, branch=""):
-    raise NotImplementedError()
-
   def MasterBranch(self):
     raise NotImplementedError()
 
@@ -292,15 +287,9 @@ class VCInterface(object):
   def RemoteBranch(self, name):
     raise NotImplementedError()
 
-  def Land(self):
-    raise NotImplementedError()
-
   def CLLand(self):
     raise NotImplementedError()
 
-  # TODO(machenbach): There is some svn knowledge in this interface. In svn,
-  # tag and commit are different remote commands, while in git we would commit
-  # and tag locally and then push/land in one unique step.
   def Tag(self, tag, remote, message):
     """Sets a tag for the current commit.
 
@@ -309,68 +298,12 @@ class VCInterface(object):
     raise NotImplementedError()
 
 
-class GitSvnInterface(VCInterface):
-  def Pull(self):
-    self.step.GitSVNRebase()
-
-  def Fetch(self):
-    self.step.GitSVNFetch()
-
-  def GetTags(self):
-    # Get remote tags.
-    tags = filter(lambda s: re.match(r"^svn/tags/[\d+\.]+$", s),
-                  self.step.GitRemotes())
-
-    # Remove 'svn/tags/' prefix.
-    return map(lambda s: s[9:], tags)
-
-  def GetBranches(self):
-    # Get relevant remote branches, e.g. "svn/3.25".
-    branches = filter(lambda s: re.match(r"^svn/\d+\.\d+$", s),
-                      self.step.GitRemotes())
-    # Remove 'svn/' prefix.
-    return map(lambda s: s[4:], branches)
-
-  def GitSvn(self, hsh, branch=""):
-    return self.step.GitSVNFindSVNRev(hsh, branch)
-
-  def SvnGit(self, rev, branch=""):
-    return self.step.GitSVNFindGitHash(rev, branch)
-
-  def MasterBranch(self):
-    return "bleeding_edge"
-
-  def CandidateBranch(self):
-    return "trunk"
-
-  def RemoteMasterBranch(self):
-    return "svn/bleeding_edge"
-
-  def RemoteCandidateBranch(self):
-    return "svn/trunk"
-
-  def RemoteBranch(self, name):
-    return "svn/%s" % name
-
-  def Land(self):
-    self.step.GitSVNDCommit()
-
-  def CLLand(self):
-    self.step.GitDCommit()
-
-  def Tag(self, tag, remote, _):
-    self.step.GitSVNFetch()
-    self.step.Git("rebase %s" % remote)
-    self.step.GitSVNTag(tag)
-
-
-class GitTagsOnlyMixin(VCInterface):
+class GitInterface(VCInterface):
   def Pull(self):
     self.step.GitPull()
 
   def Fetch(self):
     self.step.Git("fetch")
-    self.step.GitSVNFetch()
 
   def GetTags(self):
      return self.step.Git("tag").strip().splitlines()
@@ -405,7 +338,7 @@ class GitTagsOnlyMixin(VCInterface):
     # is the case for all automated merge and push commits - also no title is
     # the prefix of another title).
     commit = None
-    for wait_interval in [3, 7, 15, 35]:
+    for wait_interval in [3, 7, 15, 35, 45, 60]:
       self.step.Git("fetch")
       commit = self.step.GitLog(n=1, format="%H", grep=message, branch=remote)
       if commit:
@@ -420,15 +353,8 @@ class GitTagsOnlyMixin(VCInterface):
     self.step.Git("tag %s %s" % (tag, commit))
     self.step.Git("push origin %s" % tag)
 
-
-class GitReadSvnWriteInterface(GitTagsOnlyMixin, GitSvnInterface):
-  pass
-
-
-VC_INTERFACES = {
-  "git_svn": GitSvnInterface,
-  "git_read_svn_write": GitReadSvnWriteInterface,
-}
+  def CLLand(self):
+    self.step.GitCLLand()
 
 
 class Step(GitRecipesMixin):
@@ -439,11 +365,12 @@ class Step(GitRecipesMixin):
     self._state = state
     self._options = options
     self._side_effect_handler = handler
-    self.vc = VC_INTERFACES[options.vc_interface]()
+    self.vc = GitInterface()
     self.vc.InjectStep(self)
 
     # The testing configuration might set a different default cwd.
-    self.default_cwd = self._config.get("DEFAULT_CWD") or DEFAULT_CWD
+    self.default_cwd = (self._config.get("DEFAULT_CWD") or
+                        os.path.join(self._options.work_dir, "v8"))
 
     assert self._number >= 0
     assert self._config is not None
@@ -531,11 +458,6 @@ class Step(GitRecipesMixin):
     if result is None:
       raise GitFailedException("'git %s' failed." % args)
     return result
-
-  def SVN(self, args="", prefix="", pipe=True, retry_on=None, cwd=None):
-    cmd = lambda: self._side_effect_handler.Command(
-        "svn", args, prefix, pipe, cwd=cwd or self.default_cwd)
-    return self.Retry(cmd, retry_on, [5, 30])
 
   def Editor(self, args):
     if self._options.requires_editor:
@@ -698,21 +620,18 @@ class Step(GitRecipesMixin):
       output += "%s\n" % line
     TextToFile(output, version_file)
 
-  def SVNCommit(self, root, commit_message):
-    patch = self.GitDiff("HEAD^", "HEAD")
-    TextToFile(patch, self._config["PATCH_FILE"])
-    self.Command("svn", "update", cwd=self._options.svn)
-    if self.Command("svn", "status", cwd=self._options.svn) != "":
-      self.Die("SVN checkout not clean.")
-    if not self.Command("patch", "-d %s -p1 -i %s" %
-                        (root, self._config["PATCH_FILE"]),
-                        cwd=self._options.svn):
-      self.Die("Could not apply patch.")
-    self.Command(
-        "svn",
-        "commit --non-interactive --username=%s --config-dir=%s -m \"%s\"" %
-            (self._options.author, self._options.svn_config, commit_message),
-        cwd=self._options.svn)
+
+class BootstrapStep(Step):
+  MESSAGE = "Bootstapping v8 checkout."
+
+  def RunStep(self):
+    if os.path.realpath(self.default_cwd) == os.path.realpath(V8_BASE):
+      self.Die("Can't use v8 checkout with calling script as work checkout.")
+    # Directory containing the working v8 checkout.
+    if not os.path.exists(self._options.work_dir):
+      os.makedirs(self._options.work_dir)
+    if not os.path.exists(self.default_cwd):
+      self.Command("fetch", "v8", cwd=self._options.work_dir)
 
 
 class UploadStep(Step):
@@ -819,17 +738,12 @@ class ScriptsBase(object):
                         help=("Determine current sheriff to review CLs. On "
                               "success, this will overwrite the reviewer "
                               "option."))
-    parser.add_argument("--svn",
-                        help=("Optional full svn checkout for the commit."
-                              "The folder needs to be the svn root."))
-    parser.add_argument("--svn-config",
-                        help=("Optional folder used as svn --config-dir."))
     parser.add_argument("-s", "--step",
         help="Specify the step where to start work. Default: 0.",
         default=0, type=int)
-    parser.add_argument("--vc-interface",
-                        help=("Choose VC interface out of git_svn|"
-                              "git_read_svn_write."))
+    parser.add_argument("--work-dir",
+                        help=("Location where to bootstrap a working v8 "
+                              "checkout."))
     self._PrepareOptions(parser)
 
     if args is None:  # pragma: no cover
@@ -844,10 +758,6 @@ class ScriptsBase(object):
       return None
     if options.sheriff and not options.googlers_mapping:  # pragma: no cover
       print "To determine the current sheriff, requires the googler mapping"
-      parser.print_help()
-      return None
-    if options.svn and not options.svn_config:
-      print "Using pure svn for committing requires also --svn-config"
       parser.print_help()
       return None
 
@@ -867,8 +777,8 @@ class ScriptsBase(object):
       parser.print_help()
       return None
 
-    if not options.vc_interface:
-      options.vc_interface = "git_read_svn_write"
+    if not options.work_dir:
+      options.work_dir = "/tmp/v8-release-scripts-work-dir"
     return options
 
   def RunSteps(self, step_classes, args=None):
@@ -881,7 +791,7 @@ class ScriptsBase(object):
       os.remove(state_file)
 
     steps = []
-    for (number, step_class) in enumerate(step_classes):
+    for (number, step_class) in enumerate([BootstrapStep] + step_classes):
       steps.append(MakeStep(step_class, number, self._state, self._config,
                             options, self._side_effect_handler))
     for step in steps[options.step:]:

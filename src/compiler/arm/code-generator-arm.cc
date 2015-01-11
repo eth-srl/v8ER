@@ -77,6 +77,7 @@ class ArmOperandConverter FINAL : public InstructionOperandConverter {
       case Constant::kInt64:
       case Constant::kExternalReference:
       case Constant::kHeapObject:
+      case Constant::kRpoNumber:
         break;
     }
     UNREACHABLE();
@@ -193,7 +194,7 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       break;
     }
     case kArchJmp:
-      __ b(code_->GetLabel(i.InputRpo(0)));
+      AssembleArchJump(i.InputRpo(0));
       DCHECK_EQ(LeaveCC, i.OutputSBit());
       break;
     case kArchNop:
@@ -248,6 +249,10 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
                i.InputRegister(2));
       DCHECK_EQ(LeaveCC, i.OutputSBit());
       break;
+    case kArmUmull:
+      __ umull(i.OutputRegister(0), i.OutputRegister(1), i.InputRegister(0),
+               i.InputRegister(1), i.OutputSBit());
+      break;
     case kArmSdiv: {
       CpuFeatureScope scope(masm(), SUDIV);
       __ sdiv(i.OutputRegister(), i.InputRegister(0), i.InputRegister(1));
@@ -295,6 +300,42 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       DCHECK_EQ(LeaveCC, i.OutputSBit());
       break;
     }
+    case kArmSxtb:
+      __ sxtb(i.OutputRegister(), i.InputRegister(0), i.InputInt32(1));
+      DCHECK_EQ(LeaveCC, i.OutputSBit());
+      break;
+    case kArmSxth:
+      __ sxth(i.OutputRegister(), i.InputRegister(0), i.InputInt32(1));
+      DCHECK_EQ(LeaveCC, i.OutputSBit());
+      break;
+    case kArmSxtab:
+      __ sxtab(i.OutputRegister(), i.InputRegister(0), i.InputRegister(1),
+               i.InputInt32(2));
+      DCHECK_EQ(LeaveCC, i.OutputSBit());
+      break;
+    case kArmSxtah:
+      __ sxtah(i.OutputRegister(), i.InputRegister(0), i.InputRegister(1),
+               i.InputInt32(2));
+      DCHECK_EQ(LeaveCC, i.OutputSBit());
+      break;
+    case kArmUxtb:
+      __ uxtb(i.OutputRegister(), i.InputRegister(0), i.InputInt32(1));
+      DCHECK_EQ(LeaveCC, i.OutputSBit());
+      break;
+    case kArmUxth:
+      __ uxth(i.OutputRegister(), i.InputRegister(0), i.InputInt32(1));
+      DCHECK_EQ(LeaveCC, i.OutputSBit());
+      break;
+    case kArmUxtab:
+      __ uxtab(i.OutputRegister(), i.InputRegister(0), i.InputRegister(1),
+               i.InputInt32(2));
+      DCHECK_EQ(LeaveCC, i.OutputSBit());
+      break;
+    case kArmUxtah:
+      __ uxtah(i.OutputRegister(), i.InputRegister(0), i.InputRegister(1),
+               i.InputInt32(2));
+      DCHECK_EQ(LeaveCC, i.OutputSBit());
+      break;
     case kArmCmp:
       __ cmp(i.InputRegister(0), i.InputOperand2(1));
       DCHECK_EQ(SetCC, i.OutputSBit());
@@ -499,21 +540,11 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
 
 
 // Assembles branches after an instruction.
-void CodeGenerator::AssembleArchBranch(Instruction* instr,
-                                       FlagsCondition condition) {
+void CodeGenerator::AssembleArchBranch(Instruction* instr, BranchInfo* branch) {
   ArmOperandConverter i(this, instr);
-  Label done;
-
-  // Emit a branch. The true and false targets are always the last two inputs
-  // to the instruction.
-  BasicBlock::RpoNumber tblock =
-      i.InputRpo(static_cast<int>(instr->InputCount()) - 2);
-  BasicBlock::RpoNumber fblock =
-      i.InputRpo(static_cast<int>(instr->InputCount()) - 1);
-  bool fallthru = IsNextInAssemblyOrder(fblock);
-  Label* tlabel = code()->GetLabel(tblock);
-  Label* flabel = fallthru ? &done : code()->GetLabel(fblock);
-  switch (condition) {
+  Label* tlabel = branch->true_label;
+  Label* flabel = branch->false_label;
+  switch (branch->condition) {
     case kUnorderedEqual:
       __ b(vs, flabel);
     // Fall through.
@@ -569,8 +600,12 @@ void CodeGenerator::AssembleArchBranch(Instruction* instr,
       __ b(vc, tlabel);
       break;
   }
-  if (!fallthru) __ b(flabel);  // no fallthru to flabel.
-  __ bind(&done);
+  if (!branch->fallthru) __ b(flabel);  // no fallthru to flabel.
+}
+
+
+void CodeGenerator::AssembleArchJump(BasicBlock::RpoNumber target) {
+  if (!IsNextInAssemblyOrder(target)) __ b(GetLabel(target));
 }
 
 
@@ -698,24 +733,6 @@ void CodeGenerator::AssemblePrologue() {
     __ Prologue(info->IsCodePreAgingActive());
     frame()->SetRegisterSaveAreaSize(
         StandardFrameConstants::kFixedFrameSizeFromFp);
-
-    // Sloppy mode functions and builtins need to replace the receiver with the
-    // global proxy when called as functions (without an explicit receiver
-    // object).
-    // TODO(mstarzinger/verwaest): Should this be moved back into the CallIC?
-    if (info->strict_mode() == SLOPPY && !info->is_native()) {
-      Label ok;
-      // +2 for return address and saved frame pointer.
-      int receiver_slot = info->scope()->num_parameters() + 2;
-      __ ldr(r2, MemOperand(fp, receiver_slot * kPointerSize));
-      __ CompareRoot(r2, Heap::kUndefinedValueRootIndex);
-      __ b(ne, &ok);
-      __ ldr(r2, GlobalObjectOperand());
-      __ ldr(r2, FieldMemOperand(r2, GlobalObject::kGlobalProxyOffset));
-      __ str(r2, MemOperand(fp, receiver_slot * kPointerSize));
-      __ bind(&ok);
-    }
-
   } else {
     __ StubPrologue();
     frame()->SetRegisterSaveAreaSize(
@@ -804,6 +821,9 @@ void CodeGenerator::AssembleMove(InstructionOperand* source,
           break;
         case Constant::kHeapObject:
           __ Move(dst, src.ToHeapObject());
+          break;
+        case Constant::kRpoNumber:
+          UNREACHABLE();  // TODO(dcarney): loading RPO constants on arm.
           break;
       }
       if (destination->IsStackSlot()) __ str(dst, g.ToMemOperand(destination));

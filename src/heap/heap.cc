@@ -70,6 +70,7 @@ Heap::Heap()
       // generation can be aligned to its size.
       maximum_committed_(0),
       survived_since_last_expansion_(0),
+      survived_last_scavenge_(0),
       sweep_generation_(0),
       always_allocate_scope_depth_(0),
       contexts_disposed_(0),
@@ -844,7 +845,7 @@ bool Heap::CollectGarbage(GarbageCollector collector, const char* gc_reason,
     }
 
     GarbageCollectionEpilogue();
-    tracer()->Stop();
+    tracer()->Stop(collector);
   }
 
   // Start incremental marking for the next cycle. The heap snapshot
@@ -865,6 +866,7 @@ int Heap::NotifyContextDisposed() {
   }
   flush_monomorphic_ics_ = true;
   AgeInlineCaches();
+  tracer()->AddContextDisposalTime(base::OS::TimeCurrentMillis());
   return ++contexts_disposed_;
 }
 
@@ -939,6 +941,8 @@ bool Heap::ReserveSpace(Reservation* reservations) {
         for (auto& chunk : *reservation) {
           AllocationResult allocation;
           int size = chunk.size;
+          DCHECK_LE(size, MemoryAllocator::PageAreaSize(
+                              static_cast<AllocationSpace>(space)));
           if (space == NEW_SPACE) {
             allocation = new_space()->AllocateRaw(size);
           } else {
@@ -1298,11 +1302,18 @@ static void VerifyNonPointerSpacePointers(Heap* heap) {
 
 
 void Heap::CheckNewSpaceExpansionCriteria() {
-  if (new_space_.TotalCapacity() < new_space_.MaximumCapacity() &&
-      survived_since_last_expansion_ > new_space_.TotalCapacity()) {
-    // Grow the size of new space if there is room to grow, enough data
-    // has survived scavenge since the last expansion and we are not in
-    // high promotion mode.
+  if (FLAG_experimental_new_space_growth_heuristic) {
+    if (new_space_.TotalCapacity() < new_space_.MaximumCapacity() &&
+        survived_last_scavenge_ * 100 / new_space_.TotalCapacity() >= 10) {
+      // Grow the size of new space if there is room to grow, and more than 10%
+      // have survived the last scavenge.
+      new_space_.Grow();
+      survived_since_last_expansion_ = 0;
+    }
+  } else if (new_space_.TotalCapacity() < new_space_.MaximumCapacity() &&
+             survived_since_last_expansion_ > new_space_.TotalCapacity()) {
+    // Grow the size of new space if there is room to grow, and enough data
+    // has survived scavenge since the last expansion.
     new_space_.Grow();
     survived_since_last_expansion_ = 0;
   }
@@ -1826,6 +1837,11 @@ static HeapObject* EnsureDoubleAligned(Heap* heap, HeapObject* object,
 }
 
 
+HeapObject* Heap::DoubleAlignForDeserialization(HeapObject* object, int size) {
+  return EnsureDoubleAligned(this, object, size);
+}
+
+
 enum LoggingAndProfiling {
   LOGGING_AND_PROFILING_ENABLED,
   LOGGING_AND_PROFILING_DISABLED
@@ -2036,7 +2052,17 @@ class ScavengingVisitor : public StaticVisitorBase {
       // Order is important: slot might be inside of the target if target
       // was allocated over a dead object and slot comes from the store
       // buffer.
-      *slot = target;
+
+      // Unfortunately, the allocation can also write over the slot if the slot
+      // was in free space and the allocation wrote free list data (such as the
+      // free list map or entry size) over the slot.  We guard against this by
+      // checking that the slot still points to the object being moved.  This
+      // should be sufficient because neither the free list map nor the free
+      // list entry size should look like a new space pointer (the former is an
+      // old space pointer, the latter is word-aligned).
+      if (*slot == object) {
+        *slot = target;
+      }
       MigrateObject(heap, object, target, object_size);
 
       if (object_contents == POINTER_OBJECT) {
@@ -2295,8 +2321,13 @@ AllocationResult Heap::AllocatePartialMap(InstanceType instance_type,
   reinterpret_cast<Map*>(result)->set_map(raw_unchecked_meta_map());
   reinterpret_cast<Map*>(result)->set_instance_type(instance_type);
   reinterpret_cast<Map*>(result)->set_instance_size(instance_size);
+  // Initialize to only containing tagged fields.
   reinterpret_cast<Map*>(result)->set_visitor_id(
-      StaticVisitorBase::GetVisitorId(instance_type, instance_size));
+      StaticVisitorBase::GetVisitorId(instance_type, instance_size, false));
+  if (FLAG_unbox_double_fields) {
+    reinterpret_cast<Map*>(result)
+        ->set_layout_descriptor(LayoutDescriptor::FastPointerLayout());
+  }
   reinterpret_cast<Map*>(result)->set_inobject_properties(0);
   reinterpret_cast<Map*>(result)->set_pre_allocated_property_fields(0);
   reinterpret_cast<Map*>(result)->set_unused_property_fields(0);
@@ -2319,8 +2350,6 @@ AllocationResult Heap::AllocateMap(InstanceType instance_type,
   result->set_map_no_write_barrier(meta_map());
   Map* map = Map::cast(result);
   map->set_instance_type(instance_type);
-  map->set_visitor_id(
-      StaticVisitorBase::GetVisitorId(instance_type, instance_size));
   map->set_prototype(null_value(), SKIP_WRITE_BARRIER);
   map->set_constructor(null_value(), SKIP_WRITE_BARRIER);
   map->set_instance_size(instance_size);
@@ -2332,6 +2361,12 @@ AllocationResult Heap::AllocateMap(InstanceType instance_type,
   map->init_back_pointer(undefined_value());
   map->set_unused_property_fields(0);
   map->set_instance_descriptors(empty_descriptor_array());
+  if (FLAG_unbox_double_fields) {
+    map->set_layout_descriptor(LayoutDescriptor::FastPointerLayout());
+  }
+  // Must be called only after |instance_type|, |instance_size| and
+  // |layout_descriptor| are set.
+  map->set_visitor_id(StaticVisitorBase::GetVisitorId(map));
   map->set_bit_field(0);
   map->set_bit_field2(1 << Map::kIsExtensible);
   int bit_field3 = Map::EnumLengthBits::encode(kInvalidEnumCacheSentinel) |
@@ -2458,28 +2493,46 @@ bool Heap::CreateInitialMaps() {
   meta_map()->set_dependent_code(DependentCode::cast(empty_fixed_array()));
   meta_map()->init_back_pointer(undefined_value());
   meta_map()->set_instance_descriptors(empty_descriptor_array());
+  if (FLAG_unbox_double_fields) {
+    meta_map()->set_layout_descriptor(LayoutDescriptor::FastPointerLayout());
+  }
 
   fixed_array_map()->set_code_cache(empty_fixed_array());
   fixed_array_map()->set_dependent_code(
       DependentCode::cast(empty_fixed_array()));
   fixed_array_map()->init_back_pointer(undefined_value());
   fixed_array_map()->set_instance_descriptors(empty_descriptor_array());
+  if (FLAG_unbox_double_fields) {
+    fixed_array_map()->set_layout_descriptor(
+        LayoutDescriptor::FastPointerLayout());
+  }
 
   undefined_map()->set_code_cache(empty_fixed_array());
   undefined_map()->set_dependent_code(DependentCode::cast(empty_fixed_array()));
   undefined_map()->init_back_pointer(undefined_value());
   undefined_map()->set_instance_descriptors(empty_descriptor_array());
+  if (FLAG_unbox_double_fields) {
+    undefined_map()->set_layout_descriptor(
+        LayoutDescriptor::FastPointerLayout());
+  }
 
   null_map()->set_code_cache(empty_fixed_array());
   null_map()->set_dependent_code(DependentCode::cast(empty_fixed_array()));
   null_map()->init_back_pointer(undefined_value());
   null_map()->set_instance_descriptors(empty_descriptor_array());
+  if (FLAG_unbox_double_fields) {
+    null_map()->set_layout_descriptor(LayoutDescriptor::FastPointerLayout());
+  }
 
   constant_pool_array_map()->set_code_cache(empty_fixed_array());
   constant_pool_array_map()->set_dependent_code(
       DependentCode::cast(empty_fixed_array()));
   constant_pool_array_map()->init_back_pointer(undefined_value());
   constant_pool_array_map()->set_instance_descriptors(empty_descriptor_array());
+  if (FLAG_unbox_double_fields) {
+    constant_pool_array_map()->set_layout_descriptor(
+        LayoutDescriptor::FastPointerLayout());
+  }
 
   // Fix prototype object for existing maps.
   meta_map()->set_prototype(null_value());
@@ -2595,7 +2648,8 @@ bool Heap::CreateInitialMaps() {
     ALLOCATE_VARSIZE_MAP(FIXED_ARRAY_TYPE, with_context)
     ALLOCATE_VARSIZE_MAP(FIXED_ARRAY_TYPE, block_context)
     ALLOCATE_VARSIZE_MAP(FIXED_ARRAY_TYPE, module_context)
-    ALLOCATE_VARSIZE_MAP(FIXED_ARRAY_TYPE, global_context)
+    ALLOCATE_VARSIZE_MAP(FIXED_ARRAY_TYPE, script_context)
+    ALLOCATE_VARSIZE_MAP(FIXED_ARRAY_TYPE, script_context_table)
 
     ALLOCATE_VARSIZE_MAP(FIXED_ARRAY_TYPE, native_context)
     native_context_map()->set_dictionary_map(true);
@@ -2877,6 +2931,17 @@ void Heap::CreateInitialObjects() {
   Handle<Symbol> name = factory->NewPrivateOwnSymbol(); \
   roots_[k##name##RootIndex] = *name;
     PRIVATE_SYMBOL_LIST(SYMBOL_INIT)
+#undef SYMBOL_INIT
+  }
+
+  {
+    HandleScope scope(isolate());
+#define SYMBOL_INIT(name, varname, description)                             \
+  Handle<Symbol> name = factory->NewSymbol();                               \
+  Handle<String> name##d = factory->NewStringFromStaticChars(#description); \
+  name->set_name(*name##d);                                                 \
+  roots_[k##name##RootIndex] = *name;
+    PUBLIC_SYMBOL_LIST(SYMBOL_INIT)
 #undef SYMBOL_INIT
   }
 
@@ -4322,13 +4387,13 @@ void Heap::IdleMarkCompact(const char* message) {
 
 void Heap::TryFinalizeIdleIncrementalMarking(
     size_t idle_time_in_ms, size_t size_of_objects,
-    size_t mark_compact_speed_in_bytes_per_ms) {
+    size_t final_incremental_mark_compact_speed_in_bytes_per_ms) {
   if (incremental_marking()->IsComplete() ||
       (mark_compact_collector()->IsMarkingDequeEmpty() &&
-       gc_idle_time_handler_.ShouldDoMarkCompact(
+       gc_idle_time_handler_.ShouldDoFinalIncrementalMarkCompact(
            idle_time_in_ms, size_of_objects,
-           mark_compact_speed_in_bytes_per_ms))) {
-    IdleMarkCompact("idle notification: finalize incremental");
+           final_incremental_mark_compact_speed_in_bytes_per_ms))) {
+    CollectAllGarbage(kNoGCFlags, "idle notification: finalize incremental");
   }
 }
 
@@ -4340,8 +4405,6 @@ bool Heap::WorthActivatingIncrementalMarking() {
 
 
 bool Heap::IdleNotification(int idle_time_in_ms) {
-  // If incremental marking is off, we do not perform idle notification.
-  if (!FLAG_incremental_marking) return true;
   base::ElapsedTimer timer;
   timer.Start();
   isolate()->counters()->gc_idle_time_allotted_in_ms()->AddSample(
@@ -4351,17 +4414,22 @@ bool Heap::IdleNotification(int idle_time_in_ms) {
 
   GCIdleTimeHandler::HeapState heap_state;
   heap_state.contexts_disposed = contexts_disposed_;
+  heap_state.contexts_disposal_rate =
+      tracer()->ContextDisposalRateInMilliseconds();
   heap_state.size_of_objects = static_cast<size_t>(SizeOfObjects());
   heap_state.incremental_marking_stopped = incremental_marking()->IsStopped();
   // TODO(ulan): Start incremental marking only for large heaps.
   heap_state.can_start_incremental_marking =
-      incremental_marking()->ShouldActivate();
+      incremental_marking()->ShouldActivate() && FLAG_incremental_marking;
   heap_state.sweeping_in_progress =
       mark_compact_collector()->sweeping_in_progress();
   heap_state.mark_compact_speed_in_bytes_per_ms =
       static_cast<size_t>(tracer()->MarkCompactSpeedInBytesPerMillisecond());
   heap_state.incremental_marking_speed_in_bytes_per_ms = static_cast<size_t>(
       tracer()->IncrementalMarkingSpeedInBytesPerMillisecond());
+  heap_state.final_incremental_mark_compact_speed_in_bytes_per_ms =
+      static_cast<size_t>(
+          tracer()->FinalIncrementalMarkCompactSpeedInBytesPerMillisecond());
   heap_state.scavenge_speed_in_bytes_per_ms =
       static_cast<size_t>(tracer()->ScavengeSpeedInBytesPerMillisecond());
   heap_state.used_new_space_size = new_space_.Size();
@@ -4392,15 +4460,14 @@ bool Heap::IdleNotification(int idle_time_in_ms) {
       if (remaining_idle_time_in_ms > 0) {
         TryFinalizeIdleIncrementalMarking(
             remaining_idle_time_in_ms, heap_state.size_of_objects,
-            heap_state.mark_compact_speed_in_bytes_per_ms);
+            heap_state.final_incremental_mark_compact_speed_in_bytes_per_ms);
       }
       break;
     }
     case DO_FULL_GC: {
-      HistogramTimerScope scope(isolate_->counters()->gc_context());
       if (contexts_disposed_) {
-        CollectAllGarbage(kReduceMemoryFootprintMask,
-                          "idle notification: contexts disposed");
+        HistogramTimerScope scope(isolate_->counters()->gc_context());
+        CollectAllGarbage(kNoGCFlags, "idle notification: contexts disposed");
         gc_idle_time_handler_.NotifyIdleMarkCompact();
         gc_count_at_last_idle_gc_ = gc_count_;
       } else {
@@ -4429,11 +4496,18 @@ bool Heap::IdleNotification(int idle_time_in_ms) {
         actual_time_in_ms - idle_time_in_ms);
   }
 
-  if (FLAG_trace_idle_notification) {
+  if ((FLAG_trace_idle_notification && action.type > DO_NOTHING) ||
+      FLAG_trace_idle_notification_verbose) {
     PrintF("Idle notification: requested idle time %d ms, actual time %d ms [",
            idle_time_in_ms, actual_time_in_ms);
     action.Print();
-    PrintF("]\n");
+    PrintF("]");
+    if (FLAG_trace_idle_notification_verbose) {
+      PrintF("[");
+      heap_state.Print();
+      PrintF("]");
+    }
+    PrintF("\n");
   }
 
   contexts_disposed_ = 0;
@@ -4543,8 +4617,6 @@ bool Heap::InSpace(Address addr, AllocationSpace space) {
       return property_cell_space_->Contains(addr);
     case LO_SPACE:
       return lo_space_->SlowContains(addr);
-    case INVALID_SPACE:
-      break;
   }
   UNREACHABLE();
   return false;
@@ -5003,6 +5075,10 @@ bool Heap::ConfigureHeap(int max_semi_space_size, int max_old_space_size,
 
   target_semispace_size_ = Max(initial_semispace_size_, target_semispace_size_);
 
+  if (FLAG_semi_space_growth_factor < 2) {
+    FLAG_semi_space_growth_factor = 2;
+  }
+
   // The old generation is paged and needs at least one page for each space.
   int paged_space_count = LAST_PAGED_SPACE - FIRST_PAGED_SPACE + 1;
   max_old_generation_size_ =
@@ -5304,7 +5380,7 @@ void Heap::TearDown() {
     PrintF("total_gc_time=%.1f ", total_gc_time_ms_);
     PrintF("min_in_mutator=%.1f ", get_min_in_mutator());
     PrintF("max_alive_after_gc=%" V8_PTR_PREFIX "d ", get_max_alive_after_gc());
-    PrintF("total_marking_time=%.1f ", tracer_.cumulative_sweeping_duration());
+    PrintF("total_marking_time=%.1f ", tracer_.cumulative_marking_duration());
     PrintF("total_sweeping_time=%.1f ", tracer_.cumulative_sweeping_duration());
     PrintF("\n\n");
   }

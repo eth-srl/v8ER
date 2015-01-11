@@ -61,16 +61,16 @@ TEST(CodeGenInt32Binop) {
   RawMachineAssemblerTester<void> m;
 
   const Operator* kOps[] = {
-      m.machine()->Word32And(),            m.machine()->Word32Or(),
-      m.machine()->Word32Xor(),            m.machine()->Word32Shl(),
-      m.machine()->Word32Shr(),            m.machine()->Word32Sar(),
-      m.machine()->Word32Equal(),          m.machine()->Int32Add(),
-      m.machine()->Int32Sub(),             m.machine()->Int32Mul(),
-      m.machine()->Int32MulHigh(),         m.machine()->Int32Div(),
-      m.machine()->Uint32Div(),            m.machine()->Int32Mod(),
-      m.machine()->Uint32Mod(),            m.machine()->Int32LessThan(),
-      m.machine()->Int32LessThanOrEqual(), m.machine()->Uint32LessThan(),
-      m.machine()->Uint32LessThanOrEqual()};
+      m.machine()->Word32And(),      m.machine()->Word32Or(),
+      m.machine()->Word32Xor(),      m.machine()->Word32Shl(),
+      m.machine()->Word32Shr(),      m.machine()->Word32Sar(),
+      m.machine()->Word32Equal(),    m.machine()->Int32Add(),
+      m.machine()->Int32Sub(),       m.machine()->Int32Mul(),
+      m.machine()->Int32MulHigh(),   m.machine()->Int32Div(),
+      m.machine()->Uint32Div(),      m.machine()->Int32Mod(),
+      m.machine()->Uint32Mod(),      m.machine()->Uint32MulHigh(),
+      m.machine()->Int32LessThan(),  m.machine()->Int32LessThanOrEqual(),
+      m.machine()->Uint32LessThan(), m.machine()->Uint32LessThanOrEqual()};
 
   for (size_t i = 0; i < arraysize(kOps); ++i) {
     for (int j = 0; j < 8; j++) {
@@ -122,36 +122,6 @@ TEST(RunBranch) {
   m.Branch(m.Int32Constant(0), &blocka, &blockb);
   m.Bind(&blocka);
   m.Return(m.Int32Constant(0 - constant));
-  m.Bind(&blockb);
-  m.Return(m.Int32Constant(constant));
-
-  CHECK_EQ(constant, m.Call());
-}
-
-
-TEST(RunRedundantBranch1) {
-  RawMachineAssemblerTester<int32_t> m;
-  int constant = 944777;
-
-  MLabel blocka;
-  m.Branch(m.Int32Constant(0), &blocka, &blocka);
-  m.Bind(&blocka);
-  m.Return(m.Int32Constant(constant));
-
-  CHECK_EQ(constant, m.Call());
-}
-
-
-TEST(RunRedundantBranch2) {
-  RawMachineAssemblerTester<int32_t> m;
-  int constant = 966777;
-
-  MLabel blocka, blockb, blockc;
-  m.Branch(m.Int32Constant(0), &blocka, &blockc);
-  m.Bind(&blocka);
-  m.Branch(m.Int32Constant(0), &blockb, &blockb);
-  m.Bind(&blockc);
-  m.Goto(&blockb);
   m.Bind(&blockb);
   m.Return(m.Int32Constant(constant));
 
@@ -1500,6 +1470,20 @@ TEST(RunInt32MulAndInt32SubP) {
 }
 
 
+TEST(RunUint32MulHighP) {
+  RawMachineAssemblerTester<int32_t> m;
+  Int32BinopTester bt(&m);
+  bt.AddReturn(m.Uint32MulHigh(bt.param0, bt.param1));
+  FOR_UINT32_INPUTS(i) {
+    FOR_UINT32_INPUTS(j) {
+      int32_t expected = bit_cast<int32_t>(static_cast<uint32_t>(
+          (static_cast<uint64_t>(*i) * static_cast<uint64_t>(*j)) >> 32));
+      CHECK_EQ(expected, bt.call(bit_cast<int32_t>(*i), bit_cast<int32_t>(*j)));
+    }
+  }
+}
+
+
 TEST(RunInt32DivP) {
   {
     RawMachineAssemblerTester<int32_t> m;
@@ -2812,16 +2796,17 @@ TEST(RunDeadInt32Binops) {
   RawMachineAssemblerTester<int32_t> m;
 
   const Operator* kOps[] = {
-      m.machine()->Word32And(),      m.machine()->Word32Or(),
-      m.machine()->Word32Xor(),      m.machine()->Word32Shl(),
-      m.machine()->Word32Shr(),      m.machine()->Word32Sar(),
-      m.machine()->Word32Ror(),      m.machine()->Word32Equal(),
-      m.machine()->Int32Add(),       m.machine()->Int32Sub(),
-      m.machine()->Int32Mul(),       m.machine()->Int32MulHigh(),
-      m.machine()->Int32Div(),       m.machine()->Uint32Div(),
-      m.machine()->Int32Mod(),       m.machine()->Uint32Mod(),
-      m.machine()->Int32LessThan(),  m.machine()->Int32LessThanOrEqual(),
-      m.machine()->Uint32LessThan(), m.machine()->Uint32LessThanOrEqual()};
+      m.machine()->Word32And(),            m.machine()->Word32Or(),
+      m.machine()->Word32Xor(),            m.machine()->Word32Shl(),
+      m.machine()->Word32Shr(),            m.machine()->Word32Sar(),
+      m.machine()->Word32Ror(),            m.machine()->Word32Equal(),
+      m.machine()->Int32Add(),             m.machine()->Int32Sub(),
+      m.machine()->Int32Mul(),             m.machine()->Int32MulHigh(),
+      m.machine()->Int32Div(),             m.machine()->Uint32Div(),
+      m.machine()->Int32Mod(),             m.machine()->Uint32Mod(),
+      m.machine()->Uint32MulHigh(),        m.machine()->Int32LessThan(),
+      m.machine()->Int32LessThanOrEqual(), m.machine()->Uint32LessThan(),
+      m.machine()->Uint32LessThanOrEqual()};
 
   for (size_t i = 0; i < arraysize(kOps); ++i) {
     RawMachineAssemblerTester<int32_t> m(kMachInt32, kMachInt32);

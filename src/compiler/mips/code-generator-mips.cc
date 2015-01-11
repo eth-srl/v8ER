@@ -70,6 +70,9 @@ class MipsOperandConverter FINAL : public InstructionOperandConverter {
         // TODO(plind): Maybe we should handle ExtRef & HeapObj here?
         //    maybe not done on arm due to const pool ??
         break;
+      case Constant::kRpoNumber:
+        UNREACHABLE();  // TODO(titzer): RPO immediates on mips?
+        break;
     }
     UNREACHABLE();
     return Operand(zero_reg);
@@ -154,7 +157,7 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       break;
     }
     case kArchJmp:
-      __ Branch(code_->GetLabel(i.InputRpo(0)));
+      AssembleArchJump(i.InputRpo(0));
       break;
     case kArchNop:
       // don't emit code for nops.
@@ -187,6 +190,9 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       break;
     case kMipsMulHigh:
       __ Mulh(i.OutputRegister(), i.InputRegister(0), i.InputOperand(1));
+      break;
+    case kMipsMulHighU:
+      __ Mulhu(i.OutputRegister(), i.InputRegister(0), i.InputOperand(1));
       break;
     case kMipsDiv:
       __ Div(i.OutputRegister(), i.InputRegister(0), i.InputOperand(1));
@@ -237,11 +243,10 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       __ Ror(i.OutputRegister(), i.InputRegister(0), i.InputOperand(1));
       break;
     case kMipsTst:
-      // Psuedo-instruction used for tst/branch.
-      __ And(kCompareReg, i.InputRegister(0), i.InputOperand(1));
+      // Pseudo-instruction used for tst/branch. No opcode emitted here.
       break;
     case kMipsCmp:
-      // Psuedo-instruction used for cmp/branch. No opcode emitted here.
+      // Pseudo-instruction used for cmp/branch. No opcode emitted here.
       break;
     case kMipsMov:
       // TODO(plind): Should we combine mov/li like this, or use separate instr?
@@ -389,34 +394,23 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
   UNIMPLEMENTED();
 
 // Assembles branches after an instruction.
-void CodeGenerator::AssembleArchBranch(Instruction* instr,
-                                       FlagsCondition condition) {
+void CodeGenerator::AssembleArchBranch(Instruction* instr, BranchInfo* branch) {
   MipsOperandConverter i(this, instr);
-  Label done;
-
-  // Emit a branch. The true and false targets are always the last two inputs
-  // to the instruction.
-  BasicBlock::RpoNumber tblock =
-      i.InputRpo(static_cast<int>(instr->InputCount()) - 2);
-  BasicBlock::RpoNumber fblock =
-      i.InputRpo(static_cast<int>(instr->InputCount()) - 1);
-  bool fallthru = IsNextInAssemblyOrder(fblock);
-  Label* tlabel = code()->GetLabel(tblock);
-  Label* flabel = fallthru ? &done : code()->GetLabel(fblock);
+  Label* tlabel = branch->true_label;
+  Label* flabel = branch->false_label;
   Condition cc = kNoCondition;
 
   // MIPS does not have condition code flags, so compare and branch are
   // implemented differently than on the other arch's. The compare operations
-  // emit mips psuedo-instructions, which are handled here by branch
+  // emit mips pseudo-instructions, which are handled here by branch
   // instructions that do the actual comparison. Essential that the input
-  // registers to compare psuedo-op are not modified before this branch op, as
+  // registers to compare pseudo-op are not modified before this branch op, as
   // they are tested here.
   // TODO(plind): Add CHECK() to ensure that test/cmp and this branch were
   //    not separated by other instructions.
 
   if (instr->arch_opcode() == kMipsTst) {
-    // The kMipsTst psuedo-instruction emits And to 'kCompareReg' register.
-    switch (condition) {
+    switch (branch->condition) {
       case kNotEqual:
         cc = ne;
         break;
@@ -424,15 +418,16 @@ void CodeGenerator::AssembleArchBranch(Instruction* instr,
         cc = eq;
         break;
       default:
-        UNSUPPORTED_COND(kMipsTst, condition);
+        UNSUPPORTED_COND(kMipsTst, branch->condition);
         break;
     }
-    __ Branch(tlabel, cc, kCompareReg, Operand(zero_reg));
+    __ And(at, i.InputRegister(0), i.InputOperand(1));
+    __ Branch(tlabel, cc, at, Operand(zero_reg));
 
   } else if (instr->arch_opcode() == kMipsAddOvf ||
              instr->arch_opcode() == kMipsSubOvf) {
     // kMipsAddOvf, SubOvf emit negative result to 'kCompareReg' on overflow.
-    switch (condition) {
+    switch (branch->condition) {
       case kOverflow:
         cc = lt;
         break;
@@ -440,13 +435,13 @@ void CodeGenerator::AssembleArchBranch(Instruction* instr,
         cc = ge;
         break;
       default:
-        UNSUPPORTED_COND(kMipsAddOvf, condition);
+        UNSUPPORTED_COND(kMipsAddOvf, branch->condition);
         break;
     }
     __ Branch(tlabel, cc, kCompareReg, Operand(zero_reg));
 
   } else if (instr->arch_opcode() == kMipsCmp) {
-    switch (condition) {
+    switch (branch->condition) {
       case kEqual:
         cc = eq;
         break;
@@ -478,19 +473,18 @@ void CodeGenerator::AssembleArchBranch(Instruction* instr,
         cc = hi;
         break;
       default:
-        UNSUPPORTED_COND(kMipsCmp, condition);
+        UNSUPPORTED_COND(kMipsCmp, branch->condition);
         break;
     }
     __ Branch(tlabel, cc, i.InputRegister(0), i.InputOperand(1));
 
-    if (!fallthru) __ Branch(flabel);  // no fallthru to flabel.
-    __ bind(&done);
+    if (!branch->fallthru) __ Branch(flabel);  // no fallthru to flabel.
 
   } else if (instr->arch_opcode() == kMipsCmpD) {
-    // TODO(dusmil) optimize unordered checks to use less instructions
+    // TODO(dusmil) optimize unordered checks to use fewer instructions
     // even if we have to unfold BranchF macro.
     Label* nan = flabel;
-    switch (condition) {
+    switch (branch->condition) {
       case kUnorderedEqual:
         cc = eq;
         break;
@@ -513,20 +507,24 @@ void CodeGenerator::AssembleArchBranch(Instruction* instr,
         nan = tlabel;
         break;
       default:
-        UNSUPPORTED_COND(kMipsCmpD, condition);
+        UNSUPPORTED_COND(kMipsCmpD, branch->condition);
         break;
     }
     __ BranchF(tlabel, nan, cc, i.InputDoubleRegister(0),
                i.InputDoubleRegister(1));
 
-    if (!fallthru) __ Branch(flabel);  // no fallthru to flabel.
-    __ bind(&done);
+    if (!branch->fallthru) __ Branch(flabel);  // no fallthru to flabel.
 
   } else {
     PrintF("AssembleArchBranch Unimplemented arch_opcode: %d\n",
            instr->arch_opcode());
     UNIMPLEMENTED();
   }
+}
+
+
+void CodeGenerator::AssembleArchJump(BasicBlock::RpoNumber target) {
+  if (!IsNextInAssemblyOrder(target)) __ Branch(GetLabel(target));
 }
 
 
@@ -554,7 +552,6 @@ void CodeGenerator::AssembleArchBoolean(Instruction* instr,
   // TODO(plind): Add CHECK() to ensure that test/cmp and this branch were
   //    not separated by other instructions.
   if (instr->arch_opcode() == kMipsTst) {
-    // The kMipsTst psuedo-instruction emits And to 'kCompareReg' register.
     switch (condition) {
       case kNotEqual:
         cc = ne;
@@ -566,7 +563,8 @@ void CodeGenerator::AssembleArchBoolean(Instruction* instr,
         UNSUPPORTED_COND(kMipsTst, condition);
         break;
     }
-    __ Branch(USE_DELAY_SLOT, &done, cc, kCompareReg, Operand(zero_reg));
+    __ And(at, i.InputRegister(0), i.InputOperand(1));
+    __ Branch(USE_DELAY_SLOT, &done, cc, at, Operand(zero_reg));
     __ li(result, Operand(1));  // In delay slot.
 
   } else if (instr->arch_opcode() == kMipsAddOvf ||
@@ -713,24 +711,6 @@ void CodeGenerator::AssemblePrologue() {
     __ Prologue(info->IsCodePreAgingActive());
     frame()->SetRegisterSaveAreaSize(
         StandardFrameConstants::kFixedFrameSizeFromFp);
-
-    // Sloppy mode functions and builtins need to replace the receiver with the
-    // global proxy when called as functions (without an explicit receiver
-    // object).
-    // TODO(mstarzinger/verwaest): Should this be moved back into the CallIC?
-    if (info->strict_mode() == SLOPPY && !info->is_native()) {
-      Label ok;
-      // +2 for return address and saved frame pointer.
-      int receiver_slot = info->scope()->num_parameters() + 2;
-      __ lw(a2, MemOperand(fp, receiver_slot * kPointerSize));
-      __ LoadRoot(at, Heap::kUndefinedValueRootIndex);
-      __ Branch(&ok, ne, a2, Operand(at));
-
-      __ lw(a2, GlobalObjectOperand());
-      __ lw(a2, FieldMemOperand(a2, GlobalObject::kGlobalProxyOffset));
-      __ sw(a2, MemOperand(fp, receiver_slot * kPointerSize));
-      __ bind(&ok);
-    }
   } else {
     __ StubPrologue();
     frame()->SetRegisterSaveAreaSize(
@@ -818,6 +798,9 @@ void CodeGenerator::AssembleMove(InstructionOperand* source,
           break;
         case Constant::kHeapObject:
           __ li(dst, src.ToHeapObject());
+          break;
+        case Constant::kRpoNumber:
+          UNREACHABLE();  // TODO(titzer): loading RPO numbers on mips.
           break;
       }
       if (destination->IsStackSlot()) __ sw(dst, g.ToMemOperand(destination));

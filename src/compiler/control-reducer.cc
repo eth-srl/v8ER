@@ -16,6 +16,7 @@ namespace compiler {
 
 enum VisitState { kUnvisited = 0, kOnStack = 1, kRevisit = 2, kVisited = 3 };
 enum Reachability { kFromStart = 8 };
+enum Decision { kFalse, kUnknown, kTrue };
 
 #define TRACE(x) \
   if (FLAG_trace_turbo_reduction) PrintF x
@@ -80,33 +81,41 @@ class ControlReducerImpl {
     Node* start = graph()->start();
     ZoneVector<byte> fw_reachability(graph()->NodeCount(), 0, zone_);
     fw_reachability[start->id()] = kFromStart | kOnStack;
-    stack_.push_back(start);
 
-    while (!stack_.empty()) {
-      Node* node = stack_.back();
+    // We use a stack of (Node, UseIter) pairs to avoid O(n^2) traversal.
+    typedef std::pair<Node*, UseIter> FwIter;
+    ZoneDeque<FwIter> fw_stack(zone_);
+    fw_stack.push_back(FwIter(start, start->uses().begin()));
+
+    while (!fw_stack.empty()) {
+      Node* node = fw_stack.back().first;
       TRACE(("ControlFw: #%d:%s\n", node->id(), node->op()->mnemonic()));
       bool pop = true;
-      for (Node* const succ : node->uses()) {
+      while (fw_stack.back().second != node->uses().end()) {
+        Node* succ = *(fw_stack.back().second);
         byte reach = fw_reachability[succ->id()];
         if ((reach & kOnStack) != 0 && state_[succ->id()] != kVisited) {
           // {succ} is on stack and not reachable from end.
           ConnectNTL(nodes, succ);
           fw_reachability.resize(graph()->NodeCount(), 0);
-          pop = false;  // continue traversing inputs to this node.
+          // The use list of {succ} might have changed.
+          fw_stack[fw_stack.size() - 1] = FwIter(succ, succ->uses().begin());
+          pop = false;  // restart traversing successors of this node.
           break;
         }
         if ((reach & kFromStart) == 0 &&
             IrOpcode::IsControlOpcode(succ->opcode())) {
           // {succ} is a control node and not yet reached from start.
           fw_reachability[succ->id()] |= kFromStart | kOnStack;
-          stack_.push_back(succ);
+          fw_stack.push_back(FwIter(succ, succ->uses().begin()));
           pop = false;  // "recurse" into successor control node.
           break;
         }
+        ++fw_stack.back().second;
       }
       if (pop) {
         fw_reachability[node->id()] &= ~kOnStack;
-        stack_.pop_back();
+        fw_stack.pop_back();
       }
     }
 
@@ -332,29 +341,37 @@ class ControlReducerImpl {
     }
   }
 
-  // Reduce redundant selects.
-  Node* ReduceSelect(Node* const node) {
-    Node* const cond = node->InputAt(0);
-    Node* const tvalue = node->InputAt(1);
-    Node* const fvalue = node->InputAt(2);
-    if (tvalue == fvalue) return tvalue;
+  // Try to statically fold a condition.
+  Decision DecideCondition(Node* cond) {
     switch (cond->opcode()) {
       case IrOpcode::kInt32Constant:
-        return Int32Matcher(cond).Is(0) ? fvalue : tvalue;
+        return Int32Matcher(cond).Is(0) ? kFalse : kTrue;
       case IrOpcode::kInt64Constant:
-        return Int64Matcher(cond).Is(0) ? fvalue : tvalue;
+        return Int64Matcher(cond).Is(0) ? kFalse : kTrue;
       case IrOpcode::kNumberConstant:
-        return NumberMatcher(cond).Is(0) ? fvalue : tvalue;
+        return NumberMatcher(cond).Is(0) ? kFalse : kTrue;
       case IrOpcode::kHeapConstant: {
         Handle<Object> object =
             HeapObjectMatcher<Object>(cond).Value().handle();
-        if (object->IsTrue()) return tvalue;
-        if (object->IsFalse()) return fvalue;
+        if (object->IsTrue()) return kTrue;
+        if (object->IsFalse()) return kFalse;
+        // TODO(turbofan): decide more conditions for heap constants.
         break;
       }
       default:
         break;
     }
+    return kUnknown;
+  }
+
+  // Reduce redundant selects.
+  Node* ReduceSelect(Node* const node) {
+    Node* const tvalue = node->InputAt(1);
+    Node* const fvalue = node->InputAt(2);
+    if (tvalue == fvalue) return tvalue;
+    Decision result = DecideCondition(node->InputAt(0));
+    if (result == kTrue) return tvalue;
+    if (result == kFalse) return fvalue;
     return node;
   }
 
@@ -428,35 +445,11 @@ class ControlReducerImpl {
 
   // Reduce branches if they have constant inputs.
   Node* ReduceBranch(Node* node) {
-    Node* cond = node->InputAt(0);
-    bool is_true;
-    switch (cond->opcode()) {
-      case IrOpcode::kInt32Constant:
-        is_true = !Int32Matcher(cond).Is(0);
-        break;
-      case IrOpcode::kInt64Constant:
-        is_true = !Int64Matcher(cond).Is(0);
-        break;
-      case IrOpcode::kNumberConstant:
-        is_true = !NumberMatcher(cond).Is(0);
-        break;
-      case IrOpcode::kHeapConstant: {
-        Handle<Object> object =
-            HeapObjectMatcher<Object>(cond).Value().handle();
-        if (object->IsTrue())
-          is_true = true;
-        else if (object->IsFalse())
-          is_true = false;
-        else
-          return node;  // TODO(turbofan): fold branches on strings, objects.
-        break;
-      }
-      default:
-        return node;
-    }
+    Decision result = DecideCondition(node->InputAt(0));
+    if (result == kUnknown) return node;
 
     TRACE(("BranchReduce: #%d:%s = %s\n", node->id(), node->op()->mnemonic(),
-           is_true ? "true" : "false"));
+           (result == kTrue) ? "true" : "false"));
 
     // Replace IfTrue and IfFalse projections from this branch.
     Node* control = NodeProperties::GetControlInput(node);
@@ -465,11 +458,11 @@ class ControlReducerImpl {
       if (to->opcode() == IrOpcode::kIfTrue) {
         TRACE(("  IfTrue: #%d:%s\n", to->id(), to->op()->mnemonic()));
         i.UpdateToAndIncrement(NULL);
-        ReplaceNode(to, is_true ? control : dead());
+        ReplaceNode(to, (result == kTrue) ? control : dead());
       } else if (to->opcode() == IrOpcode::kIfFalse) {
         TRACE(("  IfFalse: #%d:%s\n", to->id(), to->op()->mnemonic()));
         i.UpdateToAndIncrement(NULL);
-        ReplaceNode(to, is_true ? dead() : control);
+        ReplaceNode(to, (result == kTrue) ? dead() : control);
       } else {
         ++i;
       }

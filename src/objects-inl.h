@@ -26,6 +26,7 @@
 #include "src/heap/spaces.h"
 #include "src/heap/store-buffer.h"
 #include "src/isolate.h"
+#include "src/layout-descriptor-inl.h"
 #include "src/lookup.h"
 #include "src/objects.h"
 #include "src/property.h"
@@ -53,6 +54,14 @@ Smi* PropertyDetails::AsSmi() const {
 PropertyDetails PropertyDetails::AsDeleted() const {
   Smi* smi = Smi::FromInt(value_ | DeletedField::encode(1));
   return PropertyDetails(smi);
+}
+
+
+int PropertyDetails::field_width_in_words() const {
+  DCHECK(type() == FIELD);
+  if (!FLAG_unbox_double_fields) return 1;
+  if (kDoubleSize == kPointerSize) return 1;
+  return representation().IsDouble() ? kDoubleSize / kPointerSize : 1;
 }
 
 
@@ -464,22 +473,29 @@ STATIC_ASSERT((kExternalStringTag | kTwoByteStringTag) ==
 
 STATIC_ASSERT(v8::String::TWO_BYTE_ENCODING == kTwoByteStringTag);
 
+
 uc32 FlatStringReader::Get(int index) {
-  DCHECK(0 <= index && index <= length_);
   if (is_one_byte_) {
-    return static_cast<const byte*>(start_)[index];
+    return Get<uint8_t>(index);
   } else {
-    return static_cast<const uc16*>(start_)[index];
+    return Get<uc16>(index);
+  }
+}
+
+
+template <typename Char>
+Char FlatStringReader::Get(int index) {
+  DCHECK_EQ(is_one_byte_, sizeof(Char) == 1);
+  DCHECK(0 <= index && index <= length_);
+  if (sizeof(Char) == 1) {
+    return static_cast<Char>(static_cast<const uint8_t*>(start_)[index]);
+  } else {
+    return static_cast<Char>(static_cast<const uc16*>(start_)[index]);
   }
 }
 
 
 Handle<Object> StringTableShape::AsHandle(Isolate* isolate, HashTableKey* key) {
-  return key->AsHandle(isolate);
-}
-
-
-Handle<Object> MapCacheShape::AsHandle(Isolate* isolate, HashTableKey* key) {
   return key->AsHandle(isolate);
 }
 
@@ -704,6 +720,11 @@ bool Object::IsDescriptorArray() const {
 }
 
 
+bool Object::IsLayoutDescriptor() const {
+  return IsSmi() || IsFixedTypedArrayBase();
+}
+
+
 bool Object::IsTransitionArray() const {
   return IsFixedArray();
 }
@@ -756,7 +777,7 @@ bool Object::IsContext() const {
       map == heap->native_context_map() ||
       map == heap->block_context_map() ||
       map == heap->module_context_map() ||
-      map == heap->global_context_map());
+      map == heap->script_context_map());
 }
 
 
@@ -764,6 +785,14 @@ bool Object::IsNativeContext() const {
   return Object::IsHeapObject() &&
       HeapObject::cast(this)->map() ==
       HeapObject::cast(this)->GetHeap()->native_context_map();
+}
+
+
+bool Object::IsScriptContextTable() const {
+  if (!Object::IsHeapObject()) return false;
+  Map* map = HeapObject::cast(this)->map();
+  Heap* heap = map->GetHeap();
+  return map == heap->script_context_table_map();
 }
 
 
@@ -1635,21 +1664,6 @@ inline bool AllocationSite::CanTrack(InstanceType type) {
 }
 
 
-inline DependentCode::DependencyGroup AllocationSite::ToDependencyGroup(
-    Reason reason) {
-  switch (reason) {
-    case TENURING:
-      return DependentCode::kAllocationSiteTenuringChangedGroup;
-      break;
-    case TRANSITIONS:
-      return DependentCode::kAllocationSiteTransitionChangedGroup;
-      break;
-  }
-  UNREACHABLE();
-  return DependentCode::kAllocationSiteTransitionChangedGroup;
-}
-
-
 inline void AllocationSite::set_memento_found_count(int count) {
   int value = pretenure_data()->value();
   // Verify that we can count more mementos than we can possibly find in one
@@ -2062,10 +2076,24 @@ void JSObject::SetInternalField(int index, Smi* value) {
 }
 
 
+bool JSObject::IsUnboxedDoubleField(FieldIndex index) {
+  if (!FLAG_unbox_double_fields) return false;
+  return map()->IsUnboxedDoubleField(index);
+}
+
+
+bool Map::IsUnboxedDoubleField(FieldIndex index) {
+  if (!FLAG_unbox_double_fields) return false;
+  if (index.is_hidden_field() || !index.is_inobject()) return false;
+  return !layout_descriptor()->IsTagged(index.property_index());
+}
+
+
 // Access fast-case object properties at index. The use of these routines
 // is needed to correctly distinguish between properties stored in-object and
 // properties stored in the properties array.
 Object* JSObject::RawFastPropertyAt(FieldIndex index) {
+  DCHECK(!IsUnboxedDoubleField(index));
   if (index.is_inobject()) {
     return READ_FIELD(this, index.offset());
   } else {
@@ -2074,13 +2102,34 @@ Object* JSObject::RawFastPropertyAt(FieldIndex index) {
 }
 
 
-void JSObject::FastPropertyAtPut(FieldIndex index, Object* value) {
+double JSObject::RawFastDoublePropertyAt(FieldIndex index) {
+  DCHECK(IsUnboxedDoubleField(index));
+  return READ_DOUBLE_FIELD(this, index.offset());
+}
+
+
+void JSObject::RawFastPropertyAtPut(FieldIndex index, Object* value) {
   if (index.is_inobject()) {
     int offset = index.offset();
     WRITE_FIELD(this, offset, value);
     WRITE_BARRIER(GetHeap(), this, offset, value);
   } else {
     properties()->set(index.outobject_array_index(), value);
+  }
+}
+
+
+void JSObject::RawFastDoublePropertyAtPut(FieldIndex index, double value) {
+  WRITE_DOUBLE_FIELD(this, index.offset(), value);
+}
+
+
+void JSObject::FastPropertyAtPut(FieldIndex index, Object* value) {
+  if (IsUnboxedDoubleField(index)) {
+    DCHECK(value->IsMutableHeapNumber());
+    RawFastDoublePropertyAtPut(index, HeapNumber::cast(value)->value());
+  } else {
+    RawFastPropertyAtPut(index, value);
   }
 }
 
@@ -2709,6 +2758,17 @@ WriteBarrierMode HeapObject::GetWriteBarrierMode(
 }
 
 
+bool HeapObject::NeedsToEnsureDoubleAlignment() {
+#ifndef V8_HOST_ARCH_64_BIT
+  return (IsFixedFloat64Array() || IsFixedDoubleArray() ||
+          IsConstantPoolArray()) &&
+         FixedArrayBase::cast(this)->length() != 0;
+#else
+  return false;
+#endif  // V8_HOST_ARCH_64_BIT
+}
+
+
 void FixedArray::set(int index,
                      Object* value,
                      WriteBarrierMode mode) {
@@ -2801,8 +2861,10 @@ void DescriptorArray::SetNumberOfDescriptors(int number_of_descriptors) {
 // Perform a binary search in a fixed array. Low and high are entry indices. If
 // there are three entries in this array it should be called with low=0 and
 // high=2.
-template<SearchMode search_mode, typename T>
-int BinarySearch(T* array, Name* name, int low, int high, int valid_entries) {
+template <SearchMode search_mode, typename T>
+int BinarySearch(T* array, Name* name, int low, int high, int valid_entries,
+                 int* out_insertion_index) {
+  DCHECK(search_mode == ALL_ENTRIES || out_insertion_index == NULL);
   uint32_t hash = name->Hash();
   int limit = high;
 
@@ -2823,7 +2885,13 @@ int BinarySearch(T* array, Name* name, int low, int high, int valid_entries) {
   for (; low <= limit; ++low) {
     int sort_index = array->GetSortedKeyIndex(low);
     Name* entry = array->GetKey(sort_index);
-    if (entry->Hash() != hash) break;
+    uint32_t current_hash = entry->Hash();
+    if (current_hash != hash) {
+      if (out_insertion_index != NULL) {
+        *out_insertion_index = sort_index + (current_hash > hash ? 0 : 1);
+      }
+      return T::kNotFound;
+    }
     if (entry->Equals(name)) {
       if (search_mode == ALL_ENTRIES || sort_index < valid_entries) {
         return sort_index;
@@ -2832,37 +2900,45 @@ int BinarySearch(T* array, Name* name, int low, int high, int valid_entries) {
     }
   }
 
+  if (out_insertion_index != NULL) *out_insertion_index = limit + 1;
   return T::kNotFound;
 }
 
 
 // Perform a linear search in this fixed array. len is the number of entry
 // indices that are valid.
-template<SearchMode search_mode, typename T>
-int LinearSearch(T* array, Name* name, int len, int valid_entries) {
+template <SearchMode search_mode, typename T>
+int LinearSearch(T* array, Name* name, int len, int valid_entries,
+                 int* out_insertion_index) {
   uint32_t hash = name->Hash();
   if (search_mode == ALL_ENTRIES) {
     for (int number = 0; number < len; number++) {
       int sorted_index = array->GetSortedKeyIndex(number);
       Name* entry = array->GetKey(sorted_index);
       uint32_t current_hash = entry->Hash();
-      if (current_hash > hash) break;
+      if (current_hash > hash) {
+        if (out_insertion_index != NULL) *out_insertion_index = sorted_index;
+        return T::kNotFound;
+      }
       if (current_hash == hash && entry->Equals(name)) return sorted_index;
     }
+    if (out_insertion_index != NULL) *out_insertion_index = len;
+    return T::kNotFound;
   } else {
     DCHECK(len >= valid_entries);
+    DCHECK_EQ(NULL, out_insertion_index);  // Not supported here.
     for (int number = 0; number < valid_entries; number++) {
       Name* entry = array->GetKey(number);
       uint32_t current_hash = entry->Hash();
       if (current_hash == hash && entry->Equals(name)) return number;
     }
+    return T::kNotFound;
   }
-  return T::kNotFound;
 }
 
 
-template<SearchMode search_mode, typename T>
-int Search(T* array, Name* name, int valid_entries) {
+template <SearchMode search_mode, typename T>
+int Search(T* array, Name* name, int valid_entries, int* out_insertion_index) {
   if (search_mode == VALID_ENTRIES) {
     SLOW_DCHECK(array->IsSortedNoDuplicates(valid_entries));
   } else {
@@ -2870,7 +2946,10 @@ int Search(T* array, Name* name, int valid_entries) {
   }
 
   int nof = array->number_of_entries();
-  if (nof == 0) return T::kNotFound;
+  if (nof == 0) {
+    if (out_insertion_index != NULL) *out_insertion_index = 0;
+    return T::kNotFound;
+  }
 
   // Fast case: do linear search for small arrays.
   const int kMaxElementsForLinearSearch = 8;
@@ -2878,16 +2957,18 @@ int Search(T* array, Name* name, int valid_entries) {
        nof <= kMaxElementsForLinearSearch) ||
       (search_mode == VALID_ENTRIES &&
        valid_entries <= (kMaxElementsForLinearSearch * 3))) {
-    return LinearSearch<search_mode>(array, name, nof, valid_entries);
+    return LinearSearch<search_mode>(array, name, nof, valid_entries,
+                                     out_insertion_index);
   }
 
   // Slow case: perform binary search.
-  return BinarySearch<search_mode>(array, name, 0, nof - 1, valid_entries);
+  return BinarySearch<search_mode>(array, name, 0, nof - 1, valid_entries,
+                                   out_insertion_index);
 }
 
 
 int DescriptorArray::Search(Name* name, int valid_descriptors) {
-  return internal::Search<VALID_ENTRIES>(this, name, valid_descriptors);
+  return internal::Search<VALID_ENTRIES>(this, name, valid_descriptors, NULL);
 }
 
 
@@ -2922,9 +3003,7 @@ void Map::LookupDescriptor(JSObject* holder,
 }
 
 
-void Map::LookupTransition(JSObject* holder,
-                           Name* name,
-                           LookupResult* result) {
+void Map::LookupTransition(JSObject* holder, Name* name, LookupResult* result) {
   int transition_index = this->SearchTransition(name);
   if (transition_index == TransitionArray::kNotFound) return result->NotFound();
   result->TransitionResult(holder, this->GetTransition(transition_index));
@@ -3082,8 +3161,7 @@ void DescriptorArray::Set(int descriptor_number,
   NoIncrementalWriteBarrierSet(this,
                                ToValueIndex(descriptor_number),
                                *desc->GetValue());
-  NoIncrementalWriteBarrierSet(this,
-                               ToDetailsIndex(descriptor_number),
+  NoIncrementalWriteBarrierSet(this, ToDetailsIndex(descriptor_number),
                                desc->GetDetails().AsSmi());
 }
 
@@ -3258,8 +3336,8 @@ CAST_ACCESSOR(JSTypedArray)
 CAST_ACCESSOR(JSValue)
 CAST_ACCESSOR(JSWeakMap)
 CAST_ACCESSOR(JSWeakSet)
+CAST_ACCESSOR(LayoutDescriptor)
 CAST_ACCESSOR(Map)
-CAST_ACCESSOR(MapCache)
 CAST_ACCESSOR(Name)
 CAST_ACCESSOR(NameDictionary)
 CAST_ACCESSOR(NormalizedMapCache)
@@ -3511,6 +3589,22 @@ ConsString* String::VisitFlat(Visitor* visitor,
         return NULL;
     }
   }
+}
+
+
+template <>
+inline Vector<const uint8_t> String::GetCharVector() {
+  String::FlatContent flat = GetFlatContent();
+  DCHECK(flat.IsOneByte());
+  return flat.ToOneByteVector();
+}
+
+
+template <>
+inline Vector<const uc16> String::GetCharVector() {
+  String::FlatContent flat = GetFlatContent();
+  DCHECK(flat.IsTwoByte());
+  return flat.ToUC16Vector();
 }
 
 
@@ -4300,6 +4394,14 @@ int Map::GetInObjectPropertyOffset(int index) {
 }
 
 
+Handle<Map> Map::CopyInstallDescriptorsForTesting(
+    Handle<Map> map, int new_descriptor, Handle<DescriptorArray> descriptors,
+    Handle<LayoutDescriptor> layout_descriptor) {
+  return CopyInstallDescriptors(map, new_descriptor, descriptors,
+                                layout_descriptor);
+}
+
+
 int HeapObject::SizeFromMap(Map* map) {
   int instance_size = map->instance_size();
   if (instance_size != kVariableSizeSentinel) return instance_size;
@@ -4310,8 +4412,10 @@ int HeapObject::SizeFromMap(Map* map) {
   }
   if (instance_type == ONE_BYTE_STRING_TYPE ||
       instance_type == ONE_BYTE_INTERNALIZED_STRING_TYPE) {
+    // Strings may get concurrently truncated, hence we have to access its
+    // length synchronized.
     return SeqOneByteString::SizeFor(
-        reinterpret_cast<SeqOneByteString*>(this)->length());
+        reinterpret_cast<SeqOneByteString*>(this)->synchronized_length());
   }
   if (instance_type == BYTE_ARRAY_TYPE) {
     return reinterpret_cast<ByteArray*>(this)->ByteArraySize();
@@ -4321,8 +4425,10 @@ int HeapObject::SizeFromMap(Map* map) {
   }
   if (instance_type == STRING_TYPE ||
       instance_type == INTERNALIZED_STRING_TYPE) {
+    // Strings may get concurrently truncated, hence we have to access its
+    // length synchronized.
     return SeqTwoByteString::SizeFor(
-        reinterpret_cast<SeqTwoByteString*>(this)->length());
+        reinterpret_cast<SeqTwoByteString*>(this)->synchronized_length());
   }
   if (instance_type == FIXED_DOUBLE_ARRAY_TYPE) {
     return FixedDoubleArray::SizeFor(
@@ -4800,6 +4906,21 @@ void Code::set_compiled_optimizable(bool value) {
 }
 
 
+bool Code::has_reloc_info_for_serialization() {
+  DCHECK_EQ(FUNCTION, kind());
+  byte flags = READ_BYTE_FIELD(this, kFullCodeFlags);
+  return FullCodeFlagsHasRelocInfoForSerialization::decode(flags);
+}
+
+
+void Code::set_has_reloc_info_for_serialization(bool value) {
+  DCHECK_EQ(FUNCTION, kind());
+  byte flags = READ_BYTE_FIELD(this, kFullCodeFlags);
+  flags = FullCodeFlagsHasRelocInfoForSerialization::update(flags, value);
+  WRITE_BYTE_FIELD(this, kFullCodeFlags, flags);
+}
+
+
 int Code::allow_osr_at_loop_nesting_level() {
   DCHECK_EQ(FUNCTION, kind());
   int fields = READ_UINT32_FIELD(this, kKindSpecificFlags2Offset);
@@ -5141,14 +5262,47 @@ static void EnsureHasTransitionArray(Handle<Map> map) {
 }
 
 
-void Map::InitializeDescriptors(DescriptorArray* descriptors) {
+LayoutDescriptor* Map::layout_descriptor_gc_safe() {
+  Object* layout_desc = READ_FIELD(this, kLayoutDecriptorOffset);
+  return LayoutDescriptor::cast_gc_safe(layout_desc);
+}
+
+
+bool Map::HasFastPointerLayout() const {
+  Object* layout_desc = READ_FIELD(this, kLayoutDecriptorOffset);
+  return LayoutDescriptor::IsFastPointerLayout(layout_desc);
+}
+
+
+void Map::UpdateDescriptors(DescriptorArray* descriptors,
+                            LayoutDescriptor* layout_desc) {
+  set_instance_descriptors(descriptors);
+  if (FLAG_unbox_double_fields) {
+    if (layout_descriptor()->IsSlowLayout()) {
+      set_layout_descriptor(layout_desc);
+    }
+    SLOW_DCHECK(layout_descriptor()->IsConsistentWithMap(this));
+    DCHECK(visitor_id() == StaticVisitorBase::GetVisitorId(this));
+  }
+}
+
+
+void Map::InitializeDescriptors(DescriptorArray* descriptors,
+                                LayoutDescriptor* layout_desc) {
   int len = descriptors->number_of_descriptors();
   set_instance_descriptors(descriptors);
   SetNumberOfOwnDescriptors(len);
+
+  if (FLAG_unbox_double_fields) {
+    set_layout_descriptor(layout_desc);
+    SLOW_DCHECK(layout_descriptor()->IsConsistentWithMap(this));
+    set_visitor_id(StaticVisitorBase::GetVisitorId(this));
+  }
 }
 
 
 ACCESSORS(Map, instance_descriptors, DescriptorArray, kDescriptorsOffset)
+ACCESSORS(Map, layout_descriptor, LayoutDescriptor, kLayoutDecriptorOffset)
 
 
 void Map::set_bit_field3(uint32_t bits) {
@@ -5164,18 +5318,31 @@ uint32_t Map::bit_field3() {
 }
 
 
+LayoutDescriptor* Map::GetLayoutDescriptor() {
+  return FLAG_unbox_double_fields ? layout_descriptor()
+                                  : LayoutDescriptor::FastPointerLayout();
+}
+
+
 void Map::AppendDescriptor(Descriptor* desc) {
   DescriptorArray* descriptors = instance_descriptors();
   int number_of_own_descriptors = NumberOfOwnDescriptors();
   DCHECK(descriptors->number_of_descriptors() == number_of_own_descriptors);
   descriptors->Append(desc);
   SetNumberOfOwnDescriptors(number_of_own_descriptors + 1);
+
+// This function does not support appending double field descriptors and
+// it should never try to (otherwise, layout descriptor must be updated too).
+#ifdef DEBUG
+  PropertyDetails details = desc->GetDetails();
+  CHECK(details.type() != FIELD || !details.representation().IsDouble());
+#endif
 }
 
 
 Object* Map::GetBackPointer() {
   Object* object = READ_FIELD(this, kTransitionsOrBackPointerOffset);
-  if (object->IsDescriptorArray()) {
+  if (object->IsTransitionArray()) {
     return TransitionArray::cast(object)->back_pointer_storage();
   } else {
     DCHECK(object->IsMap() || object->IsUndefined());
@@ -5203,9 +5370,8 @@ Map* Map::elements_transition_map() {
 
 bool Map::CanHaveMoreTransitions() {
   if (!HasTransitionArray()) return true;
-  return FixedArray::SizeFor(transitions()->length() +
-                             TransitionArray::kTransitionSize)
-      <= Page::kMaxRegularHeapObjectSize;
+  return transitions()->number_of_transitions() <
+         TransitionArray::kMaxNumberOfTransitions;
 }
 
 
@@ -5233,12 +5399,10 @@ void Map::SetPrototypeTransitions(
     Handle<Map> map, Handle<FixedArray> proto_transitions) {
   EnsureHasTransitionArray(map);
   int old_number_of_transitions = map->NumberOfProtoTransitions();
-#ifdef DEBUG
-  if (map->HasPrototypeTransitions()) {
+  if (Heap::ShouldZapGarbage() && map->HasPrototypeTransitions()) {
     DCHECK(map->GetPrototypeTransitions() != *proto_transitions);
     map->ZapPrototypeTransitions();
   }
-#endif
   map->transitions()->SetPrototypeTransitions(*proto_transitions);
   map->SetNumberOfProtoTransitions(old_number_of_transitions);
 }
@@ -5315,7 +5479,6 @@ ACCESSORS(JSFunction, next_function_link, Object, kNextFunctionLinkOffset)
 
 ACCESSORS(GlobalObject, builtins, JSBuiltinsObject, kBuiltinsOffset)
 ACCESSORS(GlobalObject, native_context, Context, kNativeContextOffset)
-ACCESSORS(GlobalObject, global_context, Context, kGlobalContextOffset)
 ACCESSORS(GlobalObject, global_proxy, JSObject, kGlobalProxyOffset)
 
 ACCESSORS(JSGlobalProxy, native_context, Object, kNativeContextOffset)
@@ -5351,6 +5514,9 @@ ACCESSORS(InterceptorInfo, query, Object, kQueryOffset)
 ACCESSORS(InterceptorInfo, deleter, Object, kDeleterOffset)
 ACCESSORS(InterceptorInfo, enumerator, Object, kEnumeratorOffset)
 ACCESSORS(InterceptorInfo, data, Object, kDataOffset)
+SMI_ACCESSORS(InterceptorInfo, flags, kFlagsOffset)
+BOOL_ACCESSORS(InterceptorInfo, flags, can_intercept_symbols,
+               kCanInterceptSymbolsBit)
 
 ACCESSORS(CallHandlerInfo, callback, Object, kCallbackOffset)
 ACCESSORS(CallHandlerInfo, data, Object, kDataOffset)
@@ -5448,6 +5614,9 @@ ACCESSORS(SharedFunctionInfo, optimized_code_map, Object,
 ACCESSORS(SharedFunctionInfo, construct_stub, Code, kConstructStubOffset)
 ACCESSORS(SharedFunctionInfo, feedback_vector, TypeFeedbackVector,
           kFeedbackVectorOffset)
+#if TRACE_MAPS
+SMI_ACCESSORS(SharedFunctionInfo, unique_id, kUniqueIdOffset)
+#endif
 ACCESSORS(SharedFunctionInfo, instance_class_name, Object,
           kInstanceClassNameOffset)
 ACCESSORS(SharedFunctionInfo, function_data, Object, kFunctionDataOffset)
@@ -5473,9 +5642,7 @@ BOOL_ACCESSORS(SharedFunctionInfo, start_position_and_type, is_expression,
 BOOL_ACCESSORS(SharedFunctionInfo, start_position_and_type, is_toplevel,
                kIsTopLevelBit)
 
-BOOL_ACCESSORS(SharedFunctionInfo,
-               compiler_hints,
-               allows_lazy_compilation,
+BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, allows_lazy_compilation,
                kAllowLazyCompilation)
 BOOL_ACCESSORS(SharedFunctionInfo,
                compiler_hints,
@@ -5629,6 +5796,10 @@ void SharedFunctionInfo::set_kind(FunctionKind kind) {
 }
 
 
+BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, uses_super_property,
+               kUsesSuperProperty)
+BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, uses_super_constructor_call,
+               kUsesSuperConstructorCall)
 BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, native, kNative)
 BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, inline_builtin,
                kInlineBuiltin)
@@ -5644,6 +5815,8 @@ BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, is_arrow, kIsArrow)
 BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, is_generator, kIsGenerator)
 BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, is_concise_method,
                kIsConciseMethod)
+BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, is_default_constructor,
+               kIsDefaultConstructor)
 
 ACCESSORS(CodeCache, default_cache, FixedArray, kDefaultCacheOffset)
 ACCESSORS(CodeCache, normal_type_cache, Object, kNormalTypeCacheOffset)
@@ -5799,10 +5972,9 @@ void SharedFunctionInfo::set_opt_count(int opt_count) {
 }
 
 
-BailoutReason SharedFunctionInfo::DisableOptimizationReason() {
-  BailoutReason reason = static_cast<BailoutReason>(
+BailoutReason SharedFunctionInfo::disable_optimization_reason() {
+  return static_cast<BailoutReason>(
       DisabledOptimizationReasonBits::decode(opt_count_and_bailout_reason()));
-  return reason;
 }
 
 
@@ -6571,6 +6743,30 @@ uint32_t StringHasher::GetHashCore(uint32_t running_hash) {
 }
 
 
+uint32_t StringHasher::ComputeRunningHash(uint32_t running_hash,
+                                          const uc16* chars, int length) {
+  DCHECK_NOT_NULL(chars);
+  DCHECK(length >= 0);
+  for (int i = 0; i < length; ++i) {
+    running_hash = AddCharacterCore(running_hash, *chars++);
+  }
+  return running_hash;
+}
+
+
+uint32_t StringHasher::ComputeRunningHashOneByte(uint32_t running_hash,
+                                                 const char* chars,
+                                                 int length) {
+  DCHECK_NOT_NULL(chars);
+  DCHECK(length >= 0);
+  for (int i = 0; i < length; ++i) {
+    uint16_t c = static_cast<uint16_t>(*chars++);
+    running_hash = AddCharacterCore(running_hash, c);
+  }
+  return running_hash;
+}
+
+
 void StringHasher::AddCharacter(uint16_t c) {
   // Use the Jenkins one-at-a-time hash function to update the hash
   // for the given character.
@@ -6636,13 +6832,8 @@ uint32_t IteratingStringHasher::Hash(String* string, uint32_t seed) {
   // Nothing to do.
   if (hasher.has_trivial_hash()) return hasher.GetHashField();
   ConsString* cons_string = String::VisitFlat(&hasher, string);
-  // The string was flat.
-  if (cons_string == NULL) return hasher.GetHashField();
-  // This is a ConsString, iterate across it.
-  ConsStringIterator iter(cons_string);
-  int offset;
-  while (NULL != (string = iter.Next(&offset))) {
-    String::VisitFlat(&hasher, string, offset);
+  if (cons_string != nullptr) {
+    hasher.VisitConsString(cons_string);
   }
   return hasher.GetHashField();
 }
@@ -7009,6 +7200,14 @@ void Map::ClearCodeCache(Heap* heap) {
 }
 
 
+int Map::SlackForArraySize(int old_size, int size_limit) {
+  const int max_slack = size_limit - old_size;
+  CHECK(max_slack >= 0);
+  if (old_size < 4) return Min(max_slack, 1);
+  return Min(max_slack, old_size / 2);
+}
+
+
 void JSArray::EnsureSize(Handle<JSArray> array, int required_size) {
   DCHECK(array->HasFastSmiOrObjectElements());
   Handle<FixedArray> elts = handle(FixedArray::cast(array->elements()));
@@ -7215,12 +7414,36 @@ void ExternalTwoByteString::ExternalTwoByteStringIterateBody() {
 }
 
 
+static inline void IterateBodyUsingLayoutDescriptor(HeapObject* object,
+                                                    int start_offset,
+                                                    int end_offset,
+                                                    ObjectVisitor* v) {
+  DCHECK(FLAG_unbox_double_fields);
+  DCHECK(IsAligned(start_offset, kPointerSize) &&
+         IsAligned(end_offset, kPointerSize));
+
+  InobjectPropertiesHelper helper(object->map());
+  DCHECK(!helper.all_fields_tagged());
+
+  for (int offset = start_offset; offset < end_offset; offset += kPointerSize) {
+    // Visit all tagged fields.
+    if (helper.IsTagged(offset)) {
+      v->VisitPointer(HeapObject::RawField(object, offset));
+    }
+  }
+}
+
+
 template<int start_offset, int end_offset, int size>
 void FixedBodyDescriptor<start_offset, end_offset, size>::IterateBody(
     HeapObject* obj,
     ObjectVisitor* v) {
+  if (!FLAG_unbox_double_fields || obj->map()->HasFastPointerLayout()) {
     v->VisitPointers(HeapObject::RawField(obj, start_offset),
                      HeapObject::RawField(obj, end_offset));
+  } else {
+    IterateBodyUsingLayoutDescriptor(obj, start_offset, end_offset, v);
+  }
 }
 
 
@@ -7228,8 +7451,12 @@ template<int start_offset>
 void FlexibleBodyDescriptor<start_offset>::IterateBody(HeapObject* obj,
                                                        int object_size,
                                                        ObjectVisitor* v) {
-  v->VisitPointers(HeapObject::RawField(obj, start_offset),
-                   HeapObject::RawField(obj, object_size));
+  if (!FLAG_unbox_double_fields || obj->map()->HasFastPointerLayout()) {
+    v->VisitPointers(HeapObject::RawField(obj, start_offset),
+                     HeapObject::RawField(obj, object_size));
+  } else {
+    IterateBodyUsingLayoutDescriptor(obj, start_offset, object_size, v);
+  }
 }
 
 

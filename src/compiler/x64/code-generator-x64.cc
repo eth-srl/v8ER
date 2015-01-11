@@ -197,6 +197,16 @@ static bool HasImmediateInput(Instruction* instr, int index) {
   } while (0)
 
 
+#define ASSEMBLE_DOUBLE_BINOP(asm_instr)                                \
+  do {                                                                  \
+    if (instr->InputAt(1)->IsDoubleRegister()) {                        \
+      __ asm_instr(i.InputDoubleRegister(0), i.InputDoubleRegister(1)); \
+    } else {                                                            \
+      __ asm_instr(i.InputDoubleRegister(0), i.InputOperand(1));        \
+    }                                                                   \
+  } while (0)
+
+
 // Assembles an instruction after register allocation, producing machine code.
 void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
   X64OperandConverter i(this, instr);
@@ -228,7 +238,7 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       break;
     }
     case kArchJmp:
-      __ jmp(code_->GetLabel(i.InputRpo(0)));
+      AssembleArchJump(i.InputRpo(0));
       break;
     case kArchNop:
       // don't emit code for nops.
@@ -279,7 +289,18 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       ASSEMBLE_MULT(imulq);
       break;
     case kX64ImulHigh32:
-      __ imull(i.InputRegister(1));
+      if (instr->InputAt(1)->IsRegister()) {
+        __ imull(i.InputRegister(1));
+      } else {
+        __ imull(i.InputOperand(1));
+      }
+      break;
+    case kX64UmulHigh32:
+      if (instr->InputAt(1)->IsRegister()) {
+        __ mull(i.InputRegister(1));
+      } else {
+        __ mull(i.InputOperand(1));
+      }
       break;
     case kX64Idiv32:
       __ cdq();
@@ -346,23 +367,19 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       ASSEMBLE_SHIFT(rorq, 6);
       break;
     case kSSEFloat64Cmp:
-      if (instr->InputAt(1)->IsDoubleRegister()) {
-        __ ucomisd(i.InputDoubleRegister(0), i.InputDoubleRegister(1));
-      } else {
-        __ ucomisd(i.InputDoubleRegister(0), i.InputOperand(1));
-      }
+      ASSEMBLE_DOUBLE_BINOP(ucomisd);
       break;
     case kSSEFloat64Add:
-      __ addsd(i.InputDoubleRegister(0), i.InputDoubleRegister(1));
+      ASSEMBLE_DOUBLE_BINOP(addsd);
       break;
     case kSSEFloat64Sub:
-      __ subsd(i.InputDoubleRegister(0), i.InputDoubleRegister(1));
+      ASSEMBLE_DOUBLE_BINOP(subsd);
       break;
     case kSSEFloat64Mul:
-      __ mulsd(i.InputDoubleRegister(0), i.InputDoubleRegister(1));
+      ASSEMBLE_DOUBLE_BINOP(mulsd);
       break;
     case kSSEFloat64Div:
-      __ divsd(i.InputDoubleRegister(0), i.InputDoubleRegister(1));
+      ASSEMBLE_DOUBLE_BINOP(divsd);
       break;
     case kSSEFloat64Mod: {
       __ subq(rsp, Immediate(kDoubleSize));
@@ -441,16 +458,15 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
         __ cvttsd2si(i.OutputRegister(), i.InputOperand(0));
       }
       break;
-    case kSSEFloat64ToUint32:
+    case kSSEFloat64ToUint32: {
       if (instr->InputAt(0)->IsDoubleRegister()) {
         __ cvttsd2siq(i.OutputRegister(), i.InputDoubleRegister(0));
       } else {
         __ cvttsd2siq(i.OutputRegister(), i.InputOperand(0));
       }
-      __ andl(i.OutputRegister(), i.OutputRegister());  // clear upper bits.
-      // TODO(turbofan): generated code should not look at the upper 32 bits
-      // of the result, but those bits could escape to the outside world.
+      __ AssertZeroExtended(i.OutputRegister());
       break;
+    }
     case kSSEInt32ToFloat64:
       if (instr->InputAt(0)->IsRegister()) {
         __ cvtlsi2sd(i.OutputDoubleRegister(), i.InputRegister(0));
@@ -467,7 +483,14 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       __ cvtqsi2sd(i.OutputDoubleRegister(), kScratchRegister);
       break;
     case kX64Movsxbl:
-      __ movsxbl(i.OutputRegister(), i.MemoryOperand());
+      if (instr->addressing_mode() != kMode_None) {
+        __ movsxbl(i.OutputRegister(), i.MemoryOperand());
+      } else if (instr->InputAt(0)->IsRegister()) {
+        __ movsxbl(i.OutputRegister(), i.InputRegister(0));
+      } else {
+        __ movsxbl(i.OutputRegister(), i.InputOperand(0));
+      }
+      __ AssertZeroExtended(i.OutputRegister());
       break;
     case kX64Movzxbl:
       __ movzxbl(i.OutputRegister(), i.MemoryOperand());
@@ -483,10 +506,18 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       break;
     }
     case kX64Movsxwl:
-      __ movsxwl(i.OutputRegister(), i.MemoryOperand());
+      if (instr->addressing_mode() != kMode_None) {
+        __ movsxwl(i.OutputRegister(), i.MemoryOperand());
+      } else if (instr->InputAt(0)->IsRegister()) {
+        __ movsxwl(i.OutputRegister(), i.InputRegister(0));
+      } else {
+        __ movsxwl(i.OutputRegister(), i.InputOperand(0));
+      }
+      __ AssertZeroExtended(i.OutputRegister());
       break;
     case kX64Movzxwl:
       __ movzxwl(i.OutputRegister(), i.MemoryOperand());
+      __ AssertZeroExtended(i.OutputRegister());
       break;
     case kX64Movw: {
       int index = 0;
@@ -509,6 +540,7 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
         } else {
           __ movl(i.OutputRegister(), i.MemoryOperand());
         }
+        __ AssertZeroExtended(i.OutputRegister());
       } else {
         int index = 0;
         Operand operand = i.MemoryOperand(&index);
@@ -560,9 +592,16 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       break;
     case kX64Lea32:
       __ leal(i.OutputRegister(), i.MemoryOperand());
+      __ AssertZeroExtended(i.OutputRegister());
       break;
     case kX64Lea:
       __ leaq(i.OutputRegister(), i.MemoryOperand());
+      break;
+    case kX64Dec32:
+      __ decl(i.OutputRegister());
+      break;
+    case kX64Inc32:
+      __ incl(i.OutputRegister());
       break;
     case kX64Push:
       if (HasImmediateInput(instr, 0)) {
@@ -592,22 +631,13 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
 
 
 // Assembles branches after this instruction.
-void CodeGenerator::AssembleArchBranch(Instruction* instr,
-                                       FlagsCondition condition) {
+void CodeGenerator::AssembleArchBranch(Instruction* instr, BranchInfo* branch) {
   X64OperandConverter i(this, instr);
-  Label done;
-
-  // Emit a branch. The true and false targets are always the last two inputs
-  // to the instruction.
-  BasicBlock::RpoNumber tblock =
-      i.InputRpo(static_cast<int>(instr->InputCount()) - 2);
-  BasicBlock::RpoNumber fblock =
-      i.InputRpo(static_cast<int>(instr->InputCount()) - 1);
-  bool fallthru = IsNextInAssemblyOrder(fblock);
-  Label* tlabel = code()->GetLabel(tblock);
-  Label* flabel = fallthru ? &done : code()->GetLabel(fblock);
-  Label::Distance flabel_distance = fallthru ? Label::kNear : Label::kFar;
-  switch (condition) {
+  Label::Distance flabel_distance =
+      branch->fallthru ? Label::kNear : Label::kFar;
+  Label* tlabel = branch->true_label;
+  Label* flabel = branch->false_label;
+  switch (branch->condition) {
     case kUnorderedEqual:
       __ j(parity_even, flabel, flabel_distance);
     // Fall through.
@@ -663,8 +693,12 @@ void CodeGenerator::AssembleArchBranch(Instruction* instr,
       __ j(no_overflow, tlabel);
       break;
   }
-  if (!fallthru) __ jmp(flabel, flabel_distance);  // no fallthru to flabel.
-  __ bind(&done);
+  if (!branch->fallthru) __ jmp(flabel, flabel_distance);
+}
+
+
+void CodeGenerator::AssembleArchJump(BasicBlock::RpoNumber target) {
+  if (!IsNextInAssemblyOrder(target)) __ jmp(GetLabel(target));
 }
 
 
@@ -783,23 +817,6 @@ void CodeGenerator::AssemblePrologue() {
     __ Prologue(info->IsCodePreAgingActive());
     frame()->SetRegisterSaveAreaSize(
         StandardFrameConstants::kFixedFrameSizeFromFp);
-
-    // Sloppy mode functions and builtins need to replace the receiver with the
-    // global proxy when called as functions (without an explicit receiver
-    // object).
-    // TODO(mstarzinger/verwaest): Should this be moved back into the CallIC?
-    if (info->strict_mode() == SLOPPY && !info->is_native()) {
-      Label ok;
-      StackArgumentsAccessor args(rbp, info->scope()->num_parameters());
-      __ movp(rcx, args.GetReceiverOperand());
-      __ CompareRoot(rcx, Heap::kUndefinedValueRootIndex);
-      __ j(not_equal, &ok, Label::kNear);
-      __ movp(rcx, GlobalObjectOperand());
-      __ movp(rcx, FieldOperand(rcx, GlobalObject::kGlobalProxyOffset));
-      __ movp(args.GetReceiverOperand(), rcx);
-      __ bind(&ok);
-    }
-
   } else {
     __ StubPrologue();
     frame()->SetRegisterSaveAreaSize(
@@ -902,6 +919,9 @@ void CodeGenerator::AssembleMove(InstructionOperand* source,
         case Constant::kHeapObject:
           __ Move(dst, src.ToHeapObject());
           break;
+        case Constant::kRpoNumber:
+          UNREACHABLE();  // TODO(dcarney): load of labels on x64.
+          break;
       }
       if (destination->IsStackSlot()) {
         __ movq(g.ToOperand(destination), kScratchRegister);
@@ -985,7 +1005,7 @@ void CodeGenerator::AssembleSwap(InstructionOperand* source,
     __ movsd(xmm0, src);
     __ movsd(src, dst);
     __ movsd(dst, xmm0);
-  } else if (source->IsDoubleRegister() && destination->IsDoubleRegister()) {
+  } else if (source->IsDoubleRegister() && destination->IsDoubleStackSlot()) {
     // XMM register-memory swap.  We rely on having xmm0
     // available as a fixed scratch register.
     XMMRegister src = g.ToDoubleRegister(source);

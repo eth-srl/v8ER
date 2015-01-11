@@ -66,7 +66,7 @@ class ChangeLoweringTest : public GraphTest {
   }
 
   Reduction Reduce(Node* node) {
-    MachineOperatorBuilder machine(WordRepresentation());
+    MachineOperatorBuilder machine(zone(), WordRepresentation());
     JSOperatorBuilder javascript(zone());
     JSGraph jsgraph(graph(), common(), &javascript, &machine);
     CompilationInfo info(isolate(), zone());
@@ -79,13 +79,9 @@ class ChangeLoweringTest : public GraphTest {
 
   Matcher<Node*> IsAllocateHeapNumber(const Matcher<Node*>& effect_matcher,
                                       const Matcher<Node*>& control_matcher) {
-    return IsCall(
-        _, IsHeapConstant(Unique<HeapObject>::CreateImmovable(
-               CEntryStub(isolate(), 1).GetCode())),
-        IsExternalConstant(ExternalReference(
-            Runtime::FunctionForId(Runtime::kAllocateHeapNumber), isolate())),
-        IsInt32Constant(0), IsNumberConstant(0.0), effect_matcher,
-        control_matcher);
+    return IsCall(_, IsHeapConstant(Unique<HeapObject>::CreateImmovable(
+                         AllocateHeapNumberStub(isolate()).GetCode())),
+                  IsNumberConstant(0.0), effect_matcher, control_matcher);
   }
   Matcher<Node*> IsLoadHeapNumber(const Matcher<Node*>& value_matcher,
                                   const Matcher<Node*>& control_matcher) {
@@ -128,15 +124,9 @@ TARGET_TEST_P(ChangeLoweringCommonTest, ChangeBitToBool) {
   Node* node = graph()->NewNode(simplified()->ChangeBitToBool(), val);
   Reduction reduction = Reduce(node);
   ASSERT_TRUE(reduction.Changed());
-
-  Node* phi = reduction.replacement();
-  Capture<Node*> branch;
-  EXPECT_THAT(phi,
-              IsPhi(static_cast<MachineType>(kTypeBool | kRepTagged),
-                    IsTrueConstant(), IsFalseConstant(),
-                    IsMerge(IsIfTrue(AllOf(CaptureEq(&branch),
-                                           IsBranch(val, graph()->start()))),
-                            IsIfFalse(CaptureEq(&branch)))));
+  EXPECT_THAT(reduction.replacement(),
+              IsSelect(static_cast<MachineType>(kTypeBool | kRepTagged), val,
+                       IsTrueConstant(), IsFalseConstant()));
 }
 
 
@@ -198,6 +188,7 @@ class ChangeLowering32Test : public ChangeLoweringTest {
 TARGET_TEST_F(ChangeLowering32Test, ChangeInt32ToTagged) {
   Node* val = Parameter(0);
   Node* node = graph()->NewNode(simplified()->ChangeInt32ToTagged(), val);
+  NodeProperties::SetBounds(val, Bounds(Type::None(), Type::Signed32()));
   Reduction reduction = Reduce(node);
   ASSERT_TRUE(reduction.Changed());
 
@@ -219,6 +210,19 @@ TARGET_TEST_F(ChangeLowering32Test, ChangeInt32ToTagged) {
                     IsIfFalse(AllOf(CaptureEq(&branch),
                                     IsBranch(IsProjection(1, CaptureEq(&add)),
                                              graph()->start()))))));
+}
+
+
+TARGET_TEST_F(ChangeLowering32Test, ChangeInt32ToTaggedSmall) {
+  Node* val = Parameter(0);
+  Node* node = graph()->NewNode(simplified()->ChangeInt32ToTagged(), val);
+  NodeProperties::SetBounds(val, Bounds(Type::None(), Type::SignedSmall()));
+  Reduction reduction = Reduce(node);
+  ASSERT_TRUE(reduction.Changed());
+
+  Node* change = reduction.replacement();
+  Capture<Node*> add, branch, heap_number, if_true;
+  EXPECT_THAT(change, IsWord32Shl(val, IsInt32Constant(SmiShiftAmount())));
 }
 
 
@@ -456,7 +460,7 @@ TARGET_TEST_F(ChangeLowering64Test, ChangeUint32ToTagged) {
           IsMerge(
               IsIfTrue(AllOf(CaptureEq(&branch),
                              IsBranch(IsUint32LessThanOrEqual(
-                                          val, IsInt64Constant(SmiMaxValue())),
+                                          val, IsInt32Constant(SmiMaxValue())),
                                       graph()->start()))),
               AllOf(CaptureEq(&if_false), IsIfFalse(CaptureEq(&branch))))));
 }

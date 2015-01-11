@@ -767,6 +767,13 @@ void MacroAssembler::X87SetRC(int rc) {
 }
 
 
+void MacroAssembler::X87SetFPUCW(int cw) {
+  push(Immediate(cw));
+  fldcw(MemOperand(esp, 0));
+  add(esp, Immediate(kPointerSize));
+}
+
+
 void MacroAssembler::AssertNumber(Register object) {
   if (emit_debug_code()) {
     Label ok;
@@ -1314,10 +1321,10 @@ void MacroAssembler::LoadFromNumberDictionary(Label* miss,
   }
 
   bind(&done);
-  // Check that the value is a normal propety.
+  // Check that the value is a field property.
   const int kDetailsOffset =
       SeededNumberDictionary::kElementsStartOffset + 2 * kPointerSize;
-  DCHECK_EQ(NORMAL, 0);
+  DCHECK_EQ(FIELD, 0);
   test(FieldOperand(elements, r2, times_pointer_size, kDetailsOffset),
        Immediate(PropertyDetails::TypeField::kMask << kSmiTagSize));
   j(not_zero, miss);

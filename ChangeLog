@@ -1,3 +1,248 @@
+2014-11-28: Version 3.31.28
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-28: Version 3.31.27
+
+        Ship harmony-strings.
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-28: Version 3.31.26
+
+        Abort optimization in corner case (Chromium issue 436893).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-26: Version 3.31.25
+
+        Stage ES6 block scoping (issue 2198).
+
+        Introduce legacy const slots in correct context (Chromium issue 410030).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-26: Version 3.31.24
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-25: Version 3.31.23
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-25: Version 3.31.22
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-24: Version 3.31.21
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-24: Version 3.31.20
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-22: Version 3.31.19
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-21: Version 3.31.18
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-21: Version 3.31.17
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-21: Version 3.31.16
+
+        Cache template literal callSiteObj (issue 3230).
+
+        Rename String.prototype.contains to 'includes'.
+
+        Reserve code range block for evacuation (Chromium issue 430118).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-20: Version 3.31.15
+
+        Rename String.prototype.contains to 'includes'.
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-19: Version 3.31.14
+
+        Remove Weak{Map,Set}.prototype.clear.
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-19: Version 3.31.13
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-19: Version 3.31.12
+
+        Classes: Expand test to cover strict runtime behavior (issue 3330).
+
+        v8::String::Concat must not throw (Chromium issue 420240).
+
+        Fix disabling all break points from within the debug event callback
+        (Chromium issue 432493).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-18: Version 3.31.11
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-17: Version 3.31.10
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-17: Version 3.31.9
+
+        Expose internal properties of map/set iterators via mirrors.
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-17: Version 3.31.8
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-15: Version 3.31.7
+
+        Classes: Add support for stepping through default constructors (issue
+        3674).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-14: Version 3.31.6
+
+        Fix desugaring of let bindings in for loops to handle continue properly
+        (issue 3683).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-14: Version 3.31.5
+
+        Classes: Implement correct name binding (issue 3330).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-14: Version 3.31.4
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-14: Version 3.31.3
+
+        Classes: Cleanup default constructor flag.
+
+        Soft fail for invalid cache data.
+
+        Implement .of() on typed arrays (issue 3578).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-13: Version 3.31.2
+
+        MIPS: Leaving a generator via an exception causes it to close (issue
+        3096).
+
+        MIPS: ES6: Add support for super in object literals (issue 3571).
+
+        Increase the target new space size to the max new space size (issue
+        3626).
+
+        Leaving a generator via an exception causes it to close (issue 3096).
+
+        Correctly compute line numbers in functions from the function
+        constructor (Chromium issue 109362).
+
+        Rename v8::Exception::GetMessage to CreateMessage.
+
+        Classes: Add support for arguments in default constructor (issue 3672).
+
+        ES6: Add support for super in object literals (issue 3571).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-12: Version 3.31.1
+
+        Fix has_constant_parameter_count() confusion in LReturn (Chromium issue
+        431602).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-05: Version 3.30.33
+
+        `1..isPrototypeOf.call(null)` should return false, not throw TypeError
+        (issue 3483).
+
+        Refactor ObjectGetOwnPropertyKeys to accept bitmask rather than boolean
+        (issue 3549).
+
+        Add debug mirror support for ES6 Map/Set iterators (Chromium issue
+        427868).
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-04: Version 3.30.30
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-02: Version 3.30.27
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-02: Version 3.30.26
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-01: Version 3.30.25
+
+        Performance and stability improvements on all platforms.
+
+
+2014-11-01: Version 3.30.24
+
+        Ensure we don't try to inline raw access to indexed interceptor
+        receivers (Chromium issue 419220).
+
+        Performance and stability improvements on all platforms.
+
+
 2014-10-31: Version 3.30.23
 
         Introduce v8::Exception::GetMessage to find location of an error object

@@ -10,7 +10,9 @@
 #include "src/compiler/js-graph.h"
 #include "src/compiler/node-properties-inl.h"
 #include "src/compiler/pipeline.h"
+#include "src/compiler/select-lowering.h"
 #include "src/compiler/simplified-lowering.h"
+#include "src/compiler/typer.h"
 #include "src/compiler/verifier.h"
 #include "src/execution.h"
 #include "src/globals.h"
@@ -126,9 +128,13 @@ class ChangesLoweringTester : public GraphBuilderTester<ReturnType> {
     // Run the graph reducer with changes lowering on a single node.
     CompilationInfo info(this->isolate(), this->zone());
     Linkage linkage(this->zone(), &info);
-    ChangeLowering lowering(&jsgraph, &linkage);
-    GraphReducer reducer(this->graph());
-    reducer.AddReducer(&lowering);
+    Typer typer(this->graph(), info.context());
+    typer.Run();
+    ChangeLowering change_lowering(&jsgraph, &linkage);
+    SelectLowering select_lowering(this->graph(), this->common());
+    GraphReducer reducer(this->graph(), this->zone());
+    reducer.AddReducer(&change_lowering);
+    reducer.AddReducer(&select_lowering);
     reducer.ReduceNode(change);
     Verifier::Run(this->graph(), Verifier::UNTYPED);
   }
