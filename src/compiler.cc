@@ -311,29 +311,29 @@ class HOptimizedGraphBuilderWithPositions: public HOptimizedGraphBuilder {
       : HOptimizedGraphBuilder(info) {
   }
 
-#define DEF_VISIT(type)                                 \
-  virtual void Visit##type(type* node) OVERRIDE {    \
-    if (node->position() != RelocInfo::kNoPosition) {   \
-      SetSourcePosition(node->position());              \
-    }                                                   \
-    HOptimizedGraphBuilder::Visit##type(node);          \
+#define DEF_VISIT(type)                               \
+  void Visit##type(type* node) OVERRIDE {             \
+    if (node->position() != RelocInfo::kNoPosition) { \
+      SetSourcePosition(node->position());            \
+    }                                                 \
+    HOptimizedGraphBuilder::Visit##type(node);        \
   }
   EXPRESSION_NODE_LIST(DEF_VISIT)
 #undef DEF_VISIT
 
-#define DEF_VISIT(type)                                          \
-  virtual void Visit##type(type* node) OVERRIDE {             \
-    if (node->position() != RelocInfo::kNoPosition) {            \
-      SetSourcePosition(node->position());                       \
-    }                                                            \
-    HOptimizedGraphBuilder::Visit##type(node);                   \
+#define DEF_VISIT(type)                               \
+  void Visit##type(type* node) OVERRIDE {             \
+    if (node->position() != RelocInfo::kNoPosition) { \
+      SetSourcePosition(node->position());            \
+    }                                                 \
+    HOptimizedGraphBuilder::Visit##type(node);        \
   }
   STATEMENT_NODE_LIST(DEF_VISIT)
 #undef DEF_VISIT
 
-#define DEF_VISIT(type)                                            \
-  virtual void Visit##type(type* node) OVERRIDE {               \
-    HOptimizedGraphBuilder::Visit##type(node);                     \
+#define DEF_VISIT(type)                        \
+  void Visit##type(type* node) OVERRIDE {      \
+    HOptimizedGraphBuilder::Visit##type(node); \
   }
   MODULE_NODE_LIST(DEF_VISIT)
   DECLARATION_NODE_LIST(DEF_VISIT)
@@ -416,6 +416,12 @@ OptimizedCompileJob::Status OptimizedCompileJob::CreateGraph() {
   // Check the whitelist for TurboFan.
   if ((FLAG_turbo_asm && info()->shared_info()->asm_function()) ||
       info()->closure()->PassesFilter(FLAG_turbo_filter)) {
+    if (FLAG_trace_opt) {
+      OFStream os(stdout);
+      os << "[compiling method " << Brief(*info()->closure())
+         << " using TurboFan]" << std::endl;
+    }
+    Timer t(this, &time_taken_to_create_graph_);
     compiler::Pipeline pipeline(info());
     pipeline.GenerateCode();
     if (!info()->code().is_null()) {
@@ -423,10 +429,13 @@ OptimizedCompileJob::Status OptimizedCompileJob::CreateGraph() {
     }
   }
 
+  if (FLAG_trace_opt) {
+    OFStream os(stdout);
+    os << "[compiling method " << Brief(*info()->closure())
+       << " using Crankshaft]" << std::endl;
+  }
+
   if (FLAG_trace_hydrogen) {
-    Handle<String> name = info()->function()->debug_name();
-    PrintF("-----------------------------------------------------------\n");
-    PrintF("Compiling method %s using hydrogen\n", name->ToCString().get());
     isolate()->GetHTracer()->TraceCompilation(info());
   }
 
@@ -764,15 +773,14 @@ static bool Renumber(CompilationInfo* info) {
 }
 
 
-static void ThrowSuperConstructorCheckError(CompilationInfo* info) {
+static void ThrowSuperConstructorCheckError(CompilationInfo* info,
+                                            Statement* stmt) {
   MaybeHandle<Object> obj = info->isolate()->factory()->NewTypeError(
       "super_constructor_call", HandleVector<Object>(nullptr, 0));
   Handle<Object> exception;
   if (!obj.ToHandle(&exception)) return;
 
-  FunctionLiteral* lit = info->function();
-  MessageLocation location(info->script(), lit->start_position(),
-                           lit->end_position());
+  MessageLocation location(info->script(), stmt->position(), stmt->position());
   USE(info->isolate()->Throw(*exception, &location));
 }
 
@@ -803,20 +811,20 @@ static bool CheckSuperConstructorCall(CompilationInfo* info) {
     break;
   }
 
-  ExpressionStatement* exprStm =
-      body->at(super_call_index)->AsExpressionStatement();
+  Statement* stmt = body->at(super_call_index);
+  ExpressionStatement* exprStm = stmt->AsExpressionStatement();
   if (exprStm == nullptr) {
-    ThrowSuperConstructorCheckError(info);
+    ThrowSuperConstructorCheckError(info, stmt);
     return false;
   }
   Call* callExpr = exprStm->expression()->AsCall();
   if (callExpr == nullptr) {
-    ThrowSuperConstructorCheckError(info);
+    ThrowSuperConstructorCheckError(info, stmt);
     return false;
   }
 
   if (!callExpr->expression()->IsSuperReference()) {
-    ThrowSuperConstructorCheckError(info);
+    ThrowSuperConstructorCheckError(info, stmt);
     return false;
   }
 
@@ -827,7 +835,7 @@ static bool CheckSuperConstructorCall(CompilationInfo* info) {
 
   if (this_access_visitor.HasStackOverflow()) return false;
   if (this_access_visitor.UsesThis()) {
-    ThrowSuperConstructorCheckError(info);
+    ThrowSuperConstructorCheckError(info, stmt);
     return false;
   }
 
@@ -882,11 +890,6 @@ static bool GetOptimizedCodeNow(CompilationInfo* info) {
   InsertCodeIntoOptimizedCodeMap(info);
   RecordFunctionCompilation(Logger::LAZY_COMPILE_TAG, info,
                             info->shared_info());
-  if (FLAG_trace_opt) {
-    PrintF("[completed optimizing ");
-    info->closure()->ShortPrint();
-    PrintF("]\n");
-  }
   return true;
 }
 
@@ -955,11 +958,8 @@ MaybeHandle<Code> Compiler::GetLazyCode(Handle<JSFunction> function) {
     VMState<COMPILER> state(isolate);
     PostponeInterruptsScope postpone(isolate);
 
-    info.SetOptimizing(BailoutId::None(),
-                       Handle<Code>(function->shared()->code()));
-
+    info.SetOptimizing(BailoutId::None(), handle(function->shared()->code()));
     info.MarkAsContextSpecializing();
-    info.MarkAsTypingEnabled();
 
     if (GetOptimizedCodeNow(&info)) {
       DCHECK(function->shared()->is_compiled());
@@ -1271,19 +1271,20 @@ Handle<SharedFunctionInfo> Compiler::CompileScript(
     int column_offset, bool is_shared_cross_origin, Handle<Context> context,
     v8::Extension* extension, ScriptData** cached_data,
     ScriptCompiler::CompileOptions compile_options, NativesFlag natives) {
+  Isolate* isolate = source->GetIsolate();
   if (compile_options == ScriptCompiler::kNoCompileOptions) {
     cached_data = NULL;
   } else if (compile_options == ScriptCompiler::kProduceParserCache ||
              compile_options == ScriptCompiler::kProduceCodeCache) {
     DCHECK(cached_data && !*cached_data);
     DCHECK(extension == NULL);
+    DCHECK(!isolate->debug()->is_loaded());
   } else {
     DCHECK(compile_options == ScriptCompiler::kConsumeParserCache ||
            compile_options == ScriptCompiler::kConsumeCodeCache);
     DCHECK(cached_data && *cached_data);
     DCHECK(extension == NULL);
   }
-  Isolate* isolate = source->GetIsolate();
   int source_length = source->length();
   isolate->counters()->total_load_size()->Increment(source_length);
   isolate->counters()->total_compile_size()->Increment(source_length);

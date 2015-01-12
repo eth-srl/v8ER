@@ -68,6 +68,7 @@
         'compiler/test-jump-threading.cc',
         'compiler/test-linkage.cc',
         'compiler/test-loop-assignment-analysis.cc',
+        'compiler/test-loop-analysis.cc',
         'compiler/test-machine-operator-reducer.cc',
         'compiler/test-node-algorithm.cc',
         'compiler/test-node-cache.cc',
@@ -156,6 +157,7 @@
         'test-strtod.cc',
         'test-thread-termination.cc',
         'test-threads.cc',
+        'test-transitions.cc',
         'test-types.cc',
         'test-unbound-queue.cc',
         'test-unboxed-doubles.cc',
@@ -258,13 +260,14 @@
           # cctest can't be built against a shared library, so we need to
           # depend on the underlying static target in that case.
           'conditions': [
-            ['v8_use_snapshot=="true"', {
+            ['v8_use_snapshot=="true" and v8_use_external_startup_data==0', {
               'dependencies': ['../../tools/gyp/v8.gyp:v8_snapshot'],
-            },
-            {
-              'dependencies': [
-                '../../tools/gyp/v8.gyp:v8_nosnapshot',
-              ],
+            }],
+            ['v8_use_snapshot=="true" and v8_use_external_startup_data==1', {
+              'dependencies': ['../../tools/gyp/v8.gyp:v8_external_snapshot'],
+            }],
+            ['v8_use_snapshot!="true"', {
+              'dependencies': ['../../tools/gyp/v8.gyp:v8_nosnapshot'],
             }],
           ],
         }, {

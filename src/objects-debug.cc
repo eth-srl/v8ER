@@ -684,9 +684,8 @@ void Code::VerifyEmbeddedObjectsDependency() {
     if (IsWeakObject(obj)) {
       if (obj->IsMap()) {
         Map* map = Map::cast(obj);
-        DependentCode::DependencyGroup group = is_optimized_code() ?
-            DependentCode::kWeakCodeGroup : DependentCode::kWeakICGroup;
-        CHECK(map->dependent_code()->Contains(group, this));
+        CHECK(map->dependent_code()->Contains(DependentCode::kWeakCodeGroup,
+                                              this));
       } else if (obj->IsJSObject()) {
         Object* raw_table = GetIsolate()->heap()->weak_object_to_code_table();
         WeakHashTable* table = WeakHashTable::cast(raw_table);
@@ -1174,15 +1173,13 @@ bool DescriptorArray::IsSortedNoDuplicates(int valid_entries) {
   for (int i = 0; i < number_of_descriptors(); i++) {
     Name* key = GetSortedKey(i);
     if (key == current_key) {
-      OFStream os(stdout);
-      PrintDescriptors(os);
+      Print();
       return false;
     }
     current_key = key;
     uint32_t hash = GetSortedKey(i)->Hash();
     if (hash < current) {
-      OFStream os(stdout);
-      PrintDescriptors(os);
+      Print();
       return false;
     }
     current = hash;
@@ -1214,23 +1211,35 @@ bool LayoutDescriptor::IsConsistentWithMap(Map* map) {
 
 bool TransitionArray::IsSortedNoDuplicates(int valid_entries) {
   DCHECK(valid_entries == -1);
-  Name* current_key = NULL;
-  uint32_t current = 0;
+  Name* prev_key = NULL;
+  PropertyKind prev_kind = DATA;
+  PropertyAttributes prev_attributes = NONE;
+  uint32_t prev_hash = 0;
   for (int i = 0; i < number_of_transitions(); i++) {
     Name* key = GetSortedKey(i);
-    if (key == current_key) {
-      OFStream os(stdout);
-      PrintTransitions(os);
+    uint32_t hash = key->Hash();
+    PropertyKind kind = DATA;
+    PropertyAttributes attributes = NONE;
+    if (!IsSpecialTransition(key)) {
+      Map* target = GetTarget(i);
+      PropertyDetails details = GetTargetDetails(key, target);
+      kind = details.kind();
+      attributes = details.attributes();
+    } else {
+      // Duplicate entries are not allowed for non-property transitions.
+      CHECK_NE(prev_key, key);
+    }
+
+    int cmp = CompareKeys(prev_key, prev_hash, prev_kind, prev_attributes, key,
+                          hash, kind, attributes);
+    if (cmp >= 0) {
+      Print();
       return false;
     }
-    current_key = key;
-    uint32_t hash = GetSortedKey(i)->Hash();
-    if (hash < current) {
-      OFStream os(stdout);
-      PrintTransitions(os);
-      return false;
-    }
-    current = hash;
+    prev_key = key;
+    prev_hash = hash;
+    prev_attributes = attributes;
+    prev_kind = kind;
   }
   return true;
 }

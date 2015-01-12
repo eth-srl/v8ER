@@ -98,6 +98,10 @@ Handle<TypeFeedbackVector> TypeFeedbackVector::Allocate(
   }
   array->set(kWithTypesIndex, Smi::FromInt(0));
   array->set(kGenericCountIndex, Smi::FromInt(0));
+  // Fill the indexes with zeros.
+  for (int i = 0; i < index_count; i++) {
+    array->set(kReservedIndexCount + i, Smi::FromInt(0));
+  }
 
   // Ensure we can skip the write barrier
   Handle<Object> uninitialized_sentinel = UninitializedSentinel(isolate);
@@ -134,8 +138,7 @@ Handle<TypeFeedbackVector> TypeFeedbackVector::Copy(
 static bool ClearLogic(Heap* heap, int ic_age, Code::Kind kind,
                        InlineCacheState state) {
   if (FLAG_cleanup_code_caches_at_gc &&
-      (kind == Code::CALL_IC || state == MEGAMORPHIC || state == GENERIC ||
-       state == POLYMORPHIC || heap->flush_monomorphic_ics() ||
+      (kind == Code::CALL_IC || heap->flush_monomorphic_ics() ||
        // TODO(mvstanton): is this ic_age granular enough? it comes from
        // the SharedFunctionInfo which may change on a different schedule
        // than ic targets.
@@ -220,12 +223,13 @@ Handle<FixedArray> FeedbackNexus::EnsureArrayOfSize(int length) {
 void FeedbackNexus::InstallHandlers(int start_index, TypeHandleList* types,
                                     CodeHandleList* handlers) {
   Isolate* isolate = GetIsolate();
-  FixedArray* array = FixedArray::cast(GetFeedback());
+  Handle<FixedArray> array = handle(FixedArray::cast(GetFeedback()), isolate);
   int receiver_count = types->length();
   for (int current = 0; current < receiver_count; ++current) {
     Handle<HeapType> type = types->at(current);
     Handle<Map> map = IC::TypeToMap(*type, isolate);
-    array->set(start_index + (current * 2), *map);
+    Handle<WeakCell> cell = Map::WeakCellForMap(map);
+    array->set(start_index + (current * 2), *cell);
     array->set(start_index + (current * 2 + 1), *handlers->at(current));
   }
 }
@@ -241,6 +245,8 @@ InlineCacheState LoadICNexus::StateFromFeedback() const {
   } else if (feedback == *vector()->PremonomorphicSentinel(isolate)) {
     return PREMONOMORPHIC;
   } else if (feedback->IsFixedArray()) {
+    // Determine state purely by our structure, don't check if the maps are
+    // cleared.
     FixedArray* array = FixedArray::cast(feedback);
     int length = array->length();
     DCHECK(length >= 2);
@@ -258,11 +264,11 @@ InlineCacheState KeyedLoadICNexus::StateFromFeedback() const {
     return UNINITIALIZED;
   } else if (feedback == *vector()->PremonomorphicSentinel(isolate)) {
     return PREMONOMORPHIC;
-  } else if (feedback == *vector()->MegamorphicSentinel(isolate)) {
-    return MEGAMORPHIC;
   } else if (feedback == *vector()->GenericSentinel(isolate)) {
     return GENERIC;
   } else if (feedback->IsFixedArray()) {
+    // Determine state purely by our structure, don't check if the maps are
+    // cleared.
     FixedArray* array = FixedArray::cast(feedback);
     int length = array->length();
     DCHECK(length >= 3);
@@ -322,11 +328,6 @@ void KeyedLoadICNexus::ConfigureGeneric() {
 }
 
 
-void KeyedLoadICNexus::ConfigureMegamorphic() {
-  SetFeedback(*vector()->MegamorphicSentinel(GetIsolate()), SKIP_WRITE_BARRIER);
-}
-
-
 void LoadICNexus::ConfigureMegamorphic() {
   SetFeedback(*vector()->MegamorphicSentinel(GetIsolate()), SKIP_WRITE_BARRIER);
 }
@@ -348,7 +349,8 @@ void LoadICNexus::ConfigureMonomorphic(Handle<HeapType> type,
                                        Handle<Code> handler) {
   Handle<FixedArray> array = EnsureArrayOfSize(2);
   Handle<Map> receiver_map = IC::TypeToMap(*type, GetIsolate());
-  array->set(0, *receiver_map);
+  Handle<WeakCell> cell = Map::WeakCellForMap(receiver_map);
+  array->set(0, *cell);
   array->set(1, *handler);
 }
 
@@ -363,7 +365,8 @@ void KeyedLoadICNexus::ConfigureMonomorphic(Handle<Name> name,
   } else {
     array->set(0, *name);
   }
-  array->set(1, *receiver_map);
+  Handle<WeakCell> cell = Map::WeakCellForMap(receiver_map);
+  array->set(1, *cell);
   array->set(2, *handler);
 }
 
@@ -394,15 +397,20 @@ int FeedbackNexus::ExtractMaps(int start_index, MapHandleList* maps) const {
   Isolate* isolate = GetIsolate();
   Object* feedback = GetFeedback();
   if (feedback->IsFixedArray()) {
+    int found = 0;
     FixedArray* array = FixedArray::cast(feedback);
     // The array should be of the form [<optional name>], then
     // [map, handler, map, handler, ... ]
     DCHECK(array->length() >= (2 + start_index));
     for (int i = start_index; i < array->length(); i += 2) {
-      Map* map = Map::cast(array->get(i));
-      maps->Add(handle(map, isolate));
+      WeakCell* cell = WeakCell::cast(array->get(i));
+      if (!cell->cleared()) {
+        Map* map = Map::cast(cell->value());
+        maps->Add(handle(map, isolate));
+        found++;
+      }
     }
-    return (array->length() - start_index) / 2;
+    return found;
   }
 
   return 0;
@@ -415,11 +423,14 @@ MaybeHandle<Code> FeedbackNexus::FindHandlerForMap(int start_index,
   if (feedback->IsFixedArray()) {
     FixedArray* array = FixedArray::cast(feedback);
     for (int i = start_index; i < array->length(); i += 2) {
-      Map* array_map = Map::cast(array->get(i));
-      if (array_map == *map) {
-        Code* code = Code::cast(array->get(i + 1));
-        DCHECK(code->kind() == Code::HANDLER);
-        return handle(code);
+      WeakCell* cell = WeakCell::cast(array->get(i));
+      if (!cell->cleared()) {
+        Map* array_map = Map::cast(cell->value());
+        if (array_map == *map) {
+          Code* code = Code::cast(array->get(i + 1));
+          DCHECK(code->kind() == Code::HANDLER);
+          return handle(code);
+        }
       }
     }
   }
@@ -435,13 +446,17 @@ bool FeedbackNexus::FindHandlers(int start_index, CodeHandleList* code_list,
   if (feedback->IsFixedArray()) {
     FixedArray* array = FixedArray::cast(feedback);
     // The array should be of the form [<optional name>], then
-    // [map, handler, map, handler, ... ]
+    // [map, handler, map, handler, ... ]. Be sure to skip handlers whose maps
+    // have been cleared.
     DCHECK(array->length() >= (2 + start_index));
     for (int i = start_index; i < array->length(); i += 2) {
-      Code* code = Code::cast(array->get(i + 1));
-      DCHECK(code->kind() == Code::HANDLER);
-      code_list->Add(handle(code));
-      count++;
+      WeakCell* cell = WeakCell::cast(array->get(i));
+      if (!cell->cleared()) {
+        Code* code = Code::cast(array->get(i + 1));
+        DCHECK(code->kind() == Code::HANDLER);
+        code_list->Add(handle(code));
+        count++;
+      }
     }
   }
   return count == length;

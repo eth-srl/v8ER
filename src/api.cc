@@ -206,6 +206,53 @@ void V8::SetSnapshotDataBlob(StartupData* snapshot_blob) {
 }
 
 
+StartupData V8::CreateSnapshotDataBlob() {
+  Isolate::CreateParams params;
+  params.enable_serializer = true;
+  Isolate* isolate = v8::Isolate::New(params);
+  StartupData result = {NULL, 0};
+  {
+    Isolate::Scope isolate_scope(isolate);
+    i::Isolate* internal_isolate = reinterpret_cast<i::Isolate*>(isolate);
+    Persistent<Context> context;
+    {
+      HandleScope handle_scope(isolate);
+      context.Reset(isolate, Context::New(isolate));
+    }
+    if (!context.IsEmpty()) {
+      // Make sure all builtin scripts are cached.
+      {
+        HandleScope scope(isolate);
+        for (int i = 0; i < i::Natives::GetBuiltinsCount(); i++) {
+          internal_isolate->bootstrapper()->NativesSourceLookup(i);
+        }
+      }
+      // If we don't do this then we end up with a stray root pointing at the
+      // context even after we have disposed of the context.
+      internal_isolate->heap()->CollectAllAvailableGarbage("mksnapshot");
+      i::Object* raw_context = *v8::Utils::OpenPersistent(context);
+      context.Reset();
+
+      i::SnapshotByteSink snapshot_sink;
+      i::StartupSerializer ser(internal_isolate, &snapshot_sink);
+      ser.SerializeStrongReferences();
+
+      i::SnapshotByteSink context_sink;
+      i::PartialSerializer context_ser(internal_isolate, &ser, &context_sink);
+      context_ser.Serialize(&raw_context);
+      ser.SerializeWeakReferences();
+
+      i::SnapshotData sd(snapshot_sink, ser);
+      i::SnapshotData csd(context_sink, context_ser);
+
+      result = i::Snapshot::CreateSnapshotBlob(sd.RawData(), csd.RawData());
+    }
+  }
+  isolate->Dispose();
+  return result;
+}
+
+
 void V8::SetFlagsFromString(const char* str, int length) {
   i::FlagList::SetFlagsFromString(str, length);
 }
@@ -339,28 +386,40 @@ void SetResourceConstraints(i::Isolate* isolate,
 i::Object** V8::GlobalizeReference(i::Isolate* isolate, i::Object** obj) {
   LOG_API(isolate, "Persistent::New");
   i::Handle<i::Object> result = isolate->global_handles()->Create(*obj);
-#ifdef DEBUG
+#ifdef VERIFY_HEAP
   (*obj)->ObjectVerify();
-#endif  // DEBUG
+#endif  // VERIFY_HEAP
   return result.location();
 }
 
 
 i::Object** V8::CopyPersistent(i::Object** obj) {
   i::Handle<i::Object> result = i::GlobalHandles::CopyGlobal(obj);
-#ifdef DEBUG
+#ifdef VERIFY_HEAP
   (*obj)->ObjectVerify();
-#endif  // DEBUG
+#endif  // VERIFY_HEAP
   return result.location();
 }
 
 
-void V8::MakeWeak(i::Object** object, void* parameters,
-                  WeakCallback weak_callback, V8::WeakHandleType weak_type) {
-  i::GlobalHandles::PhantomState phantom;
-  phantom = weak_type == V8::PhantomHandle ? i::GlobalHandles::Phantom
-                                           : i::GlobalHandles::Nonphantom;
-  i::GlobalHandles::MakeWeak(object, parameters, weak_callback, phantom);
+void V8::MakeWeak(i::Object** object, void* parameter,
+                  WeakCallback weak_callback) {
+  i::GlobalHandles::MakeWeak(object, parameter, weak_callback);
+}
+
+
+void V8::MakePhantom(i::Object** object, void* parameter,
+                     PhantomCallbackData<void>::Callback weak_callback) {
+  i::GlobalHandles::MakePhantom(object, parameter, weak_callback);
+}
+
+
+void V8::MakePhantom(
+    i::Object** object,
+    InternalFieldsCallbackData<void, void>::Callback weak_callback,
+    int internal_field_index1, int internal_field_index2) {
+  i::GlobalHandles::MakePhantom(object, weak_callback, internal_field_index1,
+                                internal_field_index2);
 }
 
 
@@ -755,6 +814,9 @@ Local<FunctionTemplate> FunctionTemplate::New(
     v8::Handle<Signature> signature,
     int length) {
   i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
+  // Changes to the environment cannot be captured in the snapshot. Expect no
+  // function templates when the isolate is created for serialization.
+  DCHECK(!i_isolate->serializer_enabled());
   LOG_API(i_isolate, "FunctionTemplate::New");
   ENTER_V8(i_isolate);
   return FunctionTemplateNew(
@@ -1094,6 +1156,9 @@ Local<ObjectTemplate> ObjectTemplate::New() {
 Local<ObjectTemplate> ObjectTemplate::New(
     i::Isolate* isolate,
     v8::Handle<FunctionTemplate> constructor) {
+  // Changes to the environment cannot be captured in the snapshot. Expect no
+  // object templates when the isolate is created for serialization.
+  DCHECK(!isolate->serializer_enabled());
   LOG_API(isolate, "ObjectTemplate::New");
   ENTER_V8(isolate);
   i::Handle<i::Struct> struct_obj =
@@ -1335,13 +1400,8 @@ void ObjectTemplate::SetAccessCheckCallbacks(
 }
 
 
-void ObjectTemplate::SetIndexedPropertyHandler(
-    IndexedPropertyGetterCallback getter,
-    IndexedPropertySetterCallback setter,
-    IndexedPropertyQueryCallback query,
-    IndexedPropertyDeleterCallback remover,
-    IndexedPropertyEnumeratorCallback enumerator,
-    Handle<Value> data) {
+void ObjectTemplate::SetHandler(
+    const IndexedPropertyHandlerConfiguration& config) {
   i::Isolate* isolate = Utils::OpenHandle(this)->GetIsolate();
   ENTER_V8(isolate);
   i::HandleScope scope(isolate);
@@ -1354,13 +1414,16 @@ void ObjectTemplate::SetIndexedPropertyHandler(
   i::Handle<i::InterceptorInfo> obj =
       i::Handle<i::InterceptorInfo>::cast(struct_obj);
 
-  if (getter != 0) SET_FIELD_WRAPPED(obj, set_getter, getter);
-  if (setter != 0) SET_FIELD_WRAPPED(obj, set_setter, setter);
-  if (query != 0) SET_FIELD_WRAPPED(obj, set_query, query);
-  if (remover != 0) SET_FIELD_WRAPPED(obj, set_deleter, remover);
-  if (enumerator != 0) SET_FIELD_WRAPPED(obj, set_enumerator, enumerator);
+  if (config.getter != 0) SET_FIELD_WRAPPED(obj, set_getter, config.getter);
+  if (config.setter != 0) SET_FIELD_WRAPPED(obj, set_setter, config.setter);
+  if (config.query != 0) SET_FIELD_WRAPPED(obj, set_query, config.query);
+  if (config.deleter != 0) SET_FIELD_WRAPPED(obj, set_deleter, config.deleter);
+  if (config.enumerator != 0) {
+    SET_FIELD_WRAPPED(obj, set_enumerator, config.enumerator);
+  }
   obj->set_flags(0);
 
+  v8::Local<v8::Value> data = config.data;
   if (data.IsEmpty()) {
     data = v8::Undefined(reinterpret_cast<v8::Isolate*>(isolate));
   }
@@ -1584,6 +1647,12 @@ Local<UnboundScript> ScriptCompiler::CompileUnbound(
     options = kProduceParserCache;
   } else if (options == kNoCompileOptions && source->cached_data) {
     options = kConsumeParserCache;
+  }
+
+  // Don't try to produce any kind of cache when the debugger is loaded.
+  if (isolate->debug()->is_loaded() &&
+      (options == kProduceParserCache || options == kProduceCodeCache)) {
+    options = kNoCompileOptions;
   }
 
   i::ScriptData* script_data = NULL;
@@ -4231,6 +4300,16 @@ Local<v8::Value> Function::GetBoundFunction() const {
 }
 
 
+int Name::GetIdentityHash() {
+  i::Isolate* isolate = Utils::OpenHandle(this)->GetIsolate();
+  ON_BAILOUT(isolate, "v8::Name::GetIdentityHash()", return 0);
+  ENTER_V8(isolate);
+  i::HandleScope scope(isolate);
+  i::Handle<i::Name> self = Utils::OpenHandle(this);
+  return static_cast<int>(self->Hash());
+}
+
+
 int String::Length() const {
   i::Handle<i::String> str = Utils::OpenHandle(this);
   return str->length();
@@ -6397,17 +6476,11 @@ void Isolate::CancelTerminateExecution() {
 
 void Isolate::RequestInterrupt(InterruptCallback callback, void* data) {
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
-  isolate->set_api_interrupt_callback(callback);
-  isolate->set_api_interrupt_callback_data(data);
-  isolate->stack_guard()->RequestApiInterrupt();
+  isolate->RequestInterrupt(callback, data);
 }
 
 
 void Isolate::ClearInterrupt() {
-  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
-  isolate->stack_guard()->ClearApiInterrupt();
-  isolate->set_api_interrupt_callback(NULL);
-  isolate->set_api_interrupt_callback_data(NULL);
 }
 
 
@@ -6650,6 +6723,15 @@ bool Isolate::IdleNotification(int idle_time_in_ms) {
 }
 
 
+bool Isolate::IdleNotificationDeadline(double deadline_in_seconds) {
+  // Returning true tells the caller that it need not
+  // continue to call IdleNotification.
+  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
+  if (!i::FLAG_use_idle_notification) return true;
+  return isolate->heap()->IdleNotification(deadline_in_seconds);
+}
+
+
 void Isolate::LowMemoryNotification() {
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
   {
@@ -6660,9 +6742,9 @@ void Isolate::LowMemoryNotification() {
 }
 
 
-int Isolate::ContextDisposedNotification() {
+int Isolate::ContextDisposedNotification(bool dependant_context) {
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(this);
-  return isolate->heap()->NotifyContextDisposed();
+  return isolate->heap()->NotifyContextDisposed(dependant_context);
 }
 
 

@@ -517,7 +517,7 @@ class SequentialStringKey : public HashTableKey {
   explicit SequentialStringKey(Vector<const Char> string, uint32_t seed)
       : string_(string), hash_field_(0), seed_(seed) { }
 
-  virtual uint32_t Hash() OVERRIDE {
+  uint32_t Hash() OVERRIDE {
     hash_field_ = StringHasher::HashSequentialString<Char>(string_.start(),
                                                            string_.length(),
                                                            seed_);
@@ -528,7 +528,7 @@ class SequentialStringKey : public HashTableKey {
   }
 
 
-  virtual uint32_t HashForObject(Object* other) OVERRIDE {
+  uint32_t HashForObject(Object* other) OVERRIDE {
     return String::cast(other)->Hash();
   }
 
@@ -543,11 +543,11 @@ class OneByteStringKey : public SequentialStringKey<uint8_t> {
   OneByteStringKey(Vector<const uint8_t> str, uint32_t seed)
       : SequentialStringKey<uint8_t>(str, seed) { }
 
-  virtual bool IsMatch(Object* string) OVERRIDE {
+  bool IsMatch(Object* string) OVERRIDE {
     return String::cast(string)->IsOneByteEqualTo(string_);
   }
 
-  virtual Handle<Object> AsHandle(Isolate* isolate) OVERRIDE;
+  Handle<Object> AsHandle(Isolate* isolate) OVERRIDE;
 };
 
 
@@ -558,7 +558,7 @@ class SeqOneByteSubStringKey : public HashTableKey {
     DCHECK(string_->IsSeqOneByteString());
   }
 
-  virtual uint32_t Hash() OVERRIDE {
+  uint32_t Hash() OVERRIDE {
     DCHECK(length_ >= 0);
     DCHECK(from_ + length_ <= string_->length());
     const uint8_t* chars = string_->GetChars() + from_;
@@ -569,12 +569,12 @@ class SeqOneByteSubStringKey : public HashTableKey {
     return result;
   }
 
-  virtual uint32_t HashForObject(Object* other) OVERRIDE {
+  uint32_t HashForObject(Object* other) OVERRIDE {
     return String::cast(other)->Hash();
   }
 
-  virtual bool IsMatch(Object* string) OVERRIDE;
-  virtual Handle<Object> AsHandle(Isolate* isolate) OVERRIDE;
+  bool IsMatch(Object* string) OVERRIDE;
+  Handle<Object> AsHandle(Isolate* isolate) OVERRIDE;
 
  private:
   Handle<SeqOneByteString> string_;
@@ -589,11 +589,11 @@ class TwoByteStringKey : public SequentialStringKey<uc16> {
   explicit TwoByteStringKey(Vector<const uc16> str, uint32_t seed)
       : SequentialStringKey<uc16>(str, seed) { }
 
-  virtual bool IsMatch(Object* string) OVERRIDE {
+  bool IsMatch(Object* string) OVERRIDE {
     return String::cast(string)->IsTwoByteEqualTo(string_);
   }
 
-  virtual Handle<Object> AsHandle(Isolate* isolate) OVERRIDE;
+  Handle<Object> AsHandle(Isolate* isolate) OVERRIDE;
 };
 
 
@@ -603,11 +603,11 @@ class Utf8StringKey : public HashTableKey {
   explicit Utf8StringKey(Vector<const char> string, uint32_t seed)
       : string_(string), hash_field_(0), seed_(seed) { }
 
-  virtual bool IsMatch(Object* string) OVERRIDE {
+  bool IsMatch(Object* string) OVERRIDE {
     return String::cast(string)->IsUtf8EqualTo(string_);
   }
 
-  virtual uint32_t Hash() OVERRIDE {
+  uint32_t Hash() OVERRIDE {
     if (hash_field_ != 0) return hash_field_ >> String::kHashShift;
     hash_field_ = StringHasher::ComputeUtf8Hash(string_, seed_, &chars_);
     uint32_t result = hash_field_ >> String::kHashShift;
@@ -615,11 +615,11 @@ class Utf8StringKey : public HashTableKey {
     return result;
   }
 
-  virtual uint32_t HashForObject(Object* other) OVERRIDE {
+  uint32_t HashForObject(Object* other) OVERRIDE {
     return String::cast(other)->Hash();
   }
 
-  virtual Handle<Object> AsHandle(Isolate* isolate) OVERRIDE {
+  Handle<Object> AsHandle(Isolate* isolate) OVERRIDE {
     if (hash_field_ == 0) Hash();
     return isolate->factory()->NewInternalizedStringFromUtf8(
         string_, chars_, hash_field_);
@@ -707,6 +707,7 @@ TYPE_CHECKER(JSContextExtensionObject, JS_CONTEXT_EXTENSION_OBJECT_TYPE)
 TYPE_CHECKER(Map, MAP_TYPE)
 TYPE_CHECKER(FixedArray, FIXED_ARRAY_TYPE)
 TYPE_CHECKER(FixedDoubleArray, FIXED_DOUBLE_ARRAY_TYPE)
+TYPE_CHECKER(WeakFixedArray, FIXED_ARRAY_TYPE)
 TYPE_CHECKER(ConstantPoolArray, CONSTANT_POOL_ARRAY_TYPE)
 
 
@@ -1898,11 +1899,11 @@ Handle<Map> Map::FindTransitionToField(Handle<Map> map, Handle<Name> key) {
   DisallowHeapAllocation no_allocation;
   if (!map->HasTransitionArray()) return Handle<Map>::null();
   TransitionArray* transitions = map->transitions();
-  int transition = transitions->Search(*key);
+  int transition = transitions->Search(DATA, *key, NONE);
   if (transition == TransitionArray::kNotFound) return Handle<Map>::null();
-  PropertyDetails target_details = transitions->GetTargetDetails(transition);
-  if (target_details.type() != FIELD) return Handle<Map>::null();
-  if (target_details.attributes() != NONE) return Handle<Map>::null();
+  PropertyDetails details = transitions->GetTargetDetails(transition);
+  if (details.type() != FIELD) return Handle<Map>::null();
+  DCHECK_EQ(NONE, details.attributes());
   return Handle<Map>(transitions->GetTarget(transition));
 }
 
@@ -2365,6 +2366,39 @@ void FixedDoubleArray::FillWithHoles(int from, int to) {
   for (int i = from; i < to; i++) {
     set_the_hole(i);
   }
+}
+
+
+Object* WeakFixedArray::Get(int index) const {
+  Object* raw = FixedArray::cast(this)->get(index + kFirstIndex);
+  if (raw->IsSmi()) return raw;
+  return WeakCell::cast(raw)->value();
+}
+
+
+bool WeakFixedArray::IsEmptySlot(int index) const {
+  DCHECK(index < Length());
+  return Get(index)->IsSmi();
+}
+
+
+void WeakFixedArray::clear(int index) {
+  FixedArray::cast(this)->set(index + kFirstIndex, Smi::FromInt(0));
+}
+
+
+int WeakFixedArray::Length() const {
+  return FixedArray::cast(this)->length() - kFirstIndex;
+}
+
+
+int WeakFixedArray::last_used_index() const {
+  return Smi::cast(FixedArray::cast(this)->get(kLastUsedIndexIndex))->value();
+}
+
+
+void WeakFixedArray::set_last_used_index(int index) {
+  FixedArray::cast(this)->set(kLastUsedIndexIndex, Smi::FromInt(index));
 }
 
 
@@ -3003,8 +3037,10 @@ void Map::LookupDescriptor(JSObject* holder,
 }
 
 
-void Map::LookupTransition(JSObject* holder, Name* name, LookupResult* result) {
-  int transition_index = this->SearchTransition(name);
+void Map::LookupTransition(JSObject* holder, Name* name,
+                           PropertyAttributes attributes,
+                           LookupResult* result) {
+  int transition_index = this->SearchTransition(DATA, name, attributes);
   if (transition_index == TransitionArray::kNotFound) return result->NotFound();
   result->TransitionResult(holder, this->GetTransition(transition_index));
 }
@@ -3362,6 +3398,7 @@ CAST_ACCESSOR(Struct)
 CAST_ACCESSOR(Symbol)
 CAST_ACCESSOR(UnseededNumberDictionary)
 CAST_ACCESSOR(WeakCell)
+CAST_ACCESSOR(WeakFixedArray)
 CAST_ACCESSOR(WeakHashTable)
 
 
@@ -4627,34 +4664,12 @@ bool Map::is_migration_target() {
 }
 
 
-void Map::set_done_inobject_slack_tracking(bool value) {
-  set_bit_field3(DoneInobjectSlackTracking::update(bit_field3(), value));
+void Map::set_counter(int value) {
+  set_bit_field3(Counter::update(bit_field3(), value));
 }
 
 
-bool Map::done_inobject_slack_tracking() {
-  return DoneInobjectSlackTracking::decode(bit_field3());
-}
-
-
-void Map::set_construction_count(int value) {
-  set_bit_field3(ConstructionCount::update(bit_field3(), value));
-}
-
-
-int Map::construction_count() {
-  return ConstructionCount::decode(bit_field3());
-}
-
-
-void Map::freeze() {
-  set_bit_field3(IsFrozen::update(bit_field3(), true));
-}
-
-
-bool Map::is_frozen() {
-  return IsFrozen::decode(bit_field3());
-}
+int Map::counter() { return Counter::decode(bit_field3()); }
 
 
 void Map::mark_unstable() {
@@ -5053,34 +5068,6 @@ void Code::set_marked_for_deoptimization(bool flag) {
 }
 
 
-bool Code::is_weak_stub() {
-  return CanBeWeakStub() && WeakStubField::decode(
-      READ_UINT32_FIELD(this, kKindSpecificFlags1Offset));
-}
-
-
-void Code::mark_as_weak_stub() {
-  DCHECK(CanBeWeakStub());
-  int previous = READ_UINT32_FIELD(this, kKindSpecificFlags1Offset);
-  int updated = WeakStubField::update(previous, true);
-  WRITE_UINT32_FIELD(this, kKindSpecificFlags1Offset, updated);
-}
-
-
-bool Code::is_invalidated_weak_stub() {
-  return is_weak_stub() && InvalidatedWeakStubField::decode(
-      READ_UINT32_FIELD(this, kKindSpecificFlags1Offset));
-}
-
-
-void Code::mark_as_invalidated_weak_stub() {
-  DCHECK(is_inline_cache_stub());
-  int previous = READ_UINT32_FIELD(this, kKindSpecificFlags1Offset);
-  int updated = InvalidatedWeakStubField::update(previous, true);
-  WRITE_UINT32_FIELD(this, kKindSpecificFlags1Offset, updated);
-}
-
-
 bool Code::is_inline_cache_stub() {
   Kind kind = this->kind();
   switch (kind) {
@@ -5227,13 +5214,6 @@ class Code::FindAndReplacePattern {
 };
 
 
-bool Code::IsWeakObjectInIC(Object* object) {
-  return object->IsMap() && Map::cast(object)->CanTransition() &&
-         FLAG_collect_maps &&
-         FLAG_weak_embedded_maps_in_ic;
-}
-
-
 Object* Map::prototype() const {
   return READ_FIELD(this, kPrototypeOffset);
 }
@@ -5363,7 +5343,8 @@ bool Map::HasTransitionArray() const {
 
 
 Map* Map::elements_transition_map() {
-  int index = transitions()->Search(GetHeap()->elements_transition_symbol());
+  int index =
+      transitions()->SearchSpecial(GetHeap()->elements_transition_symbol());
   return transitions()->GetTarget(index);
 }
 
@@ -5380,8 +5361,19 @@ Map* Map::GetTransition(int transition_index) {
 }
 
 
-int Map::SearchTransition(Name* name) {
-  if (HasTransitionArray()) return transitions()->Search(name);
+int Map::SearchSpecialTransition(Symbol* name) {
+  if (HasTransitionArray()) {
+    return transitions()->SearchSpecial(name);
+  }
+  return TransitionArray::kNotFound;
+}
+
+
+int Map::SearchTransition(PropertyKind kind, Name* name,
+                          PropertyAttributes attributes) {
+  if (HasTransitionArray()) {
+    return transitions()->Search(kind, name, attributes);
+  }
   return TransitionArray::kNotFound;
 }
 
@@ -5432,9 +5424,17 @@ void Map::set_transitions(TransitionArray* transition_array,
       Map* target = transitions()->GetTarget(i);
       if (target->instance_descriptors() == instance_descriptors()) {
         Name* key = transitions()->GetKey(i);
-        int new_target_index = transition_array->Search(key);
-        DCHECK(new_target_index != TransitionArray::kNotFound);
-        DCHECK(transition_array->GetTarget(new_target_index) == target);
+        int new_target_index;
+        if (TransitionArray::IsSpecialTransition(key)) {
+          new_target_index = transition_array->SearchSpecial(Symbol::cast(key));
+        } else {
+          PropertyDetails details =
+              TransitionArray::GetTargetDetails(key, target);
+          new_target_index = transition_array->Search(details.kind(), key,
+                                                      details.attributes());
+        }
+        DCHECK_NE(TransitionArray::kNotFound, new_target_index);
+        DCHECK_EQ(target, transition_array->GetTarget(new_target_index));
       }
     }
 #endif
@@ -5820,6 +5820,7 @@ BOOL_ACCESSORS(SharedFunctionInfo, compiler_hints, is_default_constructor,
 
 ACCESSORS(CodeCache, default_cache, FixedArray, kDefaultCacheOffset)
 ACCESSORS(CodeCache, normal_type_cache, Object, kNormalTypeCacheOffset)
+ACCESSORS(CodeCache, weak_cell_cache, Object, kWeakCellCacheOffset)
 
 ACCESSORS(PolymorphicCodeCache, cache, Object, kCacheOffset)
 
@@ -6055,7 +6056,7 @@ bool JSFunction::IsInOptimizationQueue() {
 
 bool JSFunction::IsInobjectSlackTrackingInProgress() {
   return has_initial_map() &&
-      initial_map()->construction_count() != JSFunction::kNoSlackTracking;
+         initial_map()->counter() >= Map::kSlackTrackingCounterEnd;
 }
 
 
@@ -6531,7 +6532,7 @@ JSRegExp::Flags JSRegExp::GetFlags() {
 String* JSRegExp::Pattern() {
   DCHECK(this->data()->IsFixedArray());
   Object* data = this->data();
-  String* pattern= String::cast(FixedArray::cast(data)->get(kSourceIndex));
+  String* pattern = String::cast(FixedArray::cast(data)->get(kSourceIndex));
   return pattern;
 }
 
@@ -6551,7 +6552,7 @@ void JSRegExp::SetDataAt(int index, Object* value) {
 
 ElementsKind JSObject::GetElementsKind() {
   ElementsKind kind = map()->elements_kind();
-#if DEBUG
+#if VERIFY_HEAP && DEBUG
   FixedArrayBase* fixed_array =
       reinterpret_cast<FixedArrayBase*>(READ_FIELD(this, kElementsOffset));
 
@@ -6832,9 +6833,8 @@ uint32_t IteratingStringHasher::Hash(String* string, uint32_t seed) {
   // Nothing to do.
   if (hasher.has_trivial_hash()) return hasher.GetHashField();
   ConsString* cons_string = String::VisitFlat(&hasher, string);
-  if (cons_string != nullptr) {
-    hasher.VisitConsString(cons_string);
-  }
+  if (cons_string == nullptr) return hasher.GetHashField();
+  hasher.VisitConsString(cons_string);
   return hasher.GetHashField();
 }
 
@@ -7038,7 +7038,10 @@ bool AccessorInfo::IsCompatibleReceiver(Object* receiver) {
 
 
 void ExecutableAccessorInfo::clear_setter() {
-  set_setter(GetIsolate()->heap()->undefined_value(), SKIP_WRITE_BARRIER);
+  auto foreign = GetIsolate()->factory()->NewForeign(
+      reinterpret_cast<v8::internal::Address>(
+          reinterpret_cast<intptr_t>(nullptr)));
+  set_setter(*foreign);
 }
 
 
@@ -7422,7 +7425,7 @@ static inline void IterateBodyUsingLayoutDescriptor(HeapObject* object,
   DCHECK(IsAligned(start_offset, kPointerSize) &&
          IsAligned(end_offset, kPointerSize));
 
-  InobjectPropertiesHelper helper(object->map());
+  LayoutDescriptorHelper helper(object->map());
   DCHECK(!helper.all_fields_tagged());
 
   for (int offset = start_offset; offset < end_offset; offset += kPointerSize) {

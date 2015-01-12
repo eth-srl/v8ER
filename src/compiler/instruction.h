@@ -39,7 +39,6 @@ const InstructionCode kSourcePositionInstruction = -3;
 class InstructionOperand : public ZoneObject {
  public:
   enum Kind {
-    INVALID,
     UNALLOCATED,
     CONSTANT,
     IMMEDIATE,
@@ -49,7 +48,6 @@ class InstructionOperand : public ZoneObject {
     DOUBLE_REGISTER
   };
 
-  InstructionOperand() : value_(KindField::encode(INVALID)) {}
   InstructionOperand(Kind kind, int index) { ConvertTo(kind, index); }
 
   Kind kind() const { return KindField::decode(value_); }
@@ -58,7 +56,6 @@ class InstructionOperand : public ZoneObject {
   bool Is##name() const { return kind() == type; }
   INSTRUCTION_OPERAND_LIST(INSTRUCTION_OPERAND_PREDICATE)
   INSTRUCTION_OPERAND_PREDICATE(Unallocated, UNALLOCATED, 0)
-  INSTRUCTION_OPERAND_PREDICATE(Ignored, INVALID, 0)
 #undef INSTRUCTION_OPERAND_PREDICATE
   bool Equals(const InstructionOperand* other) const {
     return value_ == other->value_;
@@ -132,7 +129,8 @@ class UnallocatedOperand : public InstructionOperand {
     value_ |= VirtualRegisterField::encode(kInvalidVirtualRegister);
     value_ |= BasicPolicyField::encode(policy);
     value_ |= index << FixedSlotIndexField::kShift;
-    DCHECK(this->fixed_slot_index() == index);
+    // TODO(dcarney): 2^10 is not enough for the fixed slot index.
+    CHECK(this->fixed_slot_index() == index);
   }
 
   UnallocatedOperand(ExtendedPolicy policy, int index)
@@ -291,14 +289,10 @@ class MoveOperands FINAL {
   }
 
   // A move is redundant if it's been eliminated, if its source and
-  // destination are the same, or if its destination is unneeded or constant.
+  // destination are the same, or if its destination is  constant.
   bool IsRedundant() const {
-    return IsEliminated() || source_->Equals(destination_) || IsIgnored() ||
+    return IsEliminated() || source_->Equals(destination_) ||
            (destination_ != NULL && destination_->IsConstant());
-  }
-
-  bool IsIgnored() const {
-    return destination_ != NULL && destination_->IsIgnored();
   }
 
   // We clear both operands to indicate move that's been eliminated.
@@ -348,7 +342,7 @@ class SubKindOperand FINAL : public InstructionOperand {
  private:
   static SubKindOperand* cache;
 
-  SubKindOperand() : InstructionOperand() {}
+  SubKindOperand() : InstructionOperand(kOperandKind, 0) {}  // For the caches.
   explicit SubKindOperand(int index)
       : InstructionOperand(kOperandKind, index) {}
 };
@@ -860,7 +854,6 @@ class PhiInstruction FINAL : public ZoneObject {
 class InstructionBlock FINAL : public ZoneObject {
  public:
   InstructionBlock(Zone* zone, BasicBlock::Id id,
-                   BasicBlock::RpoNumber ao_number,
                    BasicBlock::RpoNumber rpo_number,
                    BasicBlock::RpoNumber loop_header,
                    BasicBlock::RpoNumber loop_end, bool deferred);
@@ -949,6 +942,8 @@ class InstructionSequence FINAL : public ZoneObject {
  public:
   static InstructionBlocks* InstructionBlocksFor(Zone* zone,
                                                  const Schedule* schedule);
+  // Puts the deferred blocks last.
+  static void ComputeAssemblyOrder(InstructionBlocks* blocks);
 
   InstructionSequence(Zone* zone, InstructionBlocks* instruction_blocks);
 

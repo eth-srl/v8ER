@@ -4,9 +4,10 @@
 
 #include "src/compiler/access-builder.h"
 #include "src/compiler/graph-inl.h"
-#include "src/compiler/js-builtin-reducer.h"
+#include "src/compiler/js-graph.h"
 #include "src/compiler/js-typed-lowering.h"
 #include "src/compiler/node-aux-data-inl.h"
+#include "src/compiler/node-matchers.h"
 #include "src/compiler/node-properties-inl.h"
 #include "src/types.h"
 
@@ -17,7 +18,6 @@ namespace compiler {
 // TODO(turbofan): js-typed-lowering improvements possible
 // - immediately put in type bounds for all new nodes
 // - relax effects from generic but not-side-effecting operations
-// - relax effects for ToNumber(mixed)
 
 
 // Relax the effects of {node} by immediately replacing effect uses of {node}
@@ -29,19 +29,32 @@ static void RelaxEffects(Node* node) {
 }
 
 
-JSTypedLowering::JSTypedLowering(JSGraph* jsgraph)
-    : jsgraph_(jsgraph), simplified_(jsgraph->zone()) {
-  Factory* factory = zone()->isolate()->factory();
-  Handle<Object> zero = factory->NewNumber(0.0);
-  Handle<Object> one = factory->NewNumber(1.0);
-  zero_range_ = Type::Range(zero, zero, zone());
-  one_range_ = Type::Range(one, one, zone());
-  Handle<Object> thirtyone = factory->NewNumber(31.0);
-  zero_thirtyone_range_ = Type::Range(zero, thirtyone, zone());
+JSTypedLowering::JSTypedLowering(JSGraph* jsgraph, Zone* zone)
+    : jsgraph_(jsgraph), simplified_(graph()->zone()), conversions_(zone) {
+  Handle<Object> zero = factory()->NewNumber(0.0);
+  Handle<Object> one = factory()->NewNumber(1.0);
+  zero_range_ = Type::Range(zero, zero, graph()->zone());
+  one_range_ = Type::Range(one, one, graph()->zone());
+  Handle<Object> thirtyone = factory()->NewNumber(31.0);
+  zero_thirtyone_range_ = Type::Range(zero, thirtyone, graph()->zone());
+  // TODO(jarin): Can we have a correctification of the stupid type system?
+  // These stupid work-arounds are just stupid!
+  shifted_int32_ranges_[0] = Type::Signed32();
+  if (SmiValuesAre31Bits()) {
+    shifted_int32_ranges_[1] = Type::SignedSmall();
+    for (size_t k = 2; k < arraysize(shifted_int32_ranges_); ++k) {
+      Handle<Object> min = factory()->NewNumber(kMinInt / (1 << k));
+      Handle<Object> max = factory()->NewNumber(kMaxInt / (1 << k));
+      shifted_int32_ranges_[k] = Type::Range(min, max, graph()->zone());
+    }
+  } else {
+    for (size_t k = 1; k < arraysize(shifted_int32_ranges_); ++k) {
+      Handle<Object> min = factory()->NewNumber(kMinInt / (1 << k));
+      Handle<Object> max = factory()->NewNumber(kMaxInt / (1 << k));
+      shifted_int32_ranges_[k] = Type::Range(min, max, graph()->zone());
+    }
+  }
 }
-
-
-JSTypedLowering::~JSTypedLowering() {}
 
 
 Reduction JSTypedLowering::ReplaceEagerly(Node* old, Node* node) {
@@ -54,7 +67,7 @@ Reduction JSTypedLowering::ReplaceEagerly(Node* old, Node* node) {
 // JSOperator. This class manages the rewriting of context, control, and effect
 // dependencies during lowering of a binop and contains numerous helper
 // functions for matching the types of inputs to an operation.
-class JSBinopReduction {
+class JSBinopReduction FINAL {
  public:
   JSBinopReduction(JSTypedLowering* lowering, Node* node)
       : lowering_(lowering),
@@ -67,9 +80,10 @@ class JSBinopReduction {
     node_->ReplaceInput(1, ConvertToNumber(right()));
   }
 
-  void ConvertInputsToInt32(bool left_signed, bool right_signed) {
-    node_->ReplaceInput(0, ConvertToI32(left_signed, left()));
-    node_->ReplaceInput(1, ConvertToI32(right_signed, right()));
+  void ConvertInputsToUI32(Signedness left_signedness,
+                           Signedness right_signedness) {
+    node_->ReplaceInput(0, ConvertToUI32(left(), left_signedness));
+    node_->ReplaceInput(1, ConvertToUI32(right(), right_signedness));
   }
 
   void ConvertInputsToString() {
@@ -78,9 +92,9 @@ class JSBinopReduction {
   }
 
   // Convert inputs for bitwise shift operation (ES5 spec 11.7).
-  void ConvertInputsForShift(bool left_signed) {
-    node_->ReplaceInput(0, ConvertToI32(left_signed, left()));
-    Node* rnum = ConvertToI32(false, right());
+  void ConvertInputsForShift(Signedness left_signedness) {
+    node_->ReplaceInput(0, ConvertToUI32(left(), left_signedness));
+    Node* rnum = ConvertToUI32(right(), kUnsigned);
     Type* rnum_type = NodeProperties::GetBounds(rnum).upper;
     if (!rnum_type->Is(lowering_->zero_thirtyone_range_)) {
       rnum = graph()->NewNode(machine()->Word32And(), rnum,
@@ -99,7 +113,8 @@ class JSBinopReduction {
 
   // Remove all effect and control inputs and outputs to this node and change
   // to the pure operator {op}, possibly inserting a boolean inversion.
-  Reduction ChangeToPureOperator(const Operator* op, bool invert = false) {
+  Reduction ChangeToPureOperator(const Operator* op, bool invert = false,
+                                 Type* type = Type::Any()) {
     DCHECK_EQ(0, op->EffectInputCount());
     DCHECK_EQ(false, OperatorProperties::HasContextInput(op));
     DCHECK_EQ(0, op->ControlInputCount());
@@ -114,15 +129,24 @@ class JSBinopReduction {
     // Finally, update the operator to the new one.
     node_->set_op(op);
 
+    // TODO(jarin): Replace the explicit typing hack with a call to some method
+    // that encapsulates changing the operator and re-typing.
+    Bounds const bounds = NodeProperties::GetBounds(node_);
+    NodeProperties::SetBounds(node_, Bounds::NarrowUpper(bounds, type, zone()));
+
     if (invert) {
       // Insert an boolean not to invert the value.
       Node* value = graph()->NewNode(simplified()->BooleanNot(), node_);
       node_->ReplaceUses(value);
       // Note: ReplaceUses() smashes all uses, so smash it back here.
       value->ReplaceInput(0, node_);
-      return lowering_->ReplaceWith(value);
+      return lowering_->Replace(value);
     }
     return lowering_->Changed(node_);
+  }
+
+  Reduction ChangeToPureOperator(const Operator* op, Type* type) {
+    return ChangeToPureOperator(op, false, type);
   }
 
   bool OneInputIs(Type* t) { return left_type_->Is(t) || right_type_->Is(t); }
@@ -148,10 +172,11 @@ class JSBinopReduction {
   Type* right_type() { return right_type_; }
 
   SimplifiedOperatorBuilder* simplified() { return lowering_->simplified(); }
-  Graph* graph() { return lowering_->graph(); }
+  Graph* graph() const { return lowering_->graph(); }
   JSGraph* jsgraph() { return lowering_->jsgraph(); }
   JSOperatorBuilder* javascript() { return lowering_->javascript(); }
   MachineOperatorBuilder* machine() { return lowering_->machine(); }
+  Zone* zone() const { return graph()->zone(); }
 
  private:
   JSTypedLowering* lowering_;  // The containing lowering instance.
@@ -170,27 +195,30 @@ class JSBinopReduction {
   }
 
   Node* ConvertToNumber(Node* node) {
-    // Avoid introducing too many eager ToNumber() operations.
-    Reduction reduced = lowering_->ReduceJSToNumberInput(node);
-    if (reduced.Changed()) return reduced.replacement();
+    if (NodeProperties::GetBounds(node).upper->Is(Type::PlainPrimitive())) {
+      return lowering_->ConvertToNumber(node);
+    }
     Node* n = graph()->NewNode(javascript()->ToNumber(), node, context(),
                                effect(), control());
     update_effect(n);
     return n;
   }
 
-  Node* ConvertToI32(bool is_signed, Node* node) {
+  Node* ConvertToUI32(Node* node, Signedness signedness) {
     // Avoid introducing too many eager NumberToXXnt32() operations.
     node = ConvertToNumber(node);
-    Type* type = is_signed ? Type::Signed32() : Type::Unsigned32();
-    Type* input_type = NodeProperties::GetBounds(node).upper;
-
-    if (input_type->Is(type)) return node;  // already in the value range.
-
-    const Operator* op = is_signed ? simplified()->NumberToInt32()
-                                   : simplified()->NumberToUint32();
-    Node* n = graph()->NewNode(op, node);
-    return n;
+    Type* type = NodeProperties::GetBounds(node).upper;
+    if (signedness == kSigned) {
+      if (!type->Is(Type::Signed32())) {
+        node = graph()->NewNode(simplified()->NumberToInt32(), node);
+      }
+    } else {
+      DCHECK_EQ(kUnsigned, signedness);
+      if (!type->Is(Type::Unsigned32())) {
+        node = graph()->NewNode(simplified()->NumberToUint32(), node);
+      }
+    }
+    return node;
   }
 
   void update_effect(Node* effect) {
@@ -203,13 +231,13 @@ Reduction JSTypedLowering::ReduceJSAdd(Node* node) {
   JSBinopReduction r(this, node);
   if (r.BothInputsAre(Type::Number())) {
     // JSAdd(x:number, y:number) => NumberAdd(x, y)
-    return r.ChangeToPureOperator(simplified()->NumberAdd());
+    return r.ChangeToPureOperator(simplified()->NumberAdd(), Type::Number());
   }
-  Type* maybe_string = Type::Union(Type::String(), Type::Receiver(), zone());
-  if (r.BothInputsAre(Type::Primitive()) && r.NeitherInputCanBe(maybe_string)) {
+  if (r.BothInputsAre(Type::Primitive()) &&
+      r.NeitherInputCanBe(Type::StringOrReceiver())) {
     // JSAdd(x:-string, y:-string) => NumberAdd(ToNumber(x), ToNumber(y))
     r.ConvertInputsToNumber();
-    return r.ChangeToPureOperator(simplified()->NumberAdd());
+    return r.ChangeToPureOperator(simplified()->NumberAdd(), Type::Number());
   }
 #if 0
   // TODO(turbofan): General ToNumber disabled for now because:
@@ -247,8 +275,8 @@ Reduction JSTypedLowering::ReduceJSBitwiseOr(Node* node) {
     // operations
     // on some platforms.
     // TODO(turbofan): make this heuristic configurable for code size.
-    r.ConvertInputsToInt32(true, true);
-    return r.ChangeToPureOperator(machine()->Word32Or());
+    r.ConvertInputsToUI32(kSigned, kSigned);
+    return r.ChangeToPureOperator(machine()->Word32Or(), Type::Integral32());
   }
   return NoChange();
 }
@@ -260,7 +288,8 @@ Reduction JSTypedLowering::ReduceJSMultiply(Node* node) {
     // TODO(jarin): Propagate frame state input from non-primitive input node to
     // JSToNumber node.
     r.ConvertInputsToNumber();
-    return r.ChangeToPureOperator(simplified()->NumberMultiply());
+    return r.ChangeToPureOperator(simplified()->NumberMultiply(),
+                                  Type::Number());
   }
   // TODO(turbofan): relax/remove the effects of this operator in other cases.
   return NoChange();
@@ -272,7 +301,7 @@ Reduction JSTypedLowering::ReduceNumberBinop(Node* node,
   JSBinopReduction r(this, node);
   if (r.BothInputsAre(Type::Primitive())) {
     r.ConvertInputsToNumber();
-    return r.ChangeToPureOperator(numberOp);
+    return r.ChangeToPureOperator(numberOp, Type::Number());
   }
 #if 0
   // TODO(turbofan): General ToNumber disabled for now because:
@@ -291,9 +320,7 @@ Reduction JSTypedLowering::ReduceNumberBinop(Node* node,
 }
 
 
-Reduction JSTypedLowering::ReduceI32Binop(Node* node, bool left_signed,
-                                          bool right_signed,
-                                          const Operator* intOp) {
+Reduction JSTypedLowering::ReduceInt32Binop(Node* node, const Operator* intOp) {
   JSBinopReduction r(this, node);
   if (r.BothInputsAre(Type::Primitive())) {
     // TODO(titzer): some Smi bitwise operations don't really require going
@@ -301,19 +328,20 @@ Reduction JSTypedLowering::ReduceI32Binop(Node* node, bool left_signed,
     // operations
     // on some platforms.
     // TODO(turbofan): make this heuristic configurable for code size.
-    r.ConvertInputsToInt32(left_signed, right_signed);
-    return r.ChangeToPureOperator(intOp);
+    r.ConvertInputsToUI32(kSigned, kSigned);
+    return r.ChangeToPureOperator(intOp, Type::Integral32());
   }
   return NoChange();
 }
 
 
-Reduction JSTypedLowering::ReduceI32Shift(Node* node, bool left_signed,
-                                          const Operator* shift_op) {
+Reduction JSTypedLowering::ReduceUI32Shift(Node* node,
+                                           Signedness left_signedness,
+                                           const Operator* shift_op) {
   JSBinopReduction r(this, node);
   if (r.BothInputsAre(Type::Primitive())) {
-    r.ConvertInputsForShift(left_signed);
-    return r.ChangeToPureOperator(shift_op);
+    r.ConvertInputsForShift(left_signedness);
+    return r.ChangeToPureOperator(shift_op, Type::Integral32());
   }
   return NoChange();
 }
@@ -354,8 +382,8 @@ Reduction JSTypedLowering::ReduceJSComparison(Node* node) {
     ...
   }
 #endif
-  Type* maybe_string = Type::Union(Type::String(), Type::Receiver(), zone());
-  if (r.BothInputsAre(Type::Primitive()) && r.OneInputCannotBe(maybe_string)) {
+  if (r.BothInputsAre(Type::Primitive()) &&
+      r.OneInputCannotBe(Type::StringOrReceiver())) {
     const Operator* less_than;
     const Operator* less_than_or_equal;
     if (r.BothInputsAre(Type::Unsigned32())) {
@@ -424,8 +452,7 @@ Reduction JSTypedLowering::ReduceJSStrictEqual(Node* node, bool invert) {
       return ReplaceEagerly(node, jsgraph()->BooleanConstant(!invert));
     }
   }
-  Type* string_or_number = Type::Union(Type::String(), Type::Number(), zone());
-  if (r.OneInputCannotBe(string_or_number)) {
+  if (r.OneInputCannotBe(Type::NumberOrString())) {
     // For values with canonical representation (i.e. not string nor number) an
     // empty type intersection means the values cannot be strictly equal.
     if (!r.left_type()->Maybe(r.right_type())) {
@@ -463,6 +490,127 @@ Reduction JSTypedLowering::ReduceJSStrictEqual(Node* node, bool invert) {
 }
 
 
+Reduction JSTypedLowering::ReduceJSToBooleanInput(Node* input) {
+  if (input->opcode() == IrOpcode::kJSToBoolean) {
+    // Recursively try to reduce the input first.
+    Reduction result = ReduceJSToBoolean(input);
+    if (result.Changed()) return result;
+    return Changed(input);  // JSToBoolean(JSToBoolean(x)) => JSToBoolean(x)
+  }
+  // Check if we have a cached conversion.
+  Node* conversion = FindConversion<IrOpcode::kJSToBoolean>(input);
+  if (conversion) return Replace(conversion);
+  Type* input_type = NodeProperties::GetBounds(input).upper;
+  if (input_type->Is(Type::Boolean())) {
+    return Changed(input);  // JSToBoolean(x:boolean) => x
+  }
+  if (input_type->Is(Type::Undefined())) {
+    // JSToBoolean(undefined) => #false
+    return Replace(jsgraph()->FalseConstant());
+  }
+  if (input_type->Is(Type::Null())) {
+    // JSToBoolean(null) => #false
+    return Replace(jsgraph()->FalseConstant());
+  }
+  if (input_type->Is(Type::DetectableReceiver())) {
+    // JSToBoolean(x:detectable) => #true
+    return Replace(jsgraph()->TrueConstant());
+  }
+  if (input_type->Is(Type::Undetectable())) {
+    // JSToBoolean(x:undetectable) => #false
+    return Replace(jsgraph()->FalseConstant());
+  }
+  if (input_type->Is(Type::OrderedNumber())) {
+    // JSToBoolean(x:ordered-number) => BooleanNot(NumberEqual(x, #0))
+    Node* cmp = graph()->NewNode(simplified()->NumberEqual(), input,
+                                 jsgraph()->ZeroConstant());
+    Node* inv = graph()->NewNode(simplified()->BooleanNot(), cmp);
+    return Replace(inv);
+  }
+  if (input_type->Is(Type::String())) {
+    // JSToBoolean(x:string) => BooleanNot(NumberEqual(x.length, #0))
+    FieldAccess access = AccessBuilder::ForStringLength();
+    Node* length = graph()->NewNode(simplified()->LoadField(access), input,
+                                    graph()->start(), graph()->start());
+    Node* cmp = graph()->NewNode(simplified()->NumberEqual(), length,
+                                 jsgraph()->ZeroConstant());
+    Node* inv = graph()->NewNode(simplified()->BooleanNot(), cmp);
+    return Replace(inv);
+  }
+  return NoChange();
+}
+
+
+Reduction JSTypedLowering::ReduceJSToBoolean(Node* node) {
+  // Try to reduce the input first.
+  Node* const input = node->InputAt(0);
+  Reduction reduction = ReduceJSToBooleanInput(input);
+  if (reduction.Changed()) return reduction;
+  if (input->opcode() == IrOpcode::kPhi) {
+    // JSToBoolean(phi(x1,...,xn,control),context)
+    //   => phi(JSToBoolean(x1,no-context),...,JSToBoolean(xn,no-context))
+    int const input_count = input->InputCount() - 1;
+    Node* const control = input->InputAt(input_count);
+    DCHECK_LE(0, input_count);
+    DCHECK(NodeProperties::IsControl(control));
+    DCHECK(NodeProperties::GetBounds(node).upper->Is(Type::Boolean()));
+    DCHECK(!NodeProperties::GetBounds(input).upper->Is(Type::Boolean()));
+    node->set_op(common()->Phi(kMachAnyTagged, input_count));
+    for (int i = 0; i < input_count; ++i) {
+      // We must be very careful not to introduce cycles when pushing
+      // operations into phis. It is safe for {value}, since it appears
+      // as input to the phi that we are replacing, but it's not safe
+      // to simply reuse the context of the {node}. However, ToBoolean()
+      // does not require a context anyways, so it's safe to discard it
+      // here and pass the dummy context.
+      Node* const value = ConvertToBoolean(input->InputAt(i));
+      if (i < node->InputCount()) {
+        node->ReplaceInput(i, value);
+      } else {
+        node->AppendInput(graph()->zone(), value);
+      }
+    }
+    if (input_count < node->InputCount()) {
+      node->ReplaceInput(input_count, control);
+    } else {
+      node->AppendInput(graph()->zone(), control);
+    }
+    node->TrimInputCount(input_count + 1);
+    return Changed(node);
+  }
+  if (input->opcode() == IrOpcode::kSelect) {
+    // JSToBoolean(select(c,x1,x2),context)
+    //   => select(c,JSToBoolean(x1,no-context),...,JSToBoolean(x2,no-context))
+    int const input_count = input->InputCount();
+    BranchHint const input_hint = SelectParametersOf(input->op()).hint();
+    DCHECK_EQ(3, input_count);
+    DCHECK(NodeProperties::GetBounds(node).upper->Is(Type::Boolean()));
+    DCHECK(!NodeProperties::GetBounds(input).upper->Is(Type::Boolean()));
+    node->set_op(common()->Select(kMachAnyTagged, input_hint));
+    node->InsertInput(graph()->zone(), 0, input->InputAt(0));
+    for (int i = 1; i < input_count; ++i) {
+      // We must be very careful not to introduce cycles when pushing
+      // operations into selects. It is safe for {value}, since it appears
+      // as input to the select that we are replacing, but it's not safe
+      // to simply reuse the context of the {node}. However, ToBoolean()
+      // does not require a context anyways, so it's safe to discard it
+      // here and pass the dummy context.
+      Node* const value = ConvertToBoolean(input->InputAt(i));
+      node->ReplaceInput(i, value);
+    }
+    DCHECK_EQ(3, node->InputCount());
+    return Changed(node);
+  }
+  InsertConversion(node);
+  if (node->InputAt(1) != jsgraph()->NoContextConstant()) {
+    // JSToBoolean(x,context) => JSToBoolean(x,no-context)
+    node->ReplaceInput(1, jsgraph()->NoContextConstant());
+    return Changed(node);
+  }
+  return NoChange();
+}
+
+
 Reduction JSTypedLowering::ReduceJSToNumberInput(Node* input) {
   if (input->opcode() == IrOpcode::kJSToNumber) {
     // Recursively try to reduce the input first.
@@ -470,6 +618,9 @@ Reduction JSTypedLowering::ReduceJSToNumberInput(Node* input) {
     if (result.Changed()) return result;
     return Changed(input);  // JSToNumber(JSToNumber(x)) => JSToNumber(x)
   }
+  // Check if we have a cached conversion.
+  Node* conversion = FindConversion<IrOpcode::kJSToNumber>(input);
+  if (conversion) return Replace(conversion);
   Type* input_type = NodeProperties::GetBounds(input).upper;
   if (input_type->Is(Type::Number())) {
     // JSToNumber(x:number) => x
@@ -477,16 +628,15 @@ Reduction JSTypedLowering::ReduceJSToNumberInput(Node* input) {
   }
   if (input_type->Is(Type::Undefined())) {
     // JSToNumber(undefined) => #NaN
-    return ReplaceWith(jsgraph()->NaNConstant());
+    return Replace(jsgraph()->NaNConstant());
   }
   if (input_type->Is(Type::Null())) {
     // JSToNumber(null) => #0
-    return ReplaceWith(jsgraph()->ZeroConstant());
+    return Replace(jsgraph()->ZeroConstant());
   }
   if (input_type->Is(Type::Boolean())) {
     // JSToNumber(x:boolean) => BooleanToNumber(x)
-    return ReplaceWith(
-        graph()->NewNode(simplified()->BooleanToNumber(), input));
+    return Replace(graph()->NewNode(simplified()->BooleanToNumber(), input));
   }
   // TODO(turbofan): js-typed-lowering of ToNumber(x:string)
   return NoChange();
@@ -502,41 +652,79 @@ Reduction JSTypedLowering::ReduceJSToNumber(Node* node) {
     return reduction;
   }
   Type* const input_type = NodeProperties::GetBounds(input).upper;
-  if (input->opcode() == IrOpcode::kPhi && input_type->Is(Type::Primitive())) {
-    Node* const context = node->InputAt(1);
-    // JSToNumber(phi(x1,...,xn,control):primitive)
-    //   => phi(JSToNumber(x1),...,JSToNumber(xn),control):number
-    RelaxEffects(node);
-    int const input_count = input->InputCount() - 1;
-    Node* const control = input->InputAt(input_count);
-    DCHECK_LE(0, input_count);
-    DCHECK(NodeProperties::IsControl(control));
-    DCHECK(NodeProperties::GetBounds(node).upper->Is(Type::Number()));
-    DCHECK(!NodeProperties::GetBounds(input).upper->Is(Type::Number()));
-    node->set_op(common()->Phi(kMachAnyTagged, input_count));
-    for (int i = 0; i < input_count; ++i) {
-      Node* value = input->InputAt(i);
-      // Recursively try to reduce the value first.
-      Reduction reduction = ReduceJSToNumberInput(value);
-      if (reduction.Changed()) {
-        value = reduction.replacement();
-      } else {
-        value = graph()->NewNode(javascript()->ToNumber(), value, context,
-                                 graph()->start(), graph()->start());
+  if (input_type->Is(Type::PlainPrimitive())) {
+    if (input->opcode() == IrOpcode::kPhi) {
+      // JSToNumber(phi(x1,...,xn,control):plain-primitive,context)
+      //   => phi(JSToNumber(x1,no-context),
+      //          ...,
+      //          JSToNumber(xn,no-context),control)
+      int const input_count = input->InputCount() - 1;
+      Node* const control = input->InputAt(input_count);
+      DCHECK_LE(0, input_count);
+      DCHECK(NodeProperties::IsControl(control));
+      DCHECK(NodeProperties::GetBounds(node).upper->Is(Type::Number()));
+      DCHECK(!NodeProperties::GetBounds(input).upper->Is(Type::Number()));
+      RelaxEffects(node);
+      node->set_op(common()->Phi(kMachAnyTagged, input_count));
+      for (int i = 0; i < input_count; ++i) {
+        // We must be very careful not to introduce cycles when pushing
+        // operations into phis. It is safe for {value}, since it appears
+        // as input to the phi that we are replacing, but it's not safe
+        // to simply reuse the context of the {node}. However, ToNumber()
+        // does not require a context anyways, so it's safe to discard it
+        // here and pass the dummy context.
+        Node* const value = ConvertToNumber(input->InputAt(i));
+        if (i < node->InputCount()) {
+          node->ReplaceInput(i, value);
+        } else {
+          node->AppendInput(graph()->zone(), value);
+        }
       }
-      if (i < node->InputCount()) {
+      if (input_count < node->InputCount()) {
+        node->ReplaceInput(input_count, control);
+      } else {
+        node->AppendInput(graph()->zone(), control);
+      }
+      node->TrimInputCount(input_count + 1);
+      return Changed(node);
+    }
+    if (input->opcode() == IrOpcode::kSelect) {
+      // JSToNumber(select(c,x1,x2):plain-primitive,context)
+      //   => select(c,JSToNumber(x1,no-context),JSToNumber(x2,no-context))
+      int const input_count = input->InputCount();
+      BranchHint const input_hint = SelectParametersOf(input->op()).hint();
+      DCHECK_EQ(3, input_count);
+      DCHECK(NodeProperties::GetBounds(node).upper->Is(Type::Number()));
+      DCHECK(!NodeProperties::GetBounds(input).upper->Is(Type::Number()));
+      RelaxEffects(node);
+      node->set_op(common()->Select(kMachAnyTagged, input_hint));
+      node->ReplaceInput(0, input->InputAt(0));
+      for (int i = 1; i < input_count; ++i) {
+        // We must be very careful not to introduce cycles when pushing
+        // operations into selects. It is safe for {value}, since it appears
+        // as input to the select that we are replacing, but it's not safe
+        // to simply reuse the context of the {node}. However, ToNumber()
+        // does not require a context anyways, so it's safe to discard it
+        // here and pass the dummy context.
+        Node* const value = ConvertToNumber(input->InputAt(i));
         node->ReplaceInput(i, value);
-      } else {
-        node->AppendInput(graph()->zone(), value);
       }
+      node->TrimInputCount(input_count);
+      return Changed(node);
     }
-    if (input_count < node->InputCount()) {
-      node->ReplaceInput(input_count, control);
-    } else {
-      node->AppendInput(graph()->zone(), control);
+    // Remember this conversion.
+    InsertConversion(node);
+    if (node->InputAt(1) != jsgraph()->NoContextConstant() ||
+        node->InputAt(2) != graph()->start() ||
+        node->InputAt(3) != graph()->start()) {
+      // JSToNumber(x:plain-primitive,context,effect,control)
+      //   => JSToNumber(x,no-context,start,start)
+      RelaxEffects(node);
+      node->ReplaceInput(1, jsgraph()->NoContextConstant());
+      node->ReplaceInput(2, graph()->start());
+      node->ReplaceInput(3, graph()->start());
+      return Changed(node);
     }
-    node->TrimInputCount(input_count + 1);
-    return Changed(node);
   }
   return NoChange();
 }
@@ -545,11 +733,8 @@ Reduction JSTypedLowering::ReduceJSToNumber(Node* node) {
 Reduction JSTypedLowering::ReduceJSToStringInput(Node* input) {
   if (input->opcode() == IrOpcode::kJSToString) {
     // Recursively try to reduce the input first.
-    Reduction result = ReduceJSToStringInput(input->InputAt(0));
-    if (result.Changed()) {
-      RelaxEffects(input);
-      return result;
-    }
+    Reduction result = ReduceJSToString(input);
+    if (result.Changed()) return result;
     return Changed(input);  // JSToString(JSToString(x)) => JSToString(x)
   }
   Type* input_type = NodeProperties::GetBounds(input).upper;
@@ -557,12 +742,10 @@ Reduction JSTypedLowering::ReduceJSToStringInput(Node* input) {
     return Changed(input);  // JSToString(x:string) => x
   }
   if (input_type->Is(Type::Undefined())) {
-    return ReplaceWith(jsgraph()->HeapConstant(
-        graph()->zone()->isolate()->factory()->undefined_string()));
+    return Replace(jsgraph()->HeapConstant(factory()->undefined_string()));
   }
   if (input_type->Is(Type::Null())) {
-    return ReplaceWith(jsgraph()->HeapConstant(
-        graph()->zone()->isolate()->factory()->null_string()));
+    return Replace(jsgraph()->HeapConstant(factory()->null_string()));
   }
   // TODO(turbofan): js-typed-lowering of ToString(x:boolean)
   // TODO(turbofan): js-typed-lowering of ToString(x:number)
@@ -570,98 +753,13 @@ Reduction JSTypedLowering::ReduceJSToStringInput(Node* input) {
 }
 
 
-Reduction JSTypedLowering::ReduceJSToBooleanInput(Node* input) {
-  if (input->opcode() == IrOpcode::kJSToBoolean) {
-    // Recursively try to reduce the input first.
-    Reduction result = ReduceJSToBoolean(input);
-    if (result.Changed()) return result;
-    return Changed(input);  // JSToBoolean(JSToBoolean(x)) => JSToBoolean(x)
-  }
-  Type* input_type = NodeProperties::GetBounds(input).upper;
-  if (input_type->Is(Type::Boolean())) {
-    return Changed(input);  // JSToBoolean(x:boolean) => x
-  }
-  if (input_type->Is(Type::Undefined())) {
-    // JSToBoolean(undefined) => #false
-    return ReplaceWith(jsgraph()->FalseConstant());
-  }
-  if (input_type->Is(Type::Null())) {
-    // JSToBoolean(null) => #false
-    return ReplaceWith(jsgraph()->FalseConstant());
-  }
-  if (input_type->Is(Type::DetectableReceiver())) {
-    // JSToBoolean(x:detectable) => #true
-    return ReplaceWith(jsgraph()->TrueConstant());
-  }
-  if (input_type->Is(Type::Undetectable())) {
-    // JSToBoolean(x:undetectable) => #false
-    return ReplaceWith(jsgraph()->FalseConstant());
-  }
-  if (input_type->Is(Type::OrderedNumber())) {
-    // JSToBoolean(x:ordered-number) => BooleanNot(NumberEqual(x, #0))
-    Node* cmp = graph()->NewNode(simplified()->NumberEqual(), input,
-                                 jsgraph()->ZeroConstant());
-    Node* inv = graph()->NewNode(simplified()->BooleanNot(), cmp);
-    return ReplaceWith(inv);
-  }
-  if (input_type->Is(Type::String())) {
-    // JSToBoolean(x:string) => BooleanNot(NumberEqual(x.length, #0))
-    FieldAccess access = AccessBuilder::ForStringLength();
-    Node* length = graph()->NewNode(simplified()->LoadField(access), input,
-                                    graph()->start(), graph()->start());
-    Node* cmp = graph()->NewNode(simplified()->NumberEqual(), length,
-                                 jsgraph()->ZeroConstant());
-    Node* inv = graph()->NewNode(simplified()->BooleanNot(), cmp);
-    return ReplaceWith(inv);
-  }
-  return NoChange();
-}
-
-
-Reduction JSTypedLowering::ReduceJSToBoolean(Node* node) {
+Reduction JSTypedLowering::ReduceJSToString(Node* node) {
   // Try to reduce the input first.
   Node* const input = node->InputAt(0);
-  Reduction reduction = ReduceJSToBooleanInput(input);
+  Reduction reduction = ReduceJSToStringInput(input);
   if (reduction.Changed()) {
     NodeProperties::ReplaceWithValue(node, reduction.replacement());
     return reduction;
-  }
-  Type* const input_type = NodeProperties::GetBounds(input).upper;
-  if (input->opcode() == IrOpcode::kPhi && input_type->Is(Type::Primitive())) {
-    Node* const context = node->InputAt(1);
-    // JSToBoolean(phi(x1,...,xn,control):primitive)
-    //   => phi(JSToBoolean(x1),...,JSToBoolean(xn),control):boolean
-    RelaxEffects(node);
-    int const input_count = input->InputCount() - 1;
-    Node* const control = input->InputAt(input_count);
-    DCHECK_LE(0, input_count);
-    DCHECK(NodeProperties::IsControl(control));
-    DCHECK(NodeProperties::GetBounds(node).upper->Is(Type::Boolean()));
-    DCHECK(!NodeProperties::GetBounds(input).upper->Is(Type::Boolean()));
-    node->set_op(common()->Phi(kMachAnyTagged, input_count));
-    for (int i = 0; i < input_count; ++i) {
-      Node* value = input->InputAt(i);
-      // Recursively try to reduce the value first.
-      Reduction reduction = ReduceJSToBooleanInput(value);
-      if (reduction.Changed()) {
-        value = reduction.replacement();
-      } else {
-        value = graph()->NewNode(javascript()->ToBoolean(), value, context,
-                                 graph()->start(), graph()->start());
-      }
-      if (i < node->InputCount()) {
-        node->ReplaceInput(i, value);
-      } else {
-        node->AppendInput(graph()->zone(), value);
-      }
-    }
-    if (input_count < node->InputCount()) {
-      node->ReplaceInput(input_count, control);
-    } else {
-      node->AppendInput(graph()->zone(), control);
-    }
-    node->TrimInputCount(input_count + 1);
-    return Changed(node);
   }
   return NoChange();
 }
@@ -671,30 +769,39 @@ Reduction JSTypedLowering::ReduceJSLoadProperty(Node* node) {
   Node* key = NodeProperties::GetValueInput(node, 1);
   Node* base = NodeProperties::GetValueInput(node, 0);
   Type* key_type = NodeProperties::GetBounds(key).upper;
-  Type* base_type = NodeProperties::GetBounds(base).upper;
   // TODO(mstarzinger): This lowering is not correct if:
   //   a) The typed array or it's buffer is neutered.
-  if (base_type->IsConstant() && key_type->Is(Type::Integral32()) &&
-      base_type->AsConstant()->Value()->IsJSTypedArray()) {
-    // JSLoadProperty(typed-array, int32)
-    Handle<JSTypedArray> array =
-        Handle<JSTypedArray>::cast(base_type->AsConstant()->Value());
-    if (IsExternalArrayElementsKind(array->map()->elements_kind())) {
-      ExternalArrayType type = array->type();
-      double byte_length = array->byte_length()->Number();
-      if (byte_length <= kMaxInt) {
-        Handle<ExternalArray> elements =
-            Handle<ExternalArray>::cast(handle(array->elements()));
-        Node* pointer = jsgraph()->IntPtrConstant(
-            bit_cast<intptr_t>(elements->external_pointer()));
-        Node* length = jsgraph()->Constant(array->length()->Number());
-        Node* effect = NodeProperties::GetEffectInput(node);
+  HeapObjectMatcher<Object> mbase(base);
+  if (mbase.HasValue() && mbase.Value().handle()->IsJSTypedArray()) {
+    Handle<JSTypedArray> const array =
+        Handle<JSTypedArray>::cast(mbase.Value().handle());
+    array->GetBuffer()->set_is_neuterable(false);
+    BufferAccess const access(array->type());
+    size_t const k = ElementSizeLog2Of(access.machine_type());
+    double const byte_length = array->byte_length()->Number();
+    CHECK_LT(k, arraysize(shifted_int32_ranges_));
+    if (IsExternalArrayElementsKind(array->map()->elements_kind()) &&
+        key_type->Is(shifted_int32_ranges_[k]) && byte_length <= kMaxInt) {
+      // JSLoadProperty(typed-array, int32)
+      Handle<ExternalArray> elements =
+          Handle<ExternalArray>::cast(handle(array->elements()));
+      Node* buffer = jsgraph()->PointerConstant(elements->external_pointer());
+      Node* length = jsgraph()->Constant(byte_length);
+      Node* effect = NodeProperties::GetEffectInput(node);
+      Node* control = NodeProperties::GetControlInput(node);
+      // Check if we can avoid the bounds check.
+      if (key_type->Min() >= 0 && key_type->Max() < array->length()->Number()) {
         Node* load = graph()->NewNode(
             simplified()->LoadElement(
-                AccessBuilder::ForTypedArrayElement(type, true)),
-            pointer, key, length, effect);
+                AccessBuilder::ForTypedArrayElement(array->type(), true)),
+            buffer, key, effect, control);
         return ReplaceEagerly(node, load);
       }
+      // Compute byte offset.
+      Node* offset = Word32Shl(key, static_cast<int>(k));
+      Node* load = graph()->NewNode(simplified()->LoadBuffer(access), buffer,
+                                    offset, length, effect, control);
+      return ReplaceEagerly(node, load);
     }
   }
   return NoChange();
@@ -706,69 +813,115 @@ Reduction JSTypedLowering::ReduceJSStoreProperty(Node* node) {
   Node* base = NodeProperties::GetValueInput(node, 0);
   Node* value = NodeProperties::GetValueInput(node, 2);
   Type* key_type = NodeProperties::GetBounds(key).upper;
-  Type* base_type = NodeProperties::GetBounds(base).upper;
+  Type* value_type = NodeProperties::GetBounds(value).upper;
   // TODO(mstarzinger): This lowering is not correct if:
   //   a) The typed array or its buffer is neutered.
-  if (key_type->Is(Type::Integral32()) && base_type->IsConstant() &&
-      base_type->AsConstant()->Value()->IsJSTypedArray()) {
-    // JSStoreProperty(typed-array, int32, value)
-    Handle<JSTypedArray> array =
-        Handle<JSTypedArray>::cast(base_type->AsConstant()->Value());
-    if (IsExternalArrayElementsKind(array->map()->elements_kind())) {
-      ExternalArrayType type = array->type();
-      double byte_length = array->byte_length()->Number();
-      if (byte_length <= kMaxInt) {
-        Handle<ExternalArray> elements =
-            Handle<ExternalArray>::cast(handle(array->elements()));
-        Node* pointer = jsgraph()->IntPtrConstant(
-            bit_cast<intptr_t>(elements->external_pointer()));
-        Node* length = jsgraph()->Constant(array->length()->Number());
-        Node* effect = NodeProperties::GetEffectInput(node);
-        Node* control = NodeProperties::GetControlInput(node);
-
-        ElementAccess access = AccessBuilder::ForTypedArrayElement(type, true);
-        Type* value_type = NodeProperties::GetBounds(value).upper;
-        // If the value input does not have the required type, insert the
-        // appropriate conversion.
-
-        // Convert to a number first.
-        if (!value_type->Is(Type::Number())) {
-          Reduction number_reduction = ReduceJSToNumberInput(value);
-          if (number_reduction.Changed()) {
-            value = number_reduction.replacement();
-          } else {
-            Node* context = NodeProperties::GetContextInput(node);
-            value = graph()->NewNode(javascript()->ToNumber(), value, context,
-                                     effect, control);
-            effect = value;
-          }
+  HeapObjectMatcher<Object> mbase(base);
+  if (mbase.HasValue() && mbase.Value().handle()->IsJSTypedArray()) {
+    Handle<JSTypedArray> const array =
+        Handle<JSTypedArray>::cast(mbase.Value().handle());
+    array->GetBuffer()->set_is_neuterable(false);
+    BufferAccess const access(array->type());
+    size_t const k = ElementSizeLog2Of(access.machine_type());
+    double const byte_length = array->byte_length()->Number();
+    CHECK_LT(k, arraysize(shifted_int32_ranges_));
+    if (IsExternalArrayElementsKind(array->map()->elements_kind()) &&
+        access.external_array_type() != kExternalUint8ClampedArray &&
+        key_type->Is(shifted_int32_ranges_[k]) && byte_length <= kMaxInt) {
+      // JSLoadProperty(typed-array, int32)
+      Handle<ExternalArray> elements =
+          Handle<ExternalArray>::cast(handle(array->elements()));
+      Node* buffer = jsgraph()->PointerConstant(elements->external_pointer());
+      Node* length = jsgraph()->Constant(byte_length);
+      Node* context = NodeProperties::GetContextInput(node);
+      Node* effect = NodeProperties::GetEffectInput(node);
+      Node* control = NodeProperties::GetControlInput(node);
+      // Convert to a number first.
+      if (!value_type->Is(Type::Number())) {
+        Reduction number_reduction = ReduceJSToNumberInput(value);
+        if (number_reduction.Changed()) {
+          value = number_reduction.replacement();
+        } else {
+          value = effect = graph()->NewNode(javascript()->ToNumber(), value,
+                                            context, effect, control);
         }
-        // For integer-typed arrays, convert to the integer type.
-        if (access.type->Is(Type::Signed32()) &&
-            !value_type->Is(Type::Signed32())) {
-          value = graph()->NewNode(simplified()->NumberToInt32(), value);
-        } else if (access.type->Is(Type::Unsigned32()) &&
-                   !value_type->Is(Type::Unsigned32())) {
-          value = graph()->NewNode(simplified()->NumberToUint32(), value);
-        }
-
-        Node* store =
-            graph()->NewNode(simplified()->StoreElement(access), pointer, key,
-                             length, value, effect, control);
-        return ReplaceEagerly(node, store);
       }
+      // For integer-typed arrays, convert to the integer type.
+      if (TypeOf(access.machine_type()) == kTypeInt32 &&
+          !value_type->Is(Type::Signed32())) {
+        value = graph()->NewNode(simplified()->NumberToInt32(), value);
+      } else if (TypeOf(access.machine_type()) == kTypeUint32 &&
+                 !value_type->Is(Type::Unsigned32())) {
+        value = graph()->NewNode(simplified()->NumberToUint32(), value);
+      }
+      // Check if we can avoid the bounds check.
+      if (key_type->Min() >= 0 && key_type->Max() < array->length()->Number()) {
+        node->set_op(simplified()->StoreElement(
+            AccessBuilder::ForTypedArrayElement(array->type(), true)));
+        node->ReplaceInput(0, buffer);
+        DCHECK_EQ(key, node->InputAt(1));
+        node->ReplaceInput(2, value);
+        node->ReplaceInput(3, effect);
+        node->ReplaceInput(4, control);
+        node->TrimInputCount(5);
+        return Changed(node);
+      }
+      // Compute byte offset.
+      Node* offset = Word32Shl(key, static_cast<int>(k));
+      // Turn into a StoreBuffer operation.
+      node->set_op(simplified()->StoreBuffer(access));
+      node->ReplaceInput(0, buffer);
+      node->ReplaceInput(1, offset);
+      node->ReplaceInput(2, length);
+      node->ReplaceInput(3, value);
+      node->ReplaceInput(4, effect);
+      DCHECK_EQ(control, node->InputAt(5));
+      DCHECK_EQ(6, node->InputCount());
+      return Changed(node);
     }
   }
   return NoChange();
 }
 
 
-static Reduction ReplaceWithReduction(Node* node, Reduction reduction) {
-  if (reduction.Changed()) {
-    NodeProperties::ReplaceWithValue(node, reduction.replacement());
-    return reduction;
+Reduction JSTypedLowering::ReduceJSLoadContext(Node* node) {
+  DCHECK_EQ(IrOpcode::kJSLoadContext, node->opcode());
+  ContextAccess const& access = ContextAccessOf(node->op());
+  Node* const effect = NodeProperties::GetEffectInput(node);
+  Node* const control = graph()->start();
+  for (size_t i = 0; i < access.depth(); ++i) {
+    node->ReplaceInput(
+        0, graph()->NewNode(
+               simplified()->LoadField(
+                   AccessBuilder::ForContextSlot(Context::PREVIOUS_INDEX)),
+               NodeProperties::GetValueInput(node, 0), effect, control));
   }
-  return Reducer::NoChange();
+  node->set_op(
+      simplified()->LoadField(AccessBuilder::ForContextSlot(access.index())));
+  node->ReplaceInput(1, effect);
+  node->ReplaceInput(2, control);
+  DCHECK_EQ(3, node->InputCount());
+  return Changed(node);
+}
+
+
+Reduction JSTypedLowering::ReduceJSStoreContext(Node* node) {
+  DCHECK_EQ(IrOpcode::kJSStoreContext, node->opcode());
+  ContextAccess const& access = ContextAccessOf(node->op());
+  Node* const effect = NodeProperties::GetEffectInput(node);
+  Node* const control = graph()->start();
+  for (size_t i = 0; i < access.depth(); ++i) {
+    node->ReplaceInput(
+        0, graph()->NewNode(
+               simplified()->LoadField(
+                   AccessBuilder::ForContextSlot(Context::PREVIOUS_INDEX)),
+               NodeProperties::GetValueInput(node, 0), effect, control));
+  }
+  node->set_op(
+      simplified()->StoreField(AccessBuilder::ForContextSlot(access.index())));
+  node->RemoveInput(2);
+  DCHECK_EQ(4, node->InputCount());
+  return Changed(node);
 }
 
 
@@ -800,15 +953,15 @@ Reduction JSTypedLowering::Reduce(Node* node) {
     case IrOpcode::kJSBitwiseOr:
       return ReduceJSBitwiseOr(node);
     case IrOpcode::kJSBitwiseXor:
-      return ReduceI32Binop(node, true, true, machine()->Word32Xor());
+      return ReduceInt32Binop(node, machine()->Word32Xor());
     case IrOpcode::kJSBitwiseAnd:
-      return ReduceI32Binop(node, true, true, machine()->Word32And());
+      return ReduceInt32Binop(node, machine()->Word32And());
     case IrOpcode::kJSShiftLeft:
-      return ReduceI32Shift(node, true, machine()->Word32Shl());
+      return ReduceUI32Shift(node, kSigned, machine()->Word32Shl());
     case IrOpcode::kJSShiftRight:
-      return ReduceI32Shift(node, true, machine()->Word32Sar());
+      return ReduceUI32Shift(node, kSigned, machine()->Word32Sar());
     case IrOpcode::kJSShiftRightLogical:
-      return ReduceI32Shift(node, false, machine()->Word32Shr());
+      return ReduceUI32Shift(node, kUnsigned, machine()->Word32Shr());
     case IrOpcode::kJSAdd:
       return ReduceJSAdd(node);
     case IrOpcode::kJSSubtract:
@@ -821,40 +974,110 @@ Reduction JSTypedLowering::Reduce(Node* node) {
       return ReduceNumberBinop(node, simplified()->NumberModulus());
     case IrOpcode::kJSUnaryNot: {
       Reduction result = ReduceJSToBooleanInput(node->InputAt(0));
-      Node* value;
       if (result.Changed()) {
         // JSUnaryNot(x:boolean) => BooleanNot(x)
-        value =
-            graph()->NewNode(simplified()->BooleanNot(), result.replacement());
-        NodeProperties::ReplaceWithValue(node, value);
-        return Changed(value);
+        node = result.replacement();
       } else {
         // JSUnaryNot(x) => BooleanNot(JSToBoolean(x))
-        value = graph()->NewNode(simplified()->BooleanNot(), node);
         node->set_op(javascript()->ToBoolean());
-        NodeProperties::ReplaceWithValue(node, value, node);
-        // Note: ReplaceUses() smashes all uses, so smash it back here.
-        value->ReplaceInput(0, node);
-        return Changed(node);
       }
+      Node* value = graph()->NewNode(simplified()->BooleanNot(), node);
+      return Replace(value);
     }
     case IrOpcode::kJSToBoolean:
       return ReduceJSToBoolean(node);
     case IrOpcode::kJSToNumber:
       return ReduceJSToNumber(node);
     case IrOpcode::kJSToString:
-      return ReplaceWithReduction(node,
-                                  ReduceJSToStringInput(node->InputAt(0)));
+      return ReduceJSToString(node);
     case IrOpcode::kJSLoadProperty:
       return ReduceJSLoadProperty(node);
     case IrOpcode::kJSStoreProperty:
       return ReduceJSStoreProperty(node);
-    case IrOpcode::kJSCallFunction:
-      return JSBuiltinReducer(jsgraph()).Reduce(node);
+    case IrOpcode::kJSLoadContext:
+      return ReduceJSLoadContext(node);
+    case IrOpcode::kJSStoreContext:
+      return ReduceJSStoreContext(node);
     default:
       break;
   }
   return NoChange();
+}
+
+
+Node* JSTypedLowering::ConvertToBoolean(Node* input) {
+  // Avoid inserting too many eager ToBoolean() operations.
+  Reduction const reduction = ReduceJSToBooleanInput(input);
+  if (reduction.Changed()) return reduction.replacement();
+  Node* const conversion = graph()->NewNode(javascript()->ToBoolean(), input,
+                                            jsgraph()->NoContextConstant());
+  InsertConversion(conversion);
+  return conversion;
+}
+
+
+Node* JSTypedLowering::ConvertToNumber(Node* input) {
+  DCHECK(NodeProperties::GetBounds(input).upper->Is(Type::PlainPrimitive()));
+  // Avoid inserting too many eager ToNumber() operations.
+  Reduction const reduction = ReduceJSToNumberInput(input);
+  if (reduction.Changed()) return reduction.replacement();
+  Node* const conversion = graph()->NewNode(javascript()->ToNumber(), input,
+                                            jsgraph()->NoContextConstant(),
+                                            graph()->start(), graph()->start());
+  InsertConversion(conversion);
+  return conversion;
+}
+
+
+template <IrOpcode::Value kOpcode>
+Node* JSTypedLowering::FindConversion(Node* input) {
+  size_t const input_id = input->id();
+  if (input_id < conversions_.size()) {
+    Node* const conversion = conversions_[input_id];
+    if (conversion && conversion->opcode() == kOpcode) {
+      return conversion;
+    }
+  }
+  return nullptr;
+}
+
+
+void JSTypedLowering::InsertConversion(Node* conversion) {
+  DCHECK(conversion->opcode() == IrOpcode::kJSToBoolean ||
+         conversion->opcode() == IrOpcode::kJSToNumber);
+  size_t const input_id = conversion->InputAt(0)->id();
+  if (input_id >= conversions_.size()) {
+    conversions_.resize(2 * input_id + 1);
+  }
+  conversions_[input_id] = conversion;
+}
+
+
+Node* JSTypedLowering::Word32Shl(Node* const lhs, int32_t const rhs) {
+  if (rhs == 0) return lhs;
+  return graph()->NewNode(machine()->Word32Shl(), lhs,
+                          jsgraph()->Int32Constant(rhs));
+}
+
+
+Factory* JSTypedLowering::factory() const { return jsgraph()->factory(); }
+
+
+Graph* JSTypedLowering::graph() const { return jsgraph()->graph(); }
+
+
+JSOperatorBuilder* JSTypedLowering::javascript() const {
+  return jsgraph()->javascript();
+}
+
+
+CommonOperatorBuilder* JSTypedLowering::common() const {
+  return jsgraph()->common();
+}
+
+
+MachineOperatorBuilder* JSTypedLowering::machine() const {
+  return jsgraph()->machine();
 }
 
 }  // namespace compiler

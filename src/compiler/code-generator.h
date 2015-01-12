@@ -5,8 +5,6 @@
 #ifndef V8_COMPILER_CODE_GENERATOR_H_
 #define V8_COMPILER_CODE_GENERATOR_H_
 
-#include <deque>
-
 #include "src/compiler/gap-resolver.h"
 #include "src/compiler/instruction.h"
 #include "src/deoptimizer.h"
@@ -17,7 +15,9 @@ namespace v8 {
 namespace internal {
 namespace compiler {
 
+// Forward declarations.
 class Linkage;
+class OutOfLineCode;
 
 struct BranchInfo {
   FlagsCondition condition;
@@ -86,10 +86,10 @@ class CodeGenerator FINAL : public GapResolver::Assembler {
   // ===========================================================================
 
   // Interface used by the gap resolver to emit moves and swaps.
-  virtual void AssembleMove(InstructionOperand* source,
-                            InstructionOperand* destination) OVERRIDE;
-  virtual void AssembleSwap(InstructionOperand* source,
-                            InstructionOperand* destination) OVERRIDE;
+  void AssembleMove(InstructionOperand* source,
+                    InstructionOperand* destination) FINAL;
+  void AssembleSwap(InstructionOperand* source,
+                    InstructionOperand* destination) FINAL;
 
   // ===========================================================================
   // Deoptimization table construction
@@ -129,6 +129,8 @@ class CodeGenerator FINAL : public GapResolver::Assembler {
     int pc_offset_;
   };
 
+  friend class OutOfLineCode;
+
   Frame* const frame_;
   Linkage* const linkage_;
   InstructionSequence* const code_;
@@ -143,6 +145,7 @@ class CodeGenerator FINAL : public GapResolver::Assembler {
   ZoneDeque<Handle<Object> > deoptimization_literals_;
   TranslationBuffer translations_;
   int last_lazy_deopt_pc_;
+  OutOfLineCode* ools_;
 };
 
 }  // namespace compiler

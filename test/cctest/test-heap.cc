@@ -1579,7 +1579,7 @@ TEST(TestInternalWeakLists) {
   }
 
   // Force compilation cache cleanup.
-  CcTest::heap()->NotifyContextDisposed();
+  CcTest::heap()->NotifyContextDisposed(true);
   CcTest::heap()->CollectAllGarbage(Heap::kNoGCFlags);
 
   // Dispose the native contexts one by one.
@@ -1691,6 +1691,64 @@ TEST(TestInternalWeakListsTraverseWithGC) {
   CHECK_EQ(opt ? 5 : 0, CountOptimizedUserFunctionsWithGC(ctx[0], 4));
 
   ctx[0]->Exit();
+}
+
+
+TEST(TestSizeOfRegExpCode) {
+  if (!FLAG_regexp_optimization) return;
+
+  v8::V8::Initialize();
+
+  Isolate* isolate = CcTest::i_isolate();
+  HandleScope scope(isolate);
+
+  LocalContext context;
+
+  // Adjust source below and this check to match
+  // RegExpImple::kRegExpTooLargeToOptimize.
+  DCHECK_EQ(i::RegExpImpl::kRegExpTooLargeToOptimize, 10 * KB);
+
+  // Compile a regexp that is much larger if we are using regexp optimizations.
+  CompileRun(
+      "var reg_exp_source = '(?:a|bc|def|ghij|klmno|pqrstu)';"
+      "var half_size_reg_exp;"
+      "while (reg_exp_source.length < 10 * 1024) {"
+      "  half_size_reg_exp = reg_exp_source;"
+      "  reg_exp_source = reg_exp_source + reg_exp_source;"
+      "}"
+      // Flatten string.
+      "reg_exp_source.match(/f/);");
+
+  // Get initial heap size after several full GCs, which will stabilize
+  // the heap size and return with sweeping finished completely.
+  CcTest::heap()->CollectAllGarbage(Heap::kNoGCFlags);
+  CcTest::heap()->CollectAllGarbage(Heap::kNoGCFlags);
+  CcTest::heap()->CollectAllGarbage(Heap::kNoGCFlags);
+  CcTest::heap()->CollectAllGarbage(Heap::kNoGCFlags);
+  CcTest::heap()->CollectAllGarbage(Heap::kNoGCFlags);
+  MarkCompactCollector* collector = CcTest::heap()->mark_compact_collector();
+  if (collector->sweeping_in_progress()) {
+    collector->EnsureSweepingCompleted();
+  }
+  int initial_size = static_cast<int>(CcTest::heap()->SizeOfObjects());
+
+  CompileRun("'foo'.match(reg_exp_source);");
+  CcTest::heap()->CollectAllGarbage(Heap::kNoGCFlags);
+  int size_with_regexp = static_cast<int>(CcTest::heap()->SizeOfObjects());
+
+  CompileRun("'foo'.match(half_size_reg_exp);");
+  CcTest::heap()->CollectAllGarbage(Heap::kNoGCFlags);
+  int size_with_optimized_regexp =
+      static_cast<int>(CcTest::heap()->SizeOfObjects());
+
+  int size_of_regexp_code = size_with_regexp - initial_size;
+
+  CHECK_LE(size_of_regexp_code, 1 * MB);
+
+  // Small regexp is half the size, but compiles to more than twice the code
+  // due to the optimization steps.
+  CHECK_GE(size_with_optimized_regexp,
+           size_with_regexp + size_of_regexp_code * 2);
 }
 
 
@@ -3423,6 +3481,54 @@ TEST(IncrementalMarkingClearsMonomorphicIC) {
 }
 
 
+TEST(IncrementalMarkingPreservesPolymorphicIC) {
+  if (i::FLAG_always_opt) return;
+  CcTest::InitializeVM();
+  v8::HandleScope scope(CcTest::isolate());
+  v8::Local<v8::Value> obj1, obj2;
+
+  {
+    LocalContext env;
+    CompileRun("function fun() { this.x = 1; }; var obj = new fun();");
+    obj1 = env->Global()->Get(v8_str("obj"));
+  }
+
+  {
+    LocalContext env;
+    CompileRun("function fun() { this.x = 2; }; var obj = new fun();");
+    obj2 = env->Global()->Get(v8_str("obj"));
+  }
+
+  // Prepare function f that contains a polymorphic IC for objects
+  // originating from two different native contexts.
+  CcTest::global()->Set(v8_str("obj1"), obj1);
+  CcTest::global()->Set(v8_str("obj2"), obj2);
+  CompileRun("function f(o) { return o.x; } f(obj1); f(obj1); f(obj2);");
+  Handle<JSFunction> f = v8::Utils::OpenHandle(
+      *v8::Handle<v8::Function>::Cast(CcTest::global()->Get(v8_str("f"))));
+
+  Code* ic_before = FindFirstIC(f->shared()->code(), Code::LOAD_IC);
+  if (FLAG_vector_ics) {
+    CheckVectorIC(f, 0, POLYMORPHIC);
+    CHECK(ic_before->ic_state() == DEFAULT);
+  } else {
+    CHECK(ic_before->ic_state() == POLYMORPHIC);
+  }
+
+  // Fire context dispose notification.
+  SimulateIncrementalMarking(CcTest::heap());
+  CcTest::heap()->CollectAllGarbage(Heap::kNoGCFlags);
+
+  Code* ic_after = FindFirstIC(f->shared()->code(), Code::LOAD_IC);
+  if (FLAG_vector_ics) {
+    CheckVectorIC(f, 0, POLYMORPHIC);
+    CHECK(ic_after->ic_state() == DEFAULT);
+  } else {
+    CHECK(ic_after->ic_state() == POLYMORPHIC);
+  }
+}
+
+
 TEST(IncrementalMarkingClearsPolymorphicIC) {
   if (i::FLAG_always_opt) return;
   CcTest::InitializeVM();
@@ -4096,10 +4202,6 @@ TEST(EnsureAllocationSiteDependentCodesProcessed) {
     heap->CollectAllGarbage(Heap::kNoGCFlags);
   }
 
-  // TODO(mvstanton): this test fails when FLAG_vector_ics is true because
-  // monomorphic load ics are preserved, but also strongly walked. They
-  // end up keeping function bar alive.
-
   // The site still exists because of our global handle, but the code is no
   // longer referred to by dependent_code().
   DependentCode::GroupStartIndexes starts(site->dependent_code());
@@ -4218,8 +4320,9 @@ TEST(NoWeakHashTableLeakWithIncrementalMarking) {
                "bar%d();"
                "bar%d();"
                "bar%d();"
-               "%%OptimizeFunctionOnNextCall(bar%d);"
-               "bar%d();", i, i, i, i, i, i, i, i);
+               "%%OptimizeFwunctionOnNextCall(bar%d);"
+               "bar%d();",
+               i, i, i, i, i, i, i, i);
       CompileRun(source.start());
     }
     heap->CollectAllGarbage(i::Heap::kNoGCFlags);
@@ -4364,8 +4467,6 @@ void CheckWeakness(const char* source) {
 // Each of the following "weak IC" tests creates an IC that embeds a map with
 // the prototype pointing to _proto_ and checks that the _proto_ dies on GC.
 TEST(WeakMapInMonomorphicLoadIC) {
-  // TODO(mvstanton): vector ics need weak support!
-  if (FLAG_vector_ics) return;
   CheckWeakness("function loadIC(obj) {"
                 "  return obj.name;"
                 "}"
@@ -4380,9 +4481,26 @@ TEST(WeakMapInMonomorphicLoadIC) {
 }
 
 
+TEST(WeakMapInPolymorphicLoadIC) {
+  CheckWeakness(
+      "function loadIC(obj) {"
+      "  return obj.name;"
+      "}"
+      " (function() {"
+      "   var proto = {'name' : 'weak'};"
+      "   var obj = Object.create(proto);"
+      "   loadIC(obj);"
+      "   loadIC(obj);"
+      "   loadIC(obj);"
+      "   var poly = Object.create(proto);"
+      "   poly.x = true;"
+      "   loadIC(poly);"
+      "   return proto;"
+      " })();");
+}
+
+
 TEST(WeakMapInMonomorphicKeyedLoadIC) {
-  // TODO(mvstanton): vector ics need weak support!
-  if (FLAG_vector_ics) return;
   CheckWeakness("function keyedLoadIC(obj, field) {"
                 "  return obj[field];"
                 "}"
@@ -4394,6 +4512,25 @@ TEST(WeakMapInMonomorphicKeyedLoadIC) {
                 "   keyedLoadIC(obj, 'name');"
                 "   return proto;"
                 " })();");
+}
+
+
+TEST(WeakMapInPolymorphicKeyedLoadIC) {
+  CheckWeakness(
+      "function keyedLoadIC(obj, field) {"
+      "  return obj[field];"
+      "}"
+      " (function() {"
+      "   var proto = {'name' : 'weak'};"
+      "   var obj = Object.create(proto);"
+      "   keyedLoadIC(obj, 'name');"
+      "   keyedLoadIC(obj, 'name');"
+      "   keyedLoadIC(obj, 'name');"
+      "   var poly = Object.create(proto);"
+      "   poly.x = true;"
+      "   keyedLoadIC(poly, 'name');"
+      "   return proto;"
+      " })();");
 }
 
 
@@ -4412,6 +4549,25 @@ TEST(WeakMapInMonomorphicStoreIC) {
 }
 
 
+TEST(WeakMapInPolymorphicStoreIC) {
+  CheckWeakness(
+      "function storeIC(obj, value) {"
+      "  obj.name = value;"
+      "}"
+      " (function() {"
+      "   var proto = {'name' : 'weak'};"
+      "   var obj = Object.create(proto);"
+      "   storeIC(obj, 'x');"
+      "   storeIC(obj, 'x');"
+      "   storeIC(obj, 'x');"
+      "   var poly = Object.create(proto);"
+      "   poly.x = true;"
+      "   storeIC(poly, 'x');"
+      "   return proto;"
+      " })();");
+}
+
+
 TEST(WeakMapInMonomorphicKeyedStoreIC) {
   CheckWeakness("function keyedStoreIC(obj, field, value) {"
                 "  obj[field] = value;"
@@ -4427,6 +4583,25 @@ TEST(WeakMapInMonomorphicKeyedStoreIC) {
 }
 
 
+TEST(WeakMapInPolymorphicKeyedStoreIC) {
+  CheckWeakness(
+      "function keyedStoreIC(obj, field, value) {"
+      "  obj[field] = value;"
+      "}"
+      " (function() {"
+      "   var proto = {'name' : 'weak'};"
+      "   var obj = Object.create(proto);"
+      "   keyedStoreIC(obj, 'x');"
+      "   keyedStoreIC(obj, 'x');"
+      "   keyedStoreIC(obj, 'x');"
+      "   var poly = Object.create(proto);"
+      "   poly.x = true;"
+      "   keyedStoreIC(poly, 'x');"
+      "   return proto;"
+      " })();");
+}
+
+
 TEST(WeakMapInMonomorphicCompareNilIC) {
   CheckWeakness("function compareNilIC(obj) {"
                 "  return obj == null;"
@@ -4439,6 +4614,94 @@ TEST(WeakMapInMonomorphicCompareNilIC) {
                 "   compareNilIC(obj);"
                 "   return proto;"
                 " })();");
+}
+
+
+Handle<JSFunction> GetFunctionByName(Isolate* isolate, const char* name) {
+  Handle<String> str = isolate->factory()->InternalizeUtf8String(name);
+  Handle<Object> obj =
+      Object::GetProperty(isolate->global_object(), str).ToHandleChecked();
+  return Handle<JSFunction>::cast(obj);
+}
+
+
+void CheckIC(Code* code, Code::Kind kind, InlineCacheState state) {
+  Code* ic = FindFirstIC(code, kind);
+  CHECK(ic->is_inline_cache_stub());
+  CHECK(ic->ic_state() == state);
+}
+
+
+TEST(MonomorphicStaysMonomorphicAfterGC) {
+  if (FLAG_always_opt) return;
+  // TODO(mvstanton): vector ics need weak support!
+  if (FLAG_vector_ics) return;
+  CcTest::InitializeVM();
+  Isolate* isolate = CcTest::i_isolate();
+  Heap* heap = isolate->heap();
+  v8::HandleScope scope(CcTest::isolate());
+  CompileRun(
+      "function loadIC(obj) {"
+      "  return obj.name;"
+      "}"
+      "function testIC() {"
+      "  var proto = {'name' : 'weak'};"
+      "  var obj = Object.create(proto);"
+      "  loadIC(obj);"
+      "  loadIC(obj);"
+      "  loadIC(obj);"
+      "  return proto;"
+      "};");
+  Handle<JSFunction> loadIC = GetFunctionByName(isolate, "loadIC");
+  {
+    v8::HandleScope scope(CcTest::isolate());
+    CompileRun("(testIC())");
+  }
+  heap->CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
+  CheckIC(loadIC->code(), Code::LOAD_IC, MONOMORPHIC);
+  {
+    v8::HandleScope scope(CcTest::isolate());
+    CompileRun("(testIC())");
+  }
+  CheckIC(loadIC->code(), Code::LOAD_IC, MONOMORPHIC);
+}
+
+
+TEST(PolymorphicStaysPolymorphicAfterGC) {
+  if (FLAG_always_opt) return;
+  // TODO(mvstanton): vector ics need weak support!
+  if (FLAG_vector_ics) return;
+  CcTest::InitializeVM();
+  Isolate* isolate = CcTest::i_isolate();
+  Heap* heap = isolate->heap();
+  v8::HandleScope scope(CcTest::isolate());
+  CompileRun(
+      "function loadIC(obj) {"
+      "  return obj.name;"
+      "}"
+      "function testIC() {"
+      "  var proto = {'name' : 'weak'};"
+      "  var obj = Object.create(proto);"
+      "  loadIC(obj);"
+      "  loadIC(obj);"
+      "  loadIC(obj);"
+      "  var poly = Object.create(proto);"
+      "  poly.x = true;"
+      "  loadIC(poly);"
+      "  return proto;"
+      "};");
+  Handle<JSFunction> loadIC = GetFunctionByName(isolate, "loadIC");
+  {
+    v8::HandleScope scope(CcTest::isolate());
+    CompileRun("(testIC())");
+  }
+  heap->CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
+  CheckIC(loadIC->code(), Code::LOAD_IC, POLYMORPHIC);
+  {
+    v8::HandleScope scope(CcTest::isolate());
+    CompileRun("(testIC())");
+  }
+  CheckIC(loadIC->code(), Code::LOAD_IC, POLYMORPHIC);
 }
 
 
@@ -4587,7 +4850,7 @@ TEST(Regress357137) {
   CcTest::InitializeVM();
   v8::Isolate* isolate = CcTest::isolate();
   v8::HandleScope hscope(isolate);
-  v8::Handle<v8::ObjectTemplate> global =v8::ObjectTemplate::New(isolate);
+  v8::Handle<v8::ObjectTemplate> global = v8::ObjectTemplate::New(isolate);
   global->Set(v8::String::NewFromUtf8(isolate, "interrupt"),
               v8::FunctionTemplate::New(isolate, RequestInterrupt));
   v8::Local<v8::Context> context = v8::Context::New(isolate, NULL, global);
@@ -4805,6 +5068,23 @@ TEST(Regress3631) {
       "  weak_map.set(future_keys[i], i);"
       "}");
   heap->incremental_marking()->set_should_hurry(true);
+  heap->CollectGarbage(OLD_POINTER_SPACE);
+}
+
+
+TEST(Regress442710) {
+  CcTest::InitializeVM();
+  Isolate* isolate = CcTest::i_isolate();
+  Heap* heap = isolate->heap();
+  Factory* factory = isolate->factory();
+
+  HandleScope sc(isolate);
+  Handle<GlobalObject> global(CcTest::i_isolate()->context()->global_object());
+  Handle<JSArray> array = factory->NewJSArray(2);
+
+  Handle<String> name = factory->InternalizeUtf8String("testArray");
+  JSReceiver::SetProperty(global, name, array, SLOPPY).Check();
+  CompileRun("testArray[0] = 1; testArray[1] = 2; testArray.shift();");
   heap->CollectGarbage(OLD_POINTER_SPACE);
 }
 

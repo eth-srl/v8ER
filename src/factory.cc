@@ -139,12 +139,12 @@ Handle<ConstantPoolArray> Factory::NewExtendedConstantPoolArray(
 
 
 Handle<OrderedHashSet> Factory::NewOrderedHashSet() {
-  return OrderedHashSet::Allocate(isolate(), 4);
+  return OrderedHashSet::Allocate(isolate(), OrderedHashSet::kMinCapacity);
 }
 
 
 Handle<OrderedHashMap> Factory::NewOrderedHashMap() {
-  return OrderedHashMap::Allocate(isolate(), 4);
+  return OrderedHashMap::Allocate(isolate(), OrderedHashMap::kMinCapacity);
 }
 
 
@@ -802,6 +802,7 @@ Handle<CodeCache> Factory::NewCodeCache() {
       Handle<CodeCache>::cast(NewStruct(CODE_CACHE_TYPE));
   code_cache->set_default_cache(*empty_fixed_array(), SKIP_WRITE_BARRIER);
   code_cache->set_normal_type_cache(*undefined_value(), SKIP_WRITE_BARRIER);
+  code_cache->set_weak_cell_cache(*undefined_value(), SKIP_WRITE_BARRIER);
   return code_cache;
 }
 
@@ -1034,7 +1035,7 @@ Handle<Object> Factory::NewNumber(double value,
   // patterns is faster than using fpclassify() et al.
   if (IsMinusZero(value)) return NewHeapNumber(-0.0, IMMUTABLE, pretenure);
 
-  int int_value = FastD2I(value);
+  int int_value = FastD2IChecked(value);
   if (value == int_value && Smi::IsValid(int_value)) {
     return handle(Smi::FromInt(int_value), isolate());
   }
@@ -1591,7 +1592,7 @@ Handle<GlobalObject> Factory::NewGlobalObject(Handle<JSFunction> constructor) {
   for (int i = 0; i < map->NumberOfOwnDescriptors(); i++) {
     PropertyDetails details = descs->GetDetails(i);
     DCHECK(details.type() == CALLBACKS);  // Only accessors are expected.
-    PropertyDetails d = PropertyDetails(details.attributes(), CALLBACKS, i + 1);
+    PropertyDetails d(details.attributes(), CALLBACKS, i + 1);
     Handle<Name> name(descs->GetKey(i));
     Handle<Object> value(descs->GetCallbacksObject(i), isolate());
     Handle<PropertyCell> cell = NewPropertyCell(value);
@@ -1681,6 +1682,7 @@ void Factory::NewJSArrayStorage(Handle<JSArray> array,
     return;
   }
 
+  HandleScope inner_scope(isolate());
   Handle<FixedArrayBase> elms;
   ElementsKind elements_kind = array->GetElementsKind();
   if (IsFastDoubleElementsKind(elements_kind)) {
@@ -1877,7 +1879,7 @@ Handle<JSProxy> Factory::NewJSProxy(Handle<Object> handler,
   // TODO(rossberg): Once we optimize proxies, think about a scheme to share
   // maps. Will probably depend on the identity of the handler object, too.
   Handle<Map> map = NewMap(JS_PROXY_TYPE, JSProxy::kSize);
-  map->set_prototype(*prototype);
+  map->SetPrototype(prototype);
 
   // Allocate the proxy object.
   Handle<JSProxy> result = New<JSProxy>(map, NEW_SPACE);
@@ -1896,7 +1898,7 @@ Handle<JSProxy> Factory::NewJSFunctionProxy(Handle<Object> handler,
   // TODO(rossberg): Once we optimize proxies, think about a scheme to share
   // maps. Will probably depend on the identity of the handler object, too.
   Handle<Map> map = NewMap(JS_FUNCTION_PROXY_TYPE, JSFunctionProxy::kSize);
-  map->set_prototype(*prototype);
+  map->SetPrototype(prototype);
 
   // Allocate the proxy object.
   Handle<JSFunctionProxy> result = New<JSFunctionProxy>(map, NEW_SPACE);
@@ -1921,7 +1923,7 @@ void Factory::ReinitializeJSProxy(Handle<JSProxy> proxy, InstanceType type,
   int size_difference = proxy->map()->instance_size() - map->instance_size();
   DCHECK(size_difference >= 0);
 
-  map->set_prototype(proxy->map()->prototype());
+  map->SetPrototype(handle(proxy->map()->prototype(), proxy->GetIsolate()));
 
   // Allocate the backing storage for the properties.
   int prop_size = map->InitialPropertiesLength();
@@ -2156,7 +2158,7 @@ void Factory::SetNumberStringCache(Handle<Object> number,
       // cache in the snapshot to keep  boot-time memory usage down.
       // If we expand the number string cache already while creating
       // the snapshot then that didn't work out.
-      DCHECK(!isolate()->serializer_enabled() || FLAG_extra_code != NULL);
+      DCHECK(!isolate()->serializer_enabled());
       Handle<FixedArray> new_cache = NewFixedArray(full_size, TENURED);
       isolate()->heap()->set_number_string_cache(*new_cache);
       return;

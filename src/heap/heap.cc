@@ -63,6 +63,8 @@ Heap::Heap()
       initial_semispace_size_(Page::kPageSize),
       target_semispace_size_(Page::kPageSize),
       max_old_generation_size_(700ul * (kPointerSize / 4) * MB),
+      initial_old_generation_size_(max_old_generation_size_ / 2),
+      old_generation_size_configured_(false),
       max_executable_size_(256ul * (kPointerSize / 4) * MB),
       // Variables set based on semispace_size_ and old_generation_size_ in
       // ConfigureHeap.
@@ -97,7 +99,7 @@ Heap::Heap()
 #ifdef DEBUG
       allocation_timeout_(0),
 #endif  // DEBUG
-      old_generation_allocation_limit_(kMinimumOldGenerationAllocationLimit),
+      old_generation_allocation_limit_(initial_old_generation_size_),
       old_gen_exhausted_(false),
       inline_allocation_disabled_(false),
       store_buffer_rebuilder_(store_buffer()),
@@ -107,8 +109,9 @@ Heap::Heap()
       tracer_(this),
       high_survival_rate_period_length_(0),
       promoted_objects_size_(0),
-      promotion_rate_(0),
+      promotion_ratio_(0),
       semi_space_copied_object_size_(0),
+      previous_semi_space_copied_object_size_(0),
       semi_space_copied_rate_(0),
       nodes_died_in_new_space_(0),
       nodes_copied_in_new_space_(0),
@@ -120,6 +123,7 @@ Heap::Heap()
       min_in_mutator_(kMaxInt),
       marking_time_(0.0),
       sweeping_time_(0.0),
+      last_idle_notification_time_(0.0),
       mark_compact_collector_(this),
       store_buffer_(this),
       marking_(this),
@@ -432,6 +436,7 @@ void Heap::GarbageCollectionPrologue() {
 
   // Reset GC statistics.
   promoted_objects_size_ = 0;
+  previous_semi_space_copied_object_size_ = semi_space_copied_object_size_;
   semi_space_copied_object_size_ = 0;
   nodes_died_in_new_space_ = 0;
   nodes_copied_in_new_space_ = 0;
@@ -768,7 +773,6 @@ void Heap::CollectAllAvailableGarbage(const char* gc_reason) {
   mark_compact_collector()->SetFlags(kNoGCFlags);
   new_space_.Shrink();
   UncommitFromSpace();
-  incremental_marking()->UncommitMarkingDeque();
 }
 
 
@@ -859,7 +863,11 @@ bool Heap::CollectGarbage(GarbageCollector collector, const char* gc_reason,
 }
 
 
-int Heap::NotifyContextDisposed() {
+int Heap::NotifyContextDisposed(bool dependant_context) {
+  if (!dependant_context) {
+    tracer()->ResetSurvivalEvents();
+    old_generation_size_configured_ = false;
+  }
   if (isolate()->concurrent_recompilation_enabled()) {
     // Flush the queued recompilation tasks.
     isolate()->optimizing_compiler_thread()->Flush();
@@ -1036,14 +1044,23 @@ void Heap::ClearNormalizedMapCaches() {
 void Heap::UpdateSurvivalStatistics(int start_new_space_size) {
   if (start_new_space_size == 0) return;
 
-  promotion_rate_ = (static_cast<double>(promoted_objects_size_) /
-                     static_cast<double>(start_new_space_size) * 100);
+  promotion_ratio_ = (static_cast<double>(promoted_objects_size_) /
+                      static_cast<double>(start_new_space_size) * 100);
+
+  if (previous_semi_space_copied_object_size_ > 0) {
+    promotion_rate_ =
+        (static_cast<double>(promoted_objects_size_) /
+         static_cast<double>(previous_semi_space_copied_object_size_) * 100);
+  } else {
+    promotion_rate_ = 0;
+  }
 
   semi_space_copied_rate_ =
       (static_cast<double>(semi_space_copied_object_size_) /
        static_cast<double>(start_new_space_size) * 100);
 
-  double survival_rate = promotion_rate_ + semi_space_copied_rate_;
+  double survival_rate = promotion_ratio_ + semi_space_copied_rate_;
+  tracer()->AddSurvivalRate(survival_rate);
 
   if (survival_rate > kYoungSurvivalRateHighThreshold) {
     high_survival_rate_period_length_++;
@@ -1101,11 +1118,13 @@ bool Heap::PerformGarbageCollection(
     old_generation_allocation_limit_ =
         OldGenerationAllocationLimit(PromotedSpaceSizeOfObjects(), 0);
     old_gen_exhausted_ = false;
+    old_generation_size_configured_ = true;
   } else {
     Scavenge();
   }
 
   UpdateSurvivalStatistics(start_new_space_size);
+  ConfigureInitialOldGenerationSize();
 
   isolate_->counters()->objs_since_last_young()->Set(0);
 
@@ -1133,6 +1152,9 @@ bool Heap::PerformGarbageCollection(
         amount_of_external_allocated_memory_;
     old_generation_allocation_limit_ = OldGenerationAllocationLimit(
         PromotedSpaceSizeOfObjects(), freed_global_handles);
+    // We finished a marking cycle. We can uncommit the marking deque until
+    // we start marking again.
+    mark_compact_collector_.UncommitMarkingDeque();
   }
 
   {
@@ -1207,15 +1229,22 @@ void Heap::MarkCompact() {
 
   LOG(isolate_, ResourceEvent("markcompact", "end"));
 
+  MarkCompactEpilogue();
+
+  if (FLAG_allocation_site_pretenuring) {
+    EvaluateOldSpaceLocalPretenuring(size_of_objects_before_gc);
+  }
+}
+
+
+void Heap::MarkCompactEpilogue() {
   gc_state_ = NOT_IN_GC;
 
   isolate_->counters()->objs_since_last_full()->Set(0);
 
   flush_monomorphic_ics_ = false;
 
-  if (FLAG_allocation_site_pretenuring) {
-    EvaluateOldSpaceLocalPretenuring(size_of_objects_before_gc);
-  }
+  incremental_marking()->Epilogue();
 }
 
 
@@ -1550,9 +1579,10 @@ void Heap::Scavenge() {
   isolate()->global_handles()->RemoveObjectGroups();
   isolate()->global_handles()->RemoveImplicitRefGroups();
 
-  isolate_->global_handles()->IdentifyNewSpaceWeakIndependentHandles(
+  isolate()->global_handles()->IdentifyNewSpaceWeakIndependentHandles(
       &IsUnscavengedHeapObject);
-  isolate_->global_handles()->IterateNewSpaceWeakIndependentRoots(
+
+  isolate()->global_handles()->IterateNewSpaceWeakIndependentRoots(
       &scavenge_visitor);
   new_space_front = DoScavenge(&scavenge_visitor, new_space_front);
 
@@ -1657,6 +1687,10 @@ void Heap::ProcessWeakReferences(WeakObjectRetainer* retainer) {
   // TODO(mvstanton): AllocationSites only need to be processed during
   // MARK_COMPACT, as they live in old space. Verify and address.
   ProcessAllocationSites(retainer);
+  // Collects callback info for handles that are pending (about to be
+  // collected) and either phantom or internal-fields.  Releases the global
+  // handles.  See also PostGarbageCollectionProcessing.
+  isolate()->global_handles()->CollectPhantomCallbackData();
 }
 
 
@@ -1796,12 +1830,32 @@ Address Heap::DoScavenge(ObjectVisitor* scavenge_visitor,
         promotion_queue()->remove(&target, &size);
 
         // Promoted object might be already partially visited
-        // during old space pointer iteration. Thus we search specificly
+        // during old space pointer iteration. Thus we search specifically
         // for pointers to from semispace instead of looking for pointers
         // to new space.
         DCHECK(!target->IsMap());
-        IterateAndMarkPointersToFromSpace(
-            target->address(), target->address() + size, &ScavengeObject);
+        Address obj_address = target->address();
+#if V8_DOUBLE_FIELDS_UNBOXING
+        LayoutDescriptorHelper helper(target->map());
+        bool has_only_tagged_fields = helper.all_fields_tagged();
+
+        if (!has_only_tagged_fields) {
+          for (int offset = 0; offset < size;) {
+            int end_of_region_offset;
+            if (helper.IsTagged(offset, size, &end_of_region_offset)) {
+              IterateAndMarkPointersToFromSpace(
+                  obj_address + offset, obj_address + end_of_region_offset,
+                  &ScavengeObject);
+            }
+            offset = end_of_region_offset;
+          }
+        } else {
+#endif
+          IterateAndMarkPointersToFromSpace(obj_address, obj_address + size,
+                                            &ScavengeObject);
+#if V8_DOUBLE_FIELDS_UNBOXING
+        }
+#endif
       }
     }
 
@@ -2311,6 +2365,17 @@ void Heap::ScavengeObjectSlow(HeapObject** p, HeapObject* object) {
 }
 
 
+void Heap::ConfigureInitialOldGenerationSize() {
+  if (!old_generation_size_configured_ && tracer()->SurvivalEventsRecorded()) {
+    old_generation_allocation_limit_ =
+        Max(kMinimumOldGenerationAllocationLimit,
+            static_cast<intptr_t>(
+                static_cast<double>(initial_old_generation_size_) *
+                (tracer()->AverageSurvivalRate() / 100)));
+  }
+}
+
+
 AllocationResult Heap::AllocatePartialMap(InstanceType instance_type,
                                           int instance_size) {
   Object* result;
@@ -2334,7 +2399,8 @@ AllocationResult Heap::AllocatePartialMap(InstanceType instance_type,
   reinterpret_cast<Map*>(result)->set_bit_field(0);
   reinterpret_cast<Map*>(result)->set_bit_field2(0);
   int bit_field3 = Map::EnumLengthBits::encode(kInvalidEnumCacheSentinel) |
-                   Map::OwnsDescriptors::encode(true);
+                   Map::OwnsDescriptors::encode(true) |
+                   Map::Counter::encode(Map::kRetainingCounterStart);
   reinterpret_cast<Map*>(result)->set_bit_field3(bit_field3);
   return result;
 }
@@ -2370,7 +2436,8 @@ AllocationResult Heap::AllocateMap(InstanceType instance_type,
   map->set_bit_field(0);
   map->set_bit_field2(1 << Map::kIsExtensible);
   int bit_field3 = Map::EnumLengthBits::encode(kInvalidEnumCacheSentinel) |
-                   Map::OwnsDescriptors::encode(true);
+                   Map::OwnsDescriptors::encode(true) |
+                   Map::Counter::encode(Map::kRetainingCounterStart);
   map->set_bit_field3(bit_field3);
   map->set_elements_kind(elements_kind);
 
@@ -4385,16 +4452,18 @@ void Heap::IdleMarkCompact(const char* message) {
 }
 
 
-void Heap::TryFinalizeIdleIncrementalMarking(
-    size_t idle_time_in_ms, size_t size_of_objects,
+bool Heap::TryFinalizeIdleIncrementalMarking(
+    double idle_time_in_ms, size_t size_of_objects,
     size_t final_incremental_mark_compact_speed_in_bytes_per_ms) {
   if (incremental_marking()->IsComplete() ||
-      (mark_compact_collector()->IsMarkingDequeEmpty() &&
+      (mark_compact_collector_.marking_deque()->IsEmpty() &&
        gc_idle_time_handler_.ShouldDoFinalIncrementalMarkCompact(
-           idle_time_in_ms, size_of_objects,
+           static_cast<size_t>(idle_time_in_ms), size_of_objects,
            final_incremental_mark_compact_speed_in_bytes_per_ms))) {
     CollectAllGarbage(kNoGCFlags, "idle notification: finalize incremental");
+    return true;
   }
+  return false;
 }
 
 
@@ -4404,11 +4473,24 @@ bool Heap::WorthActivatingIncrementalMarking() {
 }
 
 
+static double MonotonicallyIncreasingTimeInMs() {
+  return V8::GetCurrentPlatform()->MonotonicallyIncreasingTime() *
+         static_cast<double>(base::Time::kMillisecondsPerSecond);
+}
+
+
 bool Heap::IdleNotification(int idle_time_in_ms) {
-  base::ElapsedTimer timer;
-  timer.Start();
-  isolate()->counters()->gc_idle_time_allotted_in_ms()->AddSample(
-      idle_time_in_ms);
+  return IdleNotification(
+      V8::GetCurrentPlatform()->MonotonicallyIncreasingTime() +
+      (static_cast<double>(idle_time_in_ms) /
+       static_cast<double>(base::Time::kMillisecondsPerSecond)));
+}
+
+
+bool Heap::IdleNotification(double deadline_in_seconds) {
+  double deadline_in_ms =
+      deadline_in_seconds *
+      static_cast<double>(base::Time::kMillisecondsPerSecond);
   HistogramTimerScope idle_notification_scope(
       isolate_->counters()->gc_idle_notification());
 
@@ -4438,11 +4520,13 @@ bool Heap::IdleNotification(int idle_time_in_ms) {
       static_cast<size_t>(
           tracer()->NewSpaceAllocationThroughputInBytesPerMillisecond());
 
+  double idle_time_in_ms = deadline_in_ms - MonotonicallyIncreasingTimeInMs();
   GCIdleTimeAction action =
       gc_idle_time_handler_.Compute(idle_time_in_ms, heap_state);
+  isolate()->counters()->gc_idle_time_allotted_in_ms()->AddSample(
+      static_cast<int>(idle_time_in_ms));
 
   bool result = false;
-  int actual_time_in_ms = 0;
   switch (action.type) {
     case DONE:
       result = true;
@@ -4451,14 +4535,20 @@ bool Heap::IdleNotification(int idle_time_in_ms) {
       if (incremental_marking()->IsStopped()) {
         incremental_marking()->Start();
       }
-      incremental_marking()->Step(action.parameter,
-                                  IncrementalMarking::NO_GC_VIA_STACK_GUARD,
-                                  IncrementalMarking::FORCE_MARKING,
-                                  IncrementalMarking::DO_NOT_FORCE_COMPLETION);
-      actual_time_in_ms = static_cast<int>(timer.Elapsed().InMilliseconds());
-      int remaining_idle_time_in_ms = idle_time_in_ms - actual_time_in_ms;
-      if (remaining_idle_time_in_ms > 0) {
-        TryFinalizeIdleIncrementalMarking(
+      double remaining_idle_time_in_ms = 0.0;
+      do {
+        incremental_marking()->Step(
+            action.parameter, IncrementalMarking::NO_GC_VIA_STACK_GUARD,
+            IncrementalMarking::FORCE_MARKING,
+            IncrementalMarking::DO_NOT_FORCE_COMPLETION);
+        remaining_idle_time_in_ms =
+            deadline_in_ms - MonotonicallyIncreasingTimeInMs();
+      } while (remaining_idle_time_in_ms >=
+                   2.0 * GCIdleTimeHandler::kIncrementalMarkingStepTimeInMs &&
+               !incremental_marking()->IsComplete() &&
+               !mark_compact_collector_.marking_deque()->IsEmpty());
+      if (remaining_idle_time_in_ms > 0.0) {
+        action.additional_work = TryFinalizeIdleIncrementalMarking(
             remaining_idle_time_in_ms, heap_state.size_of_objects,
             heap_state.final_incremental_mark_compact_speed_in_bytes_per_ms);
       }
@@ -4485,21 +4575,27 @@ bool Heap::IdleNotification(int idle_time_in_ms) {
       break;
   }
 
-  actual_time_in_ms = static_cast<int>(timer.Elapsed().InMilliseconds());
-  if (actual_time_in_ms <= idle_time_in_ms) {
+  double current_time = MonotonicallyIncreasingTimeInMs();
+  last_idle_notification_time_ = current_time;
+  double deadline_difference = deadline_in_ms - current_time;
+
+  if (deadline_difference >= 0) {
     if (action.type != DONE && action.type != DO_NOTHING) {
       isolate()->counters()->gc_idle_time_limit_undershot()->AddSample(
-          idle_time_in_ms - actual_time_in_ms);
+          static_cast<int>(deadline_difference));
     }
   } else {
     isolate()->counters()->gc_idle_time_limit_overshot()->AddSample(
-        actual_time_in_ms - idle_time_in_ms);
+        static_cast<int>(-deadline_difference));
   }
 
   if ((FLAG_trace_idle_notification && action.type > DO_NOTHING) ||
       FLAG_trace_idle_notification_verbose) {
-    PrintF("Idle notification: requested idle time %d ms, actual time %d ms [",
-           idle_time_in_ms, actual_time_in_ms);
+    PrintF(
+        "Idle notification: requested idle time %.2f ms, used idle time %.2f "
+        "ms, deadline usage %.2f ms [",
+        idle_time_in_ms, idle_time_in_ms - deadline_difference,
+        deadline_difference);
     action.Print();
     PrintF("]");
     if (FLAG_trace_idle_notification_verbose) {
@@ -4512,6 +4608,13 @@ bool Heap::IdleNotification(int idle_time_in_ms) {
 
   contexts_disposed_ = 0;
   return result;
+}
+
+
+bool Heap::RecentIdleNotifcationHappened() {
+  return (last_idle_notification_time_ +
+          GCIdleTimeHandler::kMaxFrameRenderingIdleTime) >
+         MonotonicallyIncreasingTimeInMs();
 }
 
 
@@ -5085,6 +5188,13 @@ bool Heap::ConfigureHeap(int max_semi_space_size, int max_old_space_size,
       Max(static_cast<intptr_t>(paged_space_count * Page::kPageSize),
           max_old_generation_size_);
 
+  if (FLAG_initial_old_space_size > 0) {
+    initial_old_generation_size_ = FLAG_initial_old_space_size * MB;
+  } else {
+    initial_old_generation_size_ = max_old_generation_size_ / 2;
+  }
+  old_generation_allocation_limit_ = initial_old_generation_size_;
+
   // We rely on being able to allocate new arrays in paged spaces.
   DCHECK(Page::kMaxRegularHeapObjectSize >=
          (JSArray::kSize +
@@ -5467,7 +5577,6 @@ void Heap::TearDown() {
   }
 
   store_buffer()->TearDown();
-  incremental_marking()->TearDown();
 
   isolate_->memory_allocator()->TearDown();
 }

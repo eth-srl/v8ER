@@ -29,12 +29,6 @@ class JSBuiltinReducerTest : public TypedGraphTest {
     return reducer.Reduce(node);
   }
 
-  Node* Parameter(Type* t, int32_t index = 0) {
-    Node* n = graph()->NewNode(common()->Parameter(index), graph()->start());
-    NodeProperties::SetBounds(n, Bounds(Type::None(), t));
-    return n;
-  }
-
   Handle<JSFunction> MathFunction(const char* name) {
     Handle<Object> m =
         JSObject::GetProperty(isolate()->global_object(),
@@ -58,11 +52,12 @@ namespace {
 
 // TODO(mstarzinger): Find a common place and unify with test-js-typed-lowering.
 Type* const kNumberTypes[] = {
-    Type::UnsignedSmall(),   Type::OtherSignedSmall(), Type::OtherUnsigned31(),
-    Type::OtherUnsigned32(), Type::OtherSigned32(),    Type::SignedSmall(),
-    Type::Signed32(),        Type::Unsigned32(),       Type::Integral32(),
-    Type::MinusZero(),       Type::NaN(),              Type::OtherNumber(),
-    Type::OrderedNumber(),   Type::Number()};
+    Type::UnsignedSmall(),       Type::NegativeSigned32(),
+    Type::NonNegativeSigned32(), Type::SignedSmall(),
+    Type::Signed32(),            Type::Unsigned32(),
+    Type::Integral32(),          Type::MinusZero(),
+    Type::NaN(),                 Type::OrderedNumber(),
+    Type::PlainNumber(),         Type::Number()};
 
 }  // namespace
 

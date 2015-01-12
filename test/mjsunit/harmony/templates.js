@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --harmony-templates
+// Flags: --harmony-templates --harmony-unicode
 
 var num = 5;
 var str = "str";
@@ -253,7 +253,7 @@ var obj = {
   //   The TRV of CharacterEscapeSequence :: NonEscapeCharacter is the CV of the
   //   NonEscapeCharacter.
   calls = 0;
-  (function(s) { calls++; assertEquals("\u005Cx", s.raw[0]); })`\x`;
+  (function(s) { calls++; assertEquals("\u005Cz", s.raw[0]); })`\z`;
   assertEquals(1, calls);
 
   // The TRV of LineTerminatorSequence :: <LF> is the code unit value 0x000A.
@@ -427,4 +427,81 @@ var obj = {
   });
   function tag(){}
   tag`a${1}b`;
+})();
+
+
+(function testRawLineNormalization() {
+  function raw0(callSiteObj) {
+    return callSiteObj.raw[0];
+  }
+  assertEquals(eval("raw0`\r`"), "\n");
+  assertEquals(eval("raw0`\r\n`"), "\n");
+  assertEquals(eval("raw0`\r\r\n`"), "\n\n");
+  assertEquals(eval("raw0`\r\n\r\n`"), "\n\n");
+  assertEquals(eval("raw0`\r\r\r\n`"), "\n\n\n");
+})();
+
+
+(function testHarmonyUnicode() {
+  function raw0(callSiteObj) {
+    return callSiteObj.raw[0];
+  }
+  assertEquals(raw0`a\u{62}c`, "a\\u{62}c");
+  assertEquals(raw0`a\u{000062}c`, "a\\u{000062}c");
+  assertEquals(raw0`a\u{0}c`, "a\\u{0}c");
+
+  assertEquals(`a\u{62}c`, "abc");
+  assertEquals(`a\u{000062}c`, "abc");
+})();
+
+
+(function testLiteralAfterRightBrace() {
+  // Regression test for https://code.google.com/p/v8/issues/detail?id=3734
+  function f() {}
+  `abc`;
+
+  function g() {}`def`;
+
+  {
+    // block
+  }
+  `ghi`;
+
+  {
+    // block
+  }`jkl`;
+})();
+
+
+(function testLegacyOctal() {
+  assertEquals('\u0000', `\0`);
+  assertEquals('\u0000a', `\0a`);
+  for (var i = 0; i < 8; i++) {
+    var code = "`\\0" + i + "`";
+    assertThrows(code, SyntaxError);
+    code = "(function(){})" + code;
+    assertThrows(code, SyntaxError);
+  }
+
+  assertEquals('\\0', String.raw`\0`);
+})();
+
+
+(function testSyntaxErrorsNonEscapeCharacter() {
+  assertThrows("`\\x`", SyntaxError);
+  assertThrows("`\\u`", SyntaxError);
+  for (var i = 1; i < 8; i++) {
+    var code = "`\\" + i + "`";
+    assertThrows(code, SyntaxError);
+    code = "(function(){})" + code;
+    assertThrows(code, SyntaxError);
+  }
+})();
+
+
+(function testValidNumericEscapes() {
+  assertEquals("8", `\8`);
+  assertEquals("9", `\9`);
+  assertEquals("\u00008", `\08`);
+  assertEquals("\u00009", `\09`);
 })();

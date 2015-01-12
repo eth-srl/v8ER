@@ -52,6 +52,7 @@ var kMessages = {
   apply_wrong_args:              ["Function.prototype.apply: Arguments list has wrong type"],
   toMethod_non_function:         ["Function.prototype.toMethod was called on ", "%0", ", which is a ", "%1", " and not a function"],
   toMethod_non_object:           ["Function.prototype.toMethod: home object ", "%0", " is not an object"],
+  flags_getter_non_object:       ["RegExp.prototype.flags getter called on non-object ", "%0"],
   invalid_in_operator_use:       ["Cannot use 'in' operator to search for '", "%0", "' in ", "%1"],
   instanceof_function_expected:  ["Expecting a function in instanceof check, but got ", "%0"],
   instanceof_nonobject_proto:    ["Function has non-object prototype '", "%0", "' in instanceof check"],
@@ -153,6 +154,7 @@ var kMessages = {
   too_many_variables:            ["Too many variables declared (only 4194303 allowed)"],
   strict_param_dupe:             ["Strict mode function may not have duplicate parameter names"],
   strict_octal_literal:          ["Octal literals are not allowed in strict mode."],
+  template_octal_literal:        ["Octal literals are not allowed in template strings."],
   strict_duplicate_property:     ["Duplicate data property in object literal not allowed in strict mode"],
   accessor_data_property:        ["Object literal may not have data and accessor property with the same name"],
   accessor_get_set:              ["Object literal may not have multiple get/set accessors with the same name"],
@@ -1151,7 +1153,7 @@ var StackTraceGetter = function() {
       if (IS_UNDEFINED(stack_trace)) {
         // Neither formatted nor structured stack trace available.
         // Look further up the prototype chain.
-        holder = %GetPrototype(holder);
+        holder = %_GetPrototype(holder);
         continue;
       }
       formatted_stack_trace = FormatStackTrace(holder, stack_trace);
@@ -1255,7 +1257,7 @@ function GetPropertyWithoutInvokingMonkeyGetters(error, name) {
   var current = error;
   // Climb the prototype chain until we find the holder.
   while (current && !%HasOwnProperty(current, name)) {
-    current = %GetPrototype(current);
+    current = %_GetPrototype(current);
   }
   if (IS_NULL(current)) return UNDEFINED;
   if (!IS_OBJECT(current)) return error[name];

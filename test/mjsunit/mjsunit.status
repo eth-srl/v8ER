@@ -51,6 +51,9 @@
   # Issue 3389: deopt_every_n_garbage_collections is unsafe
   'regress/regress-2653': [SKIP],
 
+  # Issue 3784: setters-on-elements is flaky
+  'setters-on-elements': [PASS, FAIL],
+
   ##############################################################################
   # TurboFan compiler failures.
 
@@ -174,7 +177,7 @@
   ##############################################################################
   # Tests verifying CHECK and ASSERT.
   'verify-check-false': [FAIL, NO_VARIANTS],
-  'verify-assert-false': [NO_VARIANTS, ['mode == release', PASS], ['mode == debug', FAIL]],
+  'verify-assert-false': [NO_VARIANTS, ['mode == release and dcheck_always_on == False', PASS], ['mode == debug or dcheck_always_on == True', FAIL]],
 
   ##############################################################################
   # Tests with different versions for release and debug.
@@ -249,6 +252,8 @@
 
   # Issue 3723.
   'regress/regress-3717': [SKIP],
+  # Issue 3776.
+  'debug-stepframe': [SKIP],
 }],  # 'gc_stress == True'
 
 ##############################################################################

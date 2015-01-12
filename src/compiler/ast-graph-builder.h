@@ -26,7 +26,8 @@ class LoopBuilder;
 // of function inlining.
 class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
  public:
-  AstGraphBuilder(Zone* local_zone, CompilationInfo* info, JSGraph* jsgraph);
+  AstGraphBuilder(Zone* local_zone, CompilationInfo* info, JSGraph* jsgraph,
+                  LoopAssignmentAnalysis* loop_assignment = NULL);
 
   // Creates a graph by visiting the entire AST.
   bool CreateGraph();
@@ -56,7 +57,7 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
   // Support for control flow builders. The concrete type of the environment
   // depends on the graph builder, but environments themselves are not virtual.
   typedef StructuredGraphBuilder::Environment BaseEnvironment;
-  virtual BaseEnvironment* CopyEnvironment(BaseEnvironment* env) OVERRIDE;
+  BaseEnvironment* CopyEnvironment(BaseEnvironment* env) OVERRIDE;
 
   // Getters for values in the activation record.
   Node* GetFunctionClosure();
@@ -113,13 +114,13 @@ class AstGraphBuilder : public StructuredGraphBuilder, public AstVisitor {
   // Builder for stack-check guards.
   Node* BuildStackCheck();
 
-#define DECLARE_VISIT(type) virtual void Visit##type(type* node) OVERRIDE;
+#define DECLARE_VISIT(type) void Visit##type(type* node) OVERRIDE;
   // Visiting functions for AST nodes make this an AstVisitor.
   AST_NODE_LIST(DECLARE_VISIT)
 #undef DECLARE_VISIT
 
   // Visiting function for declarations list is overridden.
-  virtual void VisitDeclarations(ZoneList<Declaration*>* declarations) OVERRIDE;
+  void VisitDeclarations(ZoneList<Declaration*>* declarations) OVERRIDE;
 
  private:
   CompilationInfo* info_;
@@ -346,9 +347,9 @@ class AstGraphBuilder::AstEffectContext FINAL : public AstContext {
  public:
   explicit AstEffectContext(AstGraphBuilder* owner)
       : AstContext(owner, Expression::kEffect) {}
-  virtual ~AstEffectContext();
-  virtual void ProduceValue(Node* value) OVERRIDE;
-  virtual Node* ConsumeValue() OVERRIDE;
+  ~AstEffectContext() FINAL;
+  void ProduceValue(Node* value) FINAL;
+  Node* ConsumeValue() FINAL;
 };
 
 
@@ -357,9 +358,9 @@ class AstGraphBuilder::AstValueContext FINAL : public AstContext {
  public:
   explicit AstValueContext(AstGraphBuilder* owner)
       : AstContext(owner, Expression::kValue) {}
-  virtual ~AstValueContext();
-  virtual void ProduceValue(Node* value) OVERRIDE;
-  virtual Node* ConsumeValue() OVERRIDE;
+  ~AstValueContext() FINAL;
+  void ProduceValue(Node* value) FINAL;
+  Node* ConsumeValue() FINAL;
 };
 
 
@@ -368,9 +369,9 @@ class AstGraphBuilder::AstTestContext FINAL : public AstContext {
  public:
   explicit AstTestContext(AstGraphBuilder* owner)
       : AstContext(owner, Expression::kTest) {}
-  virtual ~AstTestContext();
-  virtual void ProduceValue(Node* value) OVERRIDE;
-  virtual Node* ConsumeValue() OVERRIDE;
+  ~AstTestContext() FINAL;
+  void ProduceValue(Node* value) FINAL;
+  Node* ConsumeValue() FINAL;
 };
 
 

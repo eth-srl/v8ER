@@ -24,6 +24,18 @@ class Arm64OperandConverter FINAL : public InstructionOperandConverter {
   Arm64OperandConverter(CodeGenerator* gen, Instruction* instr)
       : InstructionOperandConverter(gen, instr) {}
 
+  DoubleRegister InputFloat32Register(int index) {
+    return InputDoubleRegister(index).S();
+  }
+
+  DoubleRegister InputFloat64Register(int index) {
+    return InputDoubleRegister(index);
+  }
+
+  DoubleRegister OutputFloat32Register() { return OutputDoubleRegister().S(); }
+
+  DoubleRegister OutputFloat64Register() { return OutputDoubleRegister(); }
+
   Register InputRegister32(int index) {
     return ToRegister(instr_->InputAt(index)).W();
   }
@@ -106,9 +118,8 @@ class Arm64OperandConverter FINAL : public InstructionOperandConverter {
     return MemOperand(no_reg);
   }
 
-  MemOperand MemoryOperand() {
-    int index = 0;
-    return MemoryOperand(&index);
+  MemOperand MemoryOperand(int first_index = 0) {
+    return MemoryOperand(&first_index);
   }
 
   Operand ToOperand(InstructionOperand* op) {
@@ -163,6 +174,106 @@ class Arm64OperandConverter FINAL : public InstructionOperandConverter {
 };
 
 
+namespace {
+
+class OutOfLineLoadNaN32 FINAL : public OutOfLineCode {
+ public:
+  OutOfLineLoadNaN32(CodeGenerator* gen, DoubleRegister result)
+      : OutOfLineCode(gen), result_(result) {}
+
+  void Generate() FINAL {
+    __ Fmov(result_, std::numeric_limits<float>::quiet_NaN());
+  }
+
+ private:
+  DoubleRegister const result_;
+};
+
+
+class OutOfLineLoadNaN64 FINAL : public OutOfLineCode {
+ public:
+  OutOfLineLoadNaN64(CodeGenerator* gen, DoubleRegister result)
+      : OutOfLineCode(gen), result_(result) {}
+
+  void Generate() FINAL {
+    __ Fmov(result_, std::numeric_limits<double>::quiet_NaN());
+  }
+
+ private:
+  DoubleRegister const result_;
+};
+
+
+class OutOfLineLoadZero FINAL : public OutOfLineCode {
+ public:
+  OutOfLineLoadZero(CodeGenerator* gen, Register result)
+      : OutOfLineCode(gen), result_(result) {}
+
+  void Generate() FINAL { __ Mov(result_, 0); }
+
+ private:
+  Register const result_;
+};
+
+}  // namespace
+
+
+#define ASSEMBLE_CHECKED_LOAD_FLOAT(width)                         \
+  do {                                                             \
+    auto result = i.OutputFloat##width##Register();                \
+    auto buffer = i.InputRegister(0);                              \
+    auto offset = i.InputRegister32(1);                            \
+    auto length = i.InputOperand32(2);                             \
+    __ Cmp(offset, length);                                        \
+    auto ool = new (zone()) OutOfLineLoadNaN##width(this, result); \
+    __ B(hs, ool->entry());                                        \
+    __ Ldr(result, MemOperand(buffer, offset, UXTW));              \
+    __ Bind(ool->exit());                                          \
+  } while (0)
+
+
+#define ASSEMBLE_CHECKED_LOAD_INTEGER(asm_instr)             \
+  do {                                                       \
+    auto result = i.OutputRegister32();                      \
+    auto buffer = i.InputRegister(0);                        \
+    auto offset = i.InputRegister32(1);                      \
+    auto length = i.InputOperand32(2);                       \
+    __ Cmp(offset, length);                                  \
+    auto ool = new (zone()) OutOfLineLoadZero(this, result); \
+    __ B(hs, ool->entry());                                  \
+    __ asm_instr(result, MemOperand(buffer, offset, UXTW));  \
+    __ Bind(ool->exit());                                    \
+  } while (0)
+
+
+#define ASSEMBLE_CHECKED_STORE_FLOAT(width)          \
+  do {                                               \
+    auto buffer = i.InputRegister(0);                \
+    auto offset = i.InputRegister32(1);              \
+    auto length = i.InputOperand32(2);               \
+    auto value = i.InputFloat##width##Register(3);   \
+    __ Cmp(offset, length);                          \
+    Label done;                                      \
+    __ B(hs, &done);                                 \
+    __ Str(value, MemOperand(buffer, offset, UXTW)); \
+    __ Bind(&done);                                  \
+  } while (0)
+
+
+#define ASSEMBLE_CHECKED_STORE_INTEGER(asm_instr)          \
+  do {                                                     \
+    auto buffer = i.InputRegister(0);                      \
+    auto offset = i.InputRegister32(1);                    \
+    auto length = i.InputOperand32(2);                     \
+    auto value = i.InputRegister32(3);                     \
+    __ Cmp(offset, length);                                \
+    Label done;                                            \
+    __ B(hs, &done);                                       \
+    __ asm_instr(value, MemOperand(buffer, offset, UXTW)); \
+    __ Bind(&done);                                        \
+  } while (0)
+
+
 #define ASSEMBLE_SHIFT(asm_instr, width)                                       \
   do {                                                                         \
     if (instr->InputAt(1)->IsRegister()) {                                     \
@@ -172,13 +283,6 @@ class Arm64OperandConverter FINAL : public InstructionOperandConverter {
       int64_t imm = i.InputOperand##width(1).immediate().value();              \
       __ asm_instr(i.OutputRegister##width(), i.InputRegister##width(0), imm); \
     }                                                                          \
-  } while (0)
-
-
-#define ASSEMBLE_BRANCH_TO(target)                    \
-  do {                                                \
-    bool fallthrough = IsNextInAssemblyOrder(target); \
-    if (!fallthrough) __ B(GetLabel(target));         \
   } while (0)
 
 
@@ -436,29 +540,12 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       __ Ubfx(i.OutputRegister32(), i.InputRegister32(0), i.InputInt8(1),
               i.InputInt8(2));
       break;
-    case kArm64Tbz:
-      __ Tbz(i.InputRegister64(0), i.InputInt6(1), GetLabel(i.InputRpo(2)));
-      ASSEMBLE_BRANCH_TO(i.InputRpo(3));
+    case kArm64TestAndBranch32:
+    case kArm64TestAndBranch:
+      // Pseudo instructions turned into tbz/tbnz in AssembleArchBranch.
       break;
-    case kArm64Tbz32:
-      __ Tbz(i.InputRegister32(0), i.InputInt5(1), GetLabel(i.InputRpo(2)));
-      ASSEMBLE_BRANCH_TO(i.InputRpo(3));
-      break;
-    case kArm64Tbnz:
-      __ Tbnz(i.InputRegister64(0), i.InputInt6(1), GetLabel(i.InputRpo(2)));
-      ASSEMBLE_BRANCH_TO(i.InputRpo(3));
-      break;
-    case kArm64Tbnz32:
-      __ Tbnz(i.InputRegister32(0), i.InputInt5(1), GetLabel(i.InputRpo(2)));
-      ASSEMBLE_BRANCH_TO(i.InputRpo(3));
-      break;
-    case kArm64Cbz32:
-      __ Cbz(i.InputRegister32(0), GetLabel(i.InputRpo(1)));
-      ASSEMBLE_BRANCH_TO(i.InputRpo(2));
-      break;
-    case kArm64Cbnz32:
-      __ Cbnz(i.InputRegister32(0), GetLabel(i.InputRpo(1)));
-      ASSEMBLE_BRANCH_TO(i.InputRpo(2));
+    case kArm64CompareAndBranch32:
+      // Pseudo instruction turned into cbz/cbnz in AssembleArchBranch.
       break;
     case kArm64Claim: {
       int words = MiscField::decode(instr->opcode());
@@ -616,6 +703,42 @@ void CodeGenerator::AssembleArchInstruction(Instruction* instr) {
       }
       break;
     }
+    case kCheckedLoadInt8:
+      ASSEMBLE_CHECKED_LOAD_INTEGER(Ldrsb);
+      break;
+    case kCheckedLoadUint8:
+      ASSEMBLE_CHECKED_LOAD_INTEGER(Ldrb);
+      break;
+    case kCheckedLoadInt16:
+      ASSEMBLE_CHECKED_LOAD_INTEGER(Ldrsh);
+      break;
+    case kCheckedLoadUint16:
+      ASSEMBLE_CHECKED_LOAD_INTEGER(Ldrh);
+      break;
+    case kCheckedLoadWord32:
+      ASSEMBLE_CHECKED_LOAD_INTEGER(Ldr);
+      break;
+    case kCheckedLoadFloat32:
+      ASSEMBLE_CHECKED_LOAD_FLOAT(32);
+      break;
+    case kCheckedLoadFloat64:
+      ASSEMBLE_CHECKED_LOAD_FLOAT(64);
+      break;
+    case kCheckedStoreWord8:
+      ASSEMBLE_CHECKED_STORE_INTEGER(Strb);
+      break;
+    case kCheckedStoreWord16:
+      ASSEMBLE_CHECKED_STORE_INTEGER(Strh);
+      break;
+    case kCheckedStoreWord32:
+      ASSEMBLE_CHECKED_STORE_INTEGER(Str);
+      break;
+    case kCheckedStoreFloat32:
+      ASSEMBLE_CHECKED_STORE_FLOAT(32);
+      break;
+    case kCheckedStoreFloat64:
+      ASSEMBLE_CHECKED_STORE_FLOAT(64);
+      break;
   }
 }
 
@@ -625,61 +748,102 @@ void CodeGenerator::AssembleArchBranch(Instruction* instr, BranchInfo* branch) {
   Arm64OperandConverter i(this, instr);
   Label* tlabel = branch->true_label;
   Label* flabel = branch->false_label;
-  switch (branch->condition) {
-    case kUnorderedEqual:
-      __ B(vs, flabel);
-    // Fall through.
-    case kEqual:
-      __ B(eq, tlabel);
-      break;
-    case kUnorderedNotEqual:
-      __ B(vs, tlabel);
-    // Fall through.
-    case kNotEqual:
-      __ B(ne, tlabel);
-      break;
-    case kSignedLessThan:
-      __ B(lt, tlabel);
-      break;
-    case kSignedGreaterThanOrEqual:
-      __ B(ge, tlabel);
-      break;
-    case kSignedLessThanOrEqual:
-      __ B(le, tlabel);
-      break;
-    case kSignedGreaterThan:
-      __ B(gt, tlabel);
-      break;
-    case kUnorderedLessThan:
-      __ B(vs, flabel);
-    // Fall through.
-    case kUnsignedLessThan:
-      __ B(lo, tlabel);
-      break;
-    case kUnorderedGreaterThanOrEqual:
-      __ B(vs, tlabel);
-    // Fall through.
-    case kUnsignedGreaterThanOrEqual:
-      __ B(hs, tlabel);
-      break;
-    case kUnorderedLessThanOrEqual:
-      __ B(vs, flabel);
-    // Fall through.
-    case kUnsignedLessThanOrEqual:
-      __ B(ls, tlabel);
-      break;
-    case kUnorderedGreaterThan:
-      __ B(vs, tlabel);
-    // Fall through.
-    case kUnsignedGreaterThan:
-      __ B(hi, tlabel);
-      break;
-    case kOverflow:
-      __ B(vs, tlabel);
-      break;
-    case kNotOverflow:
-      __ B(vc, tlabel);
-      break;
+  FlagsCondition condition = branch->condition;
+  ArchOpcode opcode = instr->arch_opcode();
+
+  if (opcode == kArm64CompareAndBranch32) {
+    switch (condition) {
+      case kEqual:
+        __ Cbz(i.InputRegister32(0), tlabel);
+        break;
+      case kNotEqual:
+        __ Cbnz(i.InputRegister32(0), tlabel);
+        break;
+      default:
+        UNREACHABLE();
+    }
+  } else if (opcode == kArm64TestAndBranch32) {
+    switch (condition) {
+      case kEqual:
+        __ Tbz(i.InputRegister32(0), i.InputInt5(1), tlabel);
+        break;
+      case kNotEqual:
+        __ Tbnz(i.InputRegister32(0), i.InputInt5(1), tlabel);
+        break;
+      default:
+        UNREACHABLE();
+    }
+  } else if (opcode == kArm64TestAndBranch) {
+    switch (condition) {
+      case kEqual:
+        __ Tbz(i.InputRegister64(0), i.InputInt6(1), tlabel);
+        break;
+      case kNotEqual:
+        __ Tbnz(i.InputRegister64(0), i.InputInt6(1), tlabel);
+        break;
+      default:
+        UNREACHABLE();
+    }
+  } else {
+    switch (condition) {
+      case kUnorderedEqual:
+        // The "eq" condition will not catch the unordered case.
+        // The jump/fall through to false label will be used if the comparison
+        // was unordered.
+      case kEqual:
+        __ B(eq, tlabel);
+        break;
+      case kUnorderedNotEqual:
+        // Unordered or not equal can be tested with "ne" condtion.
+        // See ARMv8 manual C1.2.3 - Condition Code.
+      case kNotEqual:
+        __ B(ne, tlabel);
+        break;
+      case kSignedLessThan:
+        __ B(lt, tlabel);
+        break;
+      case kSignedGreaterThanOrEqual:
+        __ B(ge, tlabel);
+        break;
+      case kSignedLessThanOrEqual:
+        __ B(le, tlabel);
+        break;
+      case kSignedGreaterThan:
+        __ B(gt, tlabel);
+        break;
+      case kUnorderedLessThan:
+        // The "lo" condition will not catch the unordered case.
+        // The jump/fall through to false label will be used if the comparison
+        // was unordered.
+      case kUnsignedLessThan:
+        __ B(lo, tlabel);
+        break;
+      case kUnorderedGreaterThanOrEqual:
+        // Unordered, greater than or equal can be tested with "hs" condtion.
+        // See ARMv8 manual C1.2.3 - Condition Code.
+      case kUnsignedGreaterThanOrEqual:
+        __ B(hs, tlabel);
+        break;
+      case kUnorderedLessThanOrEqual:
+        // The "ls" condition will not catch the unordered case.
+        // The jump/fall through to false label will be used if the comparison
+        // was unordered.
+      case kUnsignedLessThanOrEqual:
+        __ B(ls, tlabel);
+        break;
+      case kUnorderedGreaterThan:
+        // Unordered or greater than can be tested with "hi" condtion.
+        // See ARMv8 manual C1.2.3 - Condition Code.
+      case kUnsignedGreaterThan:
+        __ B(hi, tlabel);
+        break;
+      case kOverflow:
+        __ B(vs, tlabel);
+        break;
+      case kNotOverflow:
+        __ B(vc, tlabel);
+        break;
+    }
   }
   if (!branch->fallthru) __ B(flabel);  // no fallthru to flabel.
 }
@@ -770,7 +934,7 @@ void CodeGenerator::AssembleArchBoolean(Instruction* instr,
       cc = vc;
       break;
   }
-  __ bind(&check);
+  __ Bind(&check);
   __ Cset(reg, cc);
   __ Bind(&done);
 }

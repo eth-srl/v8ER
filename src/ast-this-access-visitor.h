@@ -15,7 +15,7 @@ class AstThisAccessVisitor : public AstVisitor {
 
   bool UsesThis() { return uses_this_; }
 
-#define DECLARE_VISIT(type) virtual void Visit##type(type* node);
+#define DECLARE_VISIT(type) void Visit##type(type* node) OVERRIDE;
   AST_NODE_LIST(DECLARE_VISIT)
 #undef DECLARE_VISIT
 
@@ -30,5 +30,5 @@ class AstThisAccessVisitor : public AstVisitor {
   DISALLOW_COPY_AND_ASSIGN(AstThisAccessVisitor);
 };
 }
-}  // namespace v8::intrenal
+}  // namespace v8::internal
 #endif  // V8_AST_THIS_ACCESS_VISITOR_H_

@@ -5,6 +5,7 @@
 #ifndef V8_ISOLATE_H_
 #define V8_ISOLATE_H_
 
+#include <queue>
 #include "include/v8-debug.h"
 #include "src/allocation.h"
 #include "src/assert-scope.h"
@@ -390,8 +391,6 @@ typedef List<HeapObject*> DebugObjectCache;
   V(bool, fp_stubs_generated, false)                                           \
   V(int, max_available_threads, 0)                                             \
   V(uint32_t, per_isolate_assert_data, 0xFFFFFFFFu)                            \
-  V(InterruptCallback, api_interrupt_callback, NULL)                           \
-  V(void*, api_interrupt_callback_data, NULL)                                  \
   V(PromiseRejectCallback, promise_reject_callback, NULL)                      \
   V(int, function_id, 1)                                                       \
   ISOLATE_INIT_SIMULATOR_LIST(V)
@@ -763,6 +762,8 @@ class Isolate {
   bool MayIndexedAccess(Handle<JSObject> receiver,
                         uint32_t index,
                         v8::AccessType type);
+  bool IsInternallyUsedPropertyName(Handle<Object> name);
+  bool IsInternallyUsedPropertyName(Object* name);
 
   void SetFailedAccessCheckCallback(v8::FailedAccessCheckCallback callback);
   void ReportFailedAccessCheck(Handle<JSObject> receiver, v8::AccessType type);
@@ -815,7 +816,8 @@ class Isolate {
   Object* TerminateExecution();
   void CancelTerminateExecution();
 
-  void InvokeApiInterruptCallback();
+  void RequestInterrupt(InterruptCallback callback, void* data);
+  void InvokeApiInterruptCallbacks();
 
   // Administration
   void Iterate(ObjectVisitor* v);
@@ -1233,7 +1235,6 @@ class Isolate {
   Counters* counters_;
   CodeRange* code_range_;
   base::RecursiveMutex break_access_;
-  base::Atomic32 debugger_initialized_;
   Logger* logger_;
   StackGuard stack_guard_;
   StatsTable* stats_table_;
@@ -1293,6 +1294,9 @@ class Isolate {
   CpuProfiler* cpu_profiler_;
   HeapProfiler* heap_profiler_;
   FunctionEntryHook function_entry_hook_;
+
+  typedef std::pair<InterruptCallback, void*> InterruptEntry;
+  std::queue<InterruptEntry> api_interrupts_queue_;
 
 #define GLOBAL_BACKING_STORE(type, name, initialvalue)                         \
   type name##_;

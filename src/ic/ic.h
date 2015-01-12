@@ -76,14 +76,6 @@ class IC {
     state_ = PROTOTYPE_FAILURE;
   }
 
-  // If the stub contains weak maps then this function adds the stub to
-  // the dependent code array of each weak map.
-  static void RegisterWeakMapDependency(Handle<Code> stub);
-
-  // This function is called when a weak map in the stub is dying,
-  // invalidates the stub by setting maps in it to undefined.
-  static void InvalidateMaps(Code* stub);
-
   // Clear the inline cache to initial state.
   static void Clear(Isolate* isolate, Address address,
                     ConstantPoolArray* constant_pool);
@@ -133,6 +125,12 @@ class IC {
   static Handle<HeapType> CurrentTypeOf(Handle<Object> object,
                                         Isolate* isolate);
 
+  static bool ICUseVector(Code::Kind kind) {
+    return (FLAG_vector_ics &&
+            (kind == Code::LOAD_IC || kind == Code::KEYED_LOAD_IC)) ||
+           kind == Code::CALL_IC;
+  }
+
  protected:
   // Get the call-site target; used for determining the state.
   Handle<Code> target() const { return target_; }
@@ -151,12 +149,6 @@ class IC {
   // Set the call-site target.
   inline void set_target(Code* code);
   bool is_target_set() { return target_set_; }
-
-  static bool ICUseVector(Code::Kind kind) {
-    return (FLAG_vector_ics &&
-            (kind == Code::LOAD_IC || kind == Code::KEYED_LOAD_IC)) ||
-           kind == Code::CALL_IC;
-  }
 
   bool UseVector() const {
     bool use = ICUseVector(kind());
@@ -433,7 +425,7 @@ class LoadIC : public IC {
     }
   }
 
-  virtual Handle<Code> megamorphic_stub() OVERRIDE;
+  Handle<Code> megamorphic_stub() OVERRIDE;
 
   // Update the inline cache and the global stub cache based on the
   // lookup result.
@@ -459,6 +451,19 @@ class LoadIC : public IC {
 
 class KeyedLoadIC : public LoadIC {
  public:
+  // ExtraICState bits (building on IC)
+  class IcCheckTypeField : public BitField<IcCheckType, 1, 1> {};
+
+  static ExtraICState ComputeExtraICState(ContextualMode contextual_mode,
+                                          IcCheckType key_type) {
+    return LoadICState(contextual_mode).GetExtraICState() |
+           IcCheckTypeField::encode(key_type);
+  }
+
+  static IcCheckType GetKeyType(ExtraICState extra_state) {
+    return IcCheckTypeField::decode(extra_state);
+  }
+
   KeyedLoadIC(FrameDepth depth, Isolate* isolate,
               KeyedLoadICNexus* nexus = NULL)
       : LoadIC(depth, isolate, nexus) {
@@ -554,7 +559,7 @@ class StoreIC : public IC {
                       JSReceiver::StoreFromKeyed store_mode);
 
  protected:
-  virtual Handle<Code> megamorphic_stub() OVERRIDE;
+  Handle<Code> megamorphic_stub() OVERRIDE;
 
   // Stub accessors.
   Handle<Code> generic_stub() const;

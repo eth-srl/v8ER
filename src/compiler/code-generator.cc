@@ -27,7 +27,8 @@ CodeGenerator::CodeGenerator(Frame* frame, Linkage* linkage,
       deoptimization_states_(code->zone()),
       deoptimization_literals_(code->zone()),
       translations_(code->zone()),
-      last_lazy_deopt_pc_(0) {
+      last_lazy_deopt_pc_(0),
+      ools_(nullptr) {
   for (int i = 0; i < code->InstructionBlockCount(); ++i) {
     new (&labels_[i]) Label;
   }
@@ -56,6 +57,8 @@ Handle<Code> CodeGenerator::GenerateCode() {
       if (block->IsDeferred() == (deferred == 0)) {
         continue;
       }
+      // Align loop headers on 16-byte boundaries.
+      if (block->IsLoopHeader()) masm()->Align(16);
       // Bind a label for a block.
       current_block_ = block->rpo_number();
       if (FLAG_code_comments) {
@@ -71,9 +74,19 @@ Handle<Code> CodeGenerator::GenerateCode() {
     }
   }
 
+  // Assemble all out-of-line code.
+  if (ools_) {
+    masm()->RecordComment("-- Out of line code --");
+    for (OutOfLineCode* ool = ools_; ool; ool = ool->next()) {
+      masm()->bind(ool->entry());
+      ool->Generate();
+      masm()->jmp(ool->exit());
+    }
+  }
+
   FinishCode(masm());
 
-  // Ensure there is space for lazy deopt.
+  // Ensure there is space for lazy deoptimization in the code.
   if (!info->IsStub()) {
     int target_offset = masm()->pc_offset() + Deoptimizer::patch_size();
     while (masm()->pc_offset() < target_offset) {
@@ -95,6 +108,11 @@ Handle<Code> CodeGenerator::GenerateCode() {
   result->set_safepoint_table_offset(safepoints()->GetCodeOffset());
 
   PopulateDeoptimizationData(result);
+
+  // Ensure there is space for lazy deoptimization in the relocation info.
+  if (!info->IsStub()) {
+    Deoptimizer::EnsureRelocSpaceForLazyDeoptimization(result);
+  }
 
   // Emit a code line info recording stop event.
   void* line_info = recorder->DetachJITHandlerData();
@@ -554,6 +572,15 @@ void CodeGenerator::AssembleSwap(InstructionOperand* source,
 void CodeGenerator::AddNopForSmiCodeInlining() { UNIMPLEMENTED(); }
 
 #endif  // !V8_TURBOFAN_BACKEND
+
+
+OutOfLineCode::OutOfLineCode(CodeGenerator* gen)
+    : masm_(gen->masm()), next_(gen->ools_) {
+  gen->ools_ = this;
+}
+
+
+OutOfLineCode::~OutOfLineCode() {}
 
 }  // namespace compiler
 }  // namespace internal

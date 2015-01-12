@@ -805,6 +805,7 @@ Parser::Parser(CompilationInfo* info, ParseInfo* parse_info)
   set_allow_harmony_object_literals(FLAG_harmony_object_literals);
   set_allow_harmony_templates(FLAG_harmony_templates);
   set_allow_harmony_sloppy(FLAG_harmony_sloppy);
+  set_allow_harmony_unicode(FLAG_harmony_unicode);
   for (int feature = 0; feature < v8::Isolate::kUseCounterFeatureCount;
        ++feature) {
     use_counts_[feature] = 0;
@@ -835,7 +836,6 @@ FunctionLiteral* Parser::ParseProgram() {
   // Initialize parser state.
   CompleteParserRecorder recorder;
 
-  debug_saved_compile_options_ = compile_options();
   if (produce_cached_parse_data()) {
     log_ = &recorder;
   } else if (consume_cached_parse_data()) {
@@ -936,7 +936,7 @@ FunctionLiteral* Parser::DoParseProgram(CompilationInfo* info, Scope** scope,
                         &ok);
 
     if (ok && strict_mode() == STRICT) {
-      CheckOctalLiteral(beg_pos, scanner()->location().end_pos, &ok);
+      CheckStrictOctalLiteral(beg_pos, scanner()->location().end_pos, &ok);
     }
 
     if (ok && allow_harmony_scoping() && strict_mode() == STRICT) {
@@ -3803,9 +3803,8 @@ FunctionLiteral* Parser::ParseFunctionLiteral(
                                            CHECK_OK);
     }
     if (strict_mode() == STRICT) {
-      CheckOctalLiteral(scope->start_position(),
-                        scope->end_position(),
-                        CHECK_OK);
+      CheckStrictOctalLiteral(scope->start_position(), scope->end_position(),
+                              CHECK_OK);
     }
     if (allow_harmony_scoping() && strict_mode() == STRICT) {
       CheckConflictingVarDeclarations(scope, CHECK_OK);
@@ -3828,73 +3827,66 @@ void Parser::SkipLazyFunctionBody(const AstRawString* function_name,
                                   int* materialized_literal_count,
                                   int* expected_property_count,
                                   bool* ok) {
-  // Temporary debugging code for tracking down a mystery crash which should
-  // never happen. The crash happens on the line where we log the function in
-  // the preparse data: log_->LogFunction(...). TODO(marja): remove this once
-  // done.
-  CHECK(materialized_literal_count);
-  CHECK(expected_property_count);
-  CHECK(debug_saved_compile_options_ == compile_options());
   if (produce_cached_parse_data()) CHECK(log_);
 
   int function_block_pos = position();
-  if (consume_cached_parse_data()) {
+  if (consume_cached_parse_data() && !cached_parse_data_->rejected()) {
     // If we have cached data, we use it to skip parsing the function body. The
     // data contains the information we need to construct the lazy function.
     FunctionEntry entry =
         cached_parse_data_->GetFunctionEntry(function_block_pos);
-    // Check that cached data is valid.
-    CHECK(entry.is_valid());
-    // End position greater than end of stream is safe, and hard to check.
-    CHECK(entry.end_pos() > function_block_pos);
-    scanner()->SeekForward(entry.end_pos() - 1);
+    // Check that cached data is valid. If not, mark it as invalid (the embedder
+    // handles it). Note that end position greater than end of stream is safe,
+    // and hard to check.
+    if (entry.is_valid() && entry.end_pos() > function_block_pos) {
+      scanner()->SeekForward(entry.end_pos() - 1);
 
-    scope_->set_end_position(entry.end_pos());
-    Expect(Token::RBRACE, ok);
-    if (!*ok) {
+      scope_->set_end_position(entry.end_pos());
+      Expect(Token::RBRACE, ok);
+      if (!*ok) {
+        return;
+      }
+      total_preparse_skipped_ += scope_->end_position() - function_block_pos;
+      *materialized_literal_count = entry.literal_count();
+      *expected_property_count = entry.property_count();
+      scope_->SetStrictMode(entry.strict_mode());
       return;
     }
-    total_preparse_skipped_ += scope_->end_position() - function_block_pos;
-    *materialized_literal_count = entry.literal_count();
-    *expected_property_count = entry.property_count();
-    scope_->SetStrictMode(entry.strict_mode());
-  } else {
-    // With no cached data, we partially parse the function, without building an
-    // AST. This gathers the data needed to build a lazy function.
-    SingletonLogger logger;
-    PreParser::PreParseResult result =
-        ParseLazyFunctionBodyWithPreParser(&logger);
-    if (result == PreParser::kPreParseStackOverflow) {
-      // Propagate stack overflow.
-      set_stack_overflow();
-      *ok = false;
-      return;
-    }
-    if (logger.has_error()) {
-      ParserTraits::ReportMessageAt(
-          Scanner::Location(logger.start(), logger.end()),
-          logger.message(), logger.argument_opt(), logger.is_reference_error());
-      *ok = false;
-      return;
-    }
-    scope_->set_end_position(logger.end());
-    Expect(Token::RBRACE, ok);
-    if (!*ok) {
-      return;
-    }
-    total_preparse_skipped_ += scope_->end_position() - function_block_pos;
-    *materialized_literal_count = logger.literals();
-    *expected_property_count = logger.properties();
-    scope_->SetStrictMode(logger.strict_mode());
-    if (produce_cached_parse_data()) {
-      DCHECK(log_);
-      // Position right after terminal '}'.
-      int body_end = scanner()->location().end_pos;
-      log_->LogFunction(function_block_pos, body_end,
-                        *materialized_literal_count,
-                        *expected_property_count,
-                        scope_->strict_mode());
-    }
+    cached_parse_data_->Reject();
+  }
+  // With no cached data, we partially parse the function, without building an
+  // AST. This gathers the data needed to build a lazy function.
+  SingletonLogger logger;
+  PreParser::PreParseResult result =
+      ParseLazyFunctionBodyWithPreParser(&logger);
+  if (result == PreParser::kPreParseStackOverflow) {
+    // Propagate stack overflow.
+    set_stack_overflow();
+    *ok = false;
+    return;
+  }
+  if (logger.has_error()) {
+    ParserTraits::ReportMessageAt(
+        Scanner::Location(logger.start(), logger.end()), logger.message(),
+        logger.argument_opt(), logger.is_reference_error());
+    *ok = false;
+    return;
+  }
+  scope_->set_end_position(logger.end());
+  Expect(Token::RBRACE, ok);
+  if (!*ok) {
+    return;
+  }
+  total_preparse_skipped_ += scope_->end_position() - function_block_pos;
+  *materialized_literal_count = logger.literals();
+  *expected_property_count = logger.properties();
+  scope_->SetStrictMode(logger.strict_mode());
+  if (produce_cached_parse_data()) {
+    DCHECK(log_);
+    // Position right after terminal '}'.
+    int body_end = scanner()->location().end_pos;
+    log_->LogFunction(function_block_pos, body_end, *materialized_literal_count,
+                      *expected_property_count, scope_->strict_mode());
   }
 }
 
@@ -3982,6 +3974,7 @@ PreParser::PreParseResult Parser::ParseLazyFunctionBodyWithPreParser(
         allow_harmony_object_literals());
     reusable_preparser_->set_allow_harmony_templates(allow_harmony_templates());
     reusable_preparser_->set_allow_harmony_sloppy(allow_harmony_sloppy());
+    reusable_preparser_->set_allow_harmony_unicode(allow_harmony_unicode());
   }
   PreParser::PreParseResult result =
       reusable_preparser_->PreParseLazyFunction(strict_mode(),
@@ -4329,6 +4322,9 @@ void RegExpParser::Advance() {
     }
   } else {
     current_ = kEndMarker;
+    // Advance so that position() points to 1-after-the-last-character. This is
+    // important so that Reset() to this position works correctly.
+    next_pos_ = in()->length() + 1;
     has_more_ = false;
   }
 }
@@ -5148,7 +5144,6 @@ void Parser::ParseOnBackground() {
   fni_ = new (zone()) FuncNameInferrer(ast_value_factory(), zone());
 
   CompleteParserRecorder recorder;
-  debug_saved_compile_options_ = compile_options();
   if (produce_cached_parse_data()) log_ = &recorder;
 
   DCHECK(info()->source_stream() != NULL);
@@ -5193,8 +5188,10 @@ void Parser::AddTemplateSpan(TemplateLiteralState* state, bool tail) {
   int pos = scanner()->location().beg_pos;
   int end = scanner()->location().end_pos - (tail ? 1 : 2);
   const AstRawString* tv = scanner()->CurrentSymbol(ast_value_factory());
+  const AstRawString* trv = scanner()->CurrentRawSymbol(ast_value_factory());
   Literal* cooked = factory()->NewStringLiteral(tv, pos);
-  (*state)->AddTemplateSpan(cooked, end, zone());
+  Literal* raw = factory()->NewStringLiteral(trv, pos);
+  (*state)->AddTemplateSpan(cooked, raw, end, zone());
 }
 
 
@@ -5209,8 +5206,10 @@ Expression* Parser::CloseTemplateLiteral(TemplateLiteralState* state, int start,
   TemplateLiteral* lit = *state;
   int pos = lit->position();
   const ZoneList<Expression*>* cooked_strings = lit->cooked();
+  const ZoneList<Expression*>* raw_strings = lit->raw();
   const ZoneList<Expression*>* expressions = lit->expressions();
-  CHECK(cooked_strings->length() == (expressions->length() + 1));
+  DCHECK_EQ(cooked_strings->length(), raw_strings->length());
+  DCHECK_EQ(cooked_strings->length(), expressions->length() + 1);
 
   if (!tag) {
     // Build tree of BinaryOps to simplify code-generation
@@ -5238,9 +5237,7 @@ Expression* Parser::CloseTemplateLiteral(TemplateLiteralState* state, int start,
     }
     return expr;
   } else {
-    uint32_t hash;
-    ZoneList<Expression*>* raw_strings = TemplateRawStrings(lit, &hash);
-    Handle<String> source(String::cast(script()->source()));
+    uint32_t hash = ComputeTemplateLiteralHash(lit);
 
     int cooked_idx = function_state_->NextMaterializedLiteralIndex();
     int raw_idx = function_state_->NextMaterializedLiteralIndex();
@@ -5256,7 +5253,7 @@ Expression* Parser::CloseTemplateLiteral(TemplateLiteralState* state, int start,
             const_cast<ZoneList<Expression*>*>(raw_strings), raw_idx, pos),
         zone());
 
-    // Ensure hash is suitable as an Smi value
+    // Ensure hash is suitable as a Smi value
     Smi* hash_obj = Smi::cast(Internals::IntToSmi(static_cast<int>(hash)));
     args->Add(factory()->NewSmiLiteral(hash_obj->value(), pos), zone());
 
@@ -5274,84 +5271,32 @@ Expression* Parser::CloseTemplateLiteral(TemplateLiteralState* state, int start,
 }
 
 
-ZoneList<Expression*>* Parser::TemplateRawStrings(const TemplateLiteral* lit,
-                                                  uint32_t* hash) {
-  const ZoneList<int>* lengths = lit->lengths();
-  const ZoneList<Expression*>* cooked_strings = lit->cooked();
-  int total = lengths->length();
-  ZoneList<Expression*>* raw_strings;
-
-  // Given a TemplateLiteral, produce a list of raw strings, used for generating
-  // a CallSite object for a tagged template invocations.
-  //
-  // A raw string will consist of the unescaped characters of a template span,
-  // with end-of-line sequences normalized to U+000A LINE FEEDs, and without
-  // leading or trailing template delimiters.
-  //
-
+uint32_t Parser::ComputeTemplateLiteralHash(const TemplateLiteral* lit) {
+  const ZoneList<Expression*>* raw_strings = lit->raw();
+  int total = raw_strings->length();
   DCHECK(total);
-
-  Handle<String> source(String::cast(script()->source()));
-
-  raw_strings = new (zone()) ZoneList<Expression*>(total, zone());
 
   uint32_t running_hash = 0;
 
   for (int index = 0; index < total; ++index) {
-    int span_start = cooked_strings->at(index)->position() + 1;
-    int span_end = lengths->at(index) - 1;
-    int length;
-    int to_index = 0;
-
     if (index) {
       running_hash = StringHasher::ComputeRunningHashOneByte(
           running_hash, "${}", 3);
     }
 
-    SmartArrayPointer<char> raw_chars =
-        source->ToCString(ALLOW_NULLS, FAST_STRING_TRAVERSAL, span_start,
-                          span_end, &length);
-
-    // Normalize raw line-feeds. [U+000D U+000A] (CRLF) and [U+000D] (CR) must
-    // be translated into U+000A (LF).
-    for (int from_index = 0; from_index < length; ++from_index) {
-      char ch = raw_chars[from_index];
-      if (ch == '\r') {
-        ch = '\n';
-        if (from_index + 1 < length && raw_chars[from_index + 1] == '\n') {
-          ++from_index;
-        }
-      }
-      raw_chars[to_index++] = ch;
-    }
-
-    Access<UnicodeCache::Utf8Decoder>
-        decoder(isolate()->unicode_cache()->utf8_decoder());
-    decoder->Reset(raw_chars.get(), to_index);
-    int utf16_length = decoder->Utf16Length();
-    Literal* raw_lit = NULL;
-    if (utf16_length > 0) {
-      uc16* utf16_buffer = zone()->NewArray<uc16>(utf16_length);
-      to_index = decoder->WriteUtf16(utf16_buffer, utf16_length);
-      running_hash = StringHasher::ComputeRunningHash(
-          running_hash, utf16_buffer, to_index);
-      const uint16_t* data = reinterpret_cast<const uint16_t*>(utf16_buffer);
-      const AstRawString* raw_str = ast_value_factory()->GetTwoByteString(
-          Vector<const uint16_t>(data, to_index));
-      raw_lit = factory()->NewStringLiteral(raw_str, span_start - 1);
+    const AstRawString* raw_string =
+        raw_strings->at(index)->AsLiteral()->raw_value()->AsString();
+    if (raw_string->is_one_byte()) {
+      const char* data = reinterpret_cast<const char*>(raw_string->raw_data());
+      running_hash = StringHasher::ComputeRunningHashOneByte(
+          running_hash, data, raw_string->length());
     } else {
-      raw_lit = factory()->NewStringLiteral(
-          ast_value_factory()->empty_string(), span_start - 1);
+      const uc16* data = reinterpret_cast<const uc16*>(raw_string->raw_data());
+      running_hash = StringHasher::ComputeRunningHash(running_hash, data,
+                                                      raw_string->length());
     }
-    DCHECK_NOT_NULL(raw_lit);
-    raw_strings->Add(raw_lit, zone());
   }
 
-  // Hash key is used exclusively by template call site caching. There are no
-  // real security implications for unseeded hashes, and no issues with changing
-  // the hashing algorithm to improve performance or entropy.
-  *hash = running_hash;
-
-  return raw_strings;
+  return running_hash;
 }
 } }  // namespace v8::internal

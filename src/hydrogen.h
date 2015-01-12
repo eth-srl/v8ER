@@ -819,7 +819,7 @@ class EffectContext FINAL : public AstContext {
   }
   virtual ~EffectContext();
 
-  virtual void ReturnValue(HValue* value) OVERRIDE;
+  void ReturnValue(HValue* value) OVERRIDE;
   virtual void ReturnInstruction(HInstruction* instr,
                                  BailoutId ast_id) OVERRIDE;
   virtual void ReturnControl(HControlInstruction* instr,
@@ -836,7 +836,7 @@ class ValueContext FINAL : public AstContext {
   }
   virtual ~ValueContext();
 
-  virtual void ReturnValue(HValue* value) OVERRIDE;
+  void ReturnValue(HValue* value) OVERRIDE;
   virtual void ReturnInstruction(HInstruction* instr,
                                  BailoutId ast_id) OVERRIDE;
   virtual void ReturnControl(HControlInstruction* instr,
@@ -863,7 +863,7 @@ class TestContext FINAL : public AstContext {
         if_false_(if_false) {
   }
 
-  virtual void ReturnValue(HValue* value) OVERRIDE;
+  void ReturnValue(HValue* value) OVERRIDE;
   virtual void ReturnInstruction(HInstruction* instr,
                                  BailoutId ast_id) OVERRIDE;
   virtual void ReturnControl(HControlInstruction* instr,
@@ -1864,10 +1864,10 @@ class HGraphBuilder {
 
   HValue* BuildElementIndexHash(HValue* index);
 
-  void BuildCompareNil(
-      HValue* value,
-      Type* type,
-      HIfContinuation* continuation);
+  enum MapEmbedding { kEmbedMapsDirectly, kEmbedMapsViaWeakCells };
+
+  void BuildCompareNil(HValue* value, Type* type, HIfContinuation* continuation,
+                       MapEmbedding map_embedding = kEmbedMapsDirectly);
 
   void BuildCreateAllocationMemento(HValue* previous_object,
                                     HValue* previous_object_size,
@@ -2108,13 +2108,13 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
 
   explicit HOptimizedGraphBuilder(CompilationInfo* info);
 
-  virtual bool BuildGraph() OVERRIDE;
+  bool BuildGraph() OVERRIDE;
 
   // Simple accessors.
   BreakAndContinueScope* break_scope() const { return break_scope_; }
   void set_break_scope(BreakAndContinueScope* head) { break_scope_ = head; }
 
-  HValue* context() { return environment()->context(); }
+  HValue* context() OVERRIDE { return environment()->context(); }
 
   HOsrBuilder* osr() const { return osr_; }
 
@@ -2126,7 +2126,7 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
 
   FunctionState* function_state() const { return function_state_; }
 
-  void VisitDeclarations(ZoneList<Declaration*>* declarations);
+  void VisitDeclarations(ZoneList<Declaration*>* declarations) OVERRIDE;
 
   void* operator new(size_t size, Zone* zone) {
     return zone->New(static_cast<int>(size));
@@ -2285,7 +2285,7 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
                        HBasicBlock* false_block);
 
   // Visit a list of expressions from left to right, each in a value context.
-  void VisitExpressions(ZoneList<Expression*>* exprs);
+  void VisitExpressions(ZoneList<Expression*>* exprs) OVERRIDE;
   void VisitExpressions(ZoneList<Expression*>* exprs,
                         ArgumentsAllowedFlag flag);
 
@@ -2295,7 +2295,7 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
   void PushArgumentsFromEnvironment(int count);
 
   void SetUpScope(Scope* scope);
-  virtual void VisitStatements(ZoneList<Statement*>* statements) OVERRIDE;
+  void VisitStatements(ZoneList<Statement*>* statements) OVERRIDE;
 
 #define DECLARE_VISIT(type) virtual void Visit##type(type* node) OVERRIDE;
   AST_NODE_LIST(DECLARE_VISIT)
@@ -2416,6 +2416,33 @@ class HOptimizedGraphBuilder : public HGraphBuilder, public AstVisitor {
       ExternalArrayType array_type, size_t element_size,
       ElementsKind fixed_elements_kind,
       HValue* byte_length, HValue* length);
+
+  // TODO(adamk): Move all OrderedHashTable functions to their own class.
+  HValue* BuildOrderedHashTableHashToBucket(HValue* hash, HValue* num_buckets);
+  template <typename CollectionType>
+  HValue* BuildOrderedHashTableHashToEntry(HValue* table, HValue* hash,
+                                           HValue* num_buckets);
+  template <typename CollectionType>
+  HValue* BuildOrderedHashTableEntryToIndex(HValue* entry, HValue* num_buckets);
+  template <typename CollectionType>
+  HValue* BuildOrderedHashTableFindEntry(HValue* table, HValue* key,
+                                         HValue* hash);
+  template <typename CollectionType>
+  HValue* BuildOrderedHashTableAddEntry(HValue* table, HValue* key,
+                                        HValue* hash,
+                                        HIfContinuation* join_continuation);
+  template <typename CollectionType>
+  HValue* BuildAllocateOrderedHashTable();
+  template <typename CollectionType>
+  void BuildOrderedHashTableClear(HValue* receiver);
+  template <typename CollectionType>
+  void BuildJSCollectionDelete(CallRuntime* call,
+                               const Runtime::Function* c_function);
+  template <typename CollectionType>
+  void BuildJSCollectionHas(CallRuntime* call,
+                            const Runtime::Function* c_function);
+  HValue* BuildStringHashLoadIfIsStringAndHashComputed(
+      HValue* object, HIfContinuation* continuation);
 
   Handle<JSFunction> array_function() {
     return handle(isolate()->native_context()->array_function());

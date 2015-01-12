@@ -9,19 +9,23 @@
 
 #include "src/base/platform/elapsed-timer.h"
 #include "src/compiler/ast-graph-builder.h"
+#include "src/compiler/ast-loop-assignment-analyzer.h"
 #include "src/compiler/basic-block-instrumentor.h"
 #include "src/compiler/change-lowering.h"
 #include "src/compiler/code-generator.h"
+#include "src/compiler/common-operator-reducer.h"
 #include "src/compiler/control-reducer.h"
 #include "src/compiler/graph-replay.h"
 #include "src/compiler/graph-visualizer.h"
 #include "src/compiler/instruction.h"
 #include "src/compiler/instruction-selector.h"
+#include "src/compiler/js-builtin-reducer.h"
 #include "src/compiler/js-context-specialization.h"
 #include "src/compiler/js-generic-lowering.h"
 #include "src/compiler/js-inlining.h"
 #include "src/compiler/js-typed-lowering.h"
 #include "src/compiler/jump-threading.h"
+#include "src/compiler/load-elimination.h"
 #include "src/compiler/machine-operator-reducer.h"
 #include "src/compiler/move-optimizer.h"
 #include "src/compiler/pipeline-statistics.h"
@@ -56,6 +60,7 @@ class PipelineData {
         graph_zone_scope_(zone_pool_),
         graph_zone_(nullptr),
         graph_(nullptr),
+        loop_assignment_(nullptr),
         machine_(nullptr),
         common_(nullptr),
         javascript_(nullptr),
@@ -76,6 +81,7 @@ class PipelineData {
 
   // For main entry point.
   void Initialize(PipelineStatistics* pipeline_statistics) {
+    PhaseScope scope(pipeline_statistics, "init pipeline data");
     outer_zone_ = info()->zone();
     pipeline_statistics_ = pipeline_statistics;
     graph_zone_ = graph_zone_scope_.zone();
@@ -132,6 +138,12 @@ class PipelineData {
   JSGraph* jsgraph() const { return jsgraph_; }
   Typer* typer() const { return typer_.get(); }
 
+  LoopAssignmentAnalysis* loop_assignment() const { return loop_assignment_; }
+  void set_loop_assignment(LoopAssignmentAnalysis* loop_assignment) {
+    DCHECK_EQ(nullptr, loop_assignment_);
+    loop_assignment_ = loop_assignment;
+  }
+
   Node* context_node() const { return context_node_; }
   void set_context_node(Node* context_node) {
     DCHECK_EQ(nullptr, context_node_);
@@ -158,6 +170,7 @@ class PipelineData {
     graph_zone_scope_.Destroy();
     graph_zone_ = nullptr;
     graph_ = nullptr;
+    loop_assignment_ = nullptr;
     machine_ = nullptr;
     common_ = nullptr;
     javascript_ = nullptr;
@@ -203,13 +216,14 @@ class PipelineData {
   bool compilation_failed_;
   Handle<Code> code_;
 
-  ZonePool::Scope graph_zone_scope_;
-  Zone* graph_zone_;
   // All objects in the following group of fields are allocated in graph_zone_.
   // They are all set to NULL when the graph_zone_ is destroyed.
+  ZonePool::Scope graph_zone_scope_;
+  Zone* graph_zone_;
   Graph* graph_;
   // TODO(dcarney): make this into a ZoneObject.
   SmartPointer<SourcePositionTable> source_positions_;
+  LoopAssignmentAnalysis* loop_assignment_;
   MachineOperatorBuilder* machine_;
   CommonOperatorBuilder* common_;
   JSOperatorBuilder* javascript_;
@@ -249,7 +263,7 @@ struct TurboCfgFile : public std::ofstream {
 
 
 static void TraceSchedule(Schedule* schedule) {
-  if (!FLAG_trace_turbo) return;
+  if (!FLAG_trace_turbo_graph && !FLAG_trace_turbo_scheduler) return;
   OFStream os(stdout);
   os << "-- Schedule --------------------------------------\n" << *schedule;
 }
@@ -275,10 +289,11 @@ static SmartArrayPointer<char> GetDebugName(CompilationInfo* info) {
 
 class AstGraphBuilderWithPositions : public AstGraphBuilder {
  public:
-  explicit AstGraphBuilderWithPositions(Zone* local_zone, CompilationInfo* info,
-                                        JSGraph* jsgraph,
-                                        SourcePositionTable* source_positions)
-      : AstGraphBuilder(local_zone, info, jsgraph),
+  AstGraphBuilderWithPositions(Zone* local_zone, CompilationInfo* info,
+                               JSGraph* jsgraph,
+                               LoopAssignmentAnalysis* loop_assignment,
+                               SourcePositionTable* source_positions)
+      : AstGraphBuilder(local_zone, info, jsgraph, loop_assignment),
         source_positions_(source_positions) {}
 
   bool CreateGraph() {
@@ -288,7 +303,7 @@ class AstGraphBuilderWithPositions : public AstGraphBuilder {
   }
 
 #define DEF_VISIT(type)                                               \
-  virtual void Visit##type(type* node) OVERRIDE {                     \
+  void Visit##type(type* node) OVERRIDE {                             \
     SourcePositionTable::Scope pos(source_positions_,                 \
                                    SourcePosition(node->position())); \
     AstGraphBuilder::Visit##type(node);                               \
@@ -335,12 +350,24 @@ void Pipeline::Run(Arg0 arg_0) {
 }
 
 
+struct LoopAssignmentAnalysisPhase {
+  static const char* phase_name() { return "loop assignment analysis"; }
+
+  void Run(PipelineData* data, Zone* temp_zone) {
+    AstLoopAssignmentAnalyzer analyzer(data->graph_zone(), data->info());
+    LoopAssignmentAnalysis* loop_assignment = analyzer.Analyze();
+    data->set_loop_assignment(loop_assignment);
+  }
+};
+
+
 struct GraphBuilderPhase {
   static const char* phase_name() { return "graph builder"; }
 
   void Run(PipelineData* data, Zone* temp_zone) {
     AstGraphBuilderWithPositions graph_builder(
-        temp_zone, data->info(), data->jsgraph(), data->source_positions());
+        temp_zone, data->info(), data->jsgraph(), data->loop_assignment(),
+        data->source_positions());
     if (graph_builder.CreateGraph()) {
       data->set_context_node(graph_builder.GetFunctionContext());
     } else {
@@ -351,14 +378,16 @@ struct GraphBuilderPhase {
 
 
 struct ContextSpecializerPhase {
-  static const char* phase_name() { return nullptr; }
+  static const char* phase_name() { return "context specializing"; }
 
   void Run(PipelineData* data, Zone* temp_zone) {
     SourcePositionTable::Scope pos(data->source_positions(),
                                    SourcePosition::Unknown());
     JSContextSpecializer spec(data->info(), data->jsgraph(),
                               data->context_node());
-    spec.SpecializeToContext();
+    GraphReducer graph_reducer(data->graph(), temp_zone);
+    graph_reducer.AddReducer(&spec);
+    graph_reducer.ReduceGraph();
   }
 };
 
@@ -388,13 +417,19 @@ struct TypedLoweringPhase {
   void Run(PipelineData* data, Zone* temp_zone) {
     SourcePositionTable::Scope pos(data->source_positions(),
                                    SourcePosition::Unknown());
-    ValueNumberingReducer vn_reducer(data->graph_zone());
-    JSTypedLowering lowering(data->jsgraph());
+    ValueNumberingReducer vn_reducer(temp_zone);
+    LoadElimination load_elimination;
+    JSBuiltinReducer builtin_reducer(data->jsgraph());
+    JSTypedLowering typed_lowering(data->jsgraph(), temp_zone);
     SimplifiedOperatorReducer simple_reducer(data->jsgraph());
+    CommonOperatorReducer common_reducer;
     GraphReducer graph_reducer(data->graph(), temp_zone);
     graph_reducer.AddReducer(&vn_reducer);
-    graph_reducer.AddReducer(&lowering);
+    graph_reducer.AddReducer(&builtin_reducer);
+    graph_reducer.AddReducer(&typed_lowering);
+    graph_reducer.AddReducer(&load_elimination);
     graph_reducer.AddReducer(&simple_reducer);
+    graph_reducer.AddReducer(&common_reducer);
     graph_reducer.ReduceGraph();
   }
 };
@@ -408,11 +443,15 @@ struct SimplifiedLoweringPhase {
                                    SourcePosition::Unknown());
     SimplifiedLowering lowering(data->jsgraph());
     lowering.LowerAllNodes();
-    ValueNumberingReducer vn_reducer(data->graph_zone());
+    ValueNumberingReducer vn_reducer(temp_zone);
     SimplifiedOperatorReducer simple_reducer(data->jsgraph());
+    MachineOperatorReducer machine_reducer(data->jsgraph());
+    CommonOperatorReducer common_reducer;
     GraphReducer graph_reducer(data->graph(), temp_zone);
     graph_reducer.AddReducer(&vn_reducer);
     graph_reducer.AddReducer(&simple_reducer);
+    graph_reducer.AddReducer(&machine_reducer);
+    graph_reducer.AddReducer(&common_reducer);
     graph_reducer.ReduceGraph();
   }
 };
@@ -425,16 +464,17 @@ struct ChangeLoweringPhase {
     SourcePositionTable::Scope pos(data->source_positions(),
                                    SourcePosition::Unknown());
     Linkage linkage(data->graph_zone(), data->info());
-    ValueNumberingReducer vn_reducer(data->graph_zone());
+    ValueNumberingReducer vn_reducer(temp_zone);
     SimplifiedOperatorReducer simple_reducer(data->jsgraph());
     ChangeLowering lowering(data->jsgraph(), &linkage);
-    MachineOperatorReducer mach_reducer(data->jsgraph());
+    MachineOperatorReducer machine_reducer(data->jsgraph());
+    CommonOperatorReducer common_reducer;
     GraphReducer graph_reducer(data->graph(), temp_zone);
-    // TODO(titzer): Figure out if we should run all reducers at once here.
     graph_reducer.AddReducer(&vn_reducer);
     graph_reducer.AddReducer(&simple_reducer);
     graph_reducer.AddReducer(&lowering);
-    graph_reducer.AddReducer(&mach_reducer);
+    graph_reducer.AddReducer(&machine_reducer);
+    graph_reducer.AddReducer(&common_reducer);
     graph_reducer.ReduceGraph();
   }
 };
@@ -553,6 +593,15 @@ struct ReuseSpillSlotsPhase {
 };
 
 
+struct CommitAssignmentPhase {
+  static const char* phase_name() { return "commit assignment"; }
+
+  void Run(PipelineData* data, Zone* temp_zone) {
+    data->register_allocator()->CommitAssignment();
+  }
+};
+
+
 struct PopulatePointerMapsPhase {
   static const char* phase_name() { return "populate pointer maps"; }
 
@@ -640,6 +689,7 @@ struct PrintGraphPhase {
       Vector<char> dot_filename(dot_buffer, sizeof(dot_buffer));
       SNPrintF(dot_filename, "%s.dot", filename.start());
       FILE* dot_file = base::OS::FOpen(dot_filename.start(), "w+");
+      if (dot_file == nullptr) return;
       OFStream dot_of(dot_file);
       dot_of << AsDOT(*graph);
       fclose(dot_file);
@@ -650,6 +700,7 @@ struct PrintGraphPhase {
       Vector<char> json_filename(json_buffer, sizeof(json_buffer));
       SNPrintF(json_filename, "%s.json", filename.start());
       FILE* json_file = base::OS::FOpen(json_filename.start(), "w+");
+      if (json_file == nullptr) return;
       OFStream json_of(json_file);
       json_of << AsJSON(*graph);
       fclose(json_file);
@@ -715,6 +766,7 @@ Handle<Code> Pipeline::GenerateCode() {
 
   if (FLAG_turbo_stats) {
     pipeline_statistics.Reset(new PipelineStatistics(info(), &zone_pool));
+    pipeline_statistics->BeginPhaseKind("initializing");
   }
 
   PipelineData data(&zone_pool, info());
@@ -733,6 +785,10 @@ Handle<Code> Pipeline::GenerateCode() {
   }
 
   data.source_positions()->AddDecorator();
+
+  if (FLAG_loop_assignment_analysis) {
+    Run<LoopAssignmentAnalysisPhase>();
+  }
 
   Run<GraphBuilderPhase>();
   if (data.compilation_failed()) return Handle<Code>::null();
@@ -811,7 +867,7 @@ Handle<Code> Pipeline::GenerateCode() {
 
   if (FLAG_trace_turbo) {
     OFStream os(stdout);
-    os << "--------------------------------------------------\n"
+    os << "---------------------------------------------------\n"
        << "Finished compiling method " << GetDebugName(info()).get()
        << " using Turbofan" << std::endl;
   }
@@ -975,13 +1031,15 @@ void Pipeline::AllocateRegisters(const RegisterConfiguration* config,
   Run<MeetRegisterConstraintsPhase>();
   Run<ResolvePhisPhase>();
   Run<BuildLiveRangesPhase>();
-  if (FLAG_trace_turbo) {
+  if (FLAG_trace_turbo_graph) {
     OFStream os(stdout);
     PrintableInstructionSequence printable = {config, data->sequence()};
     os << "----- Instruction sequence before register allocation -----\n"
        << printable;
   }
-  DCHECK(!data->register_allocator()->ExistsUseWithoutDefinition());
+  if (verifier != nullptr) {
+    CHECK(!data->register_allocator()->ExistsUseWithoutDefinition());
+  }
   Run<AllocateGeneralRegistersPhase>();
   if (!data->register_allocator()->AllocationOk()) {
     data->set_compilation_failed();
@@ -995,12 +1053,15 @@ void Pipeline::AllocateRegisters(const RegisterConfiguration* config,
   if (FLAG_turbo_reuse_spill_slots) {
     Run<ReuseSpillSlotsPhase>();
   }
+  Run<CommitAssignmentPhase>();
   Run<PopulatePointerMapsPhase>();
   Run<ConnectRangesPhase>();
   Run<ResolveControlFlowPhase>();
-  Run<OptimizeMovesPhase>();
+  if (FLAG_turbo_move_optimization) {
+    Run<OptimizeMovesPhase>();
+  }
 
-  if (FLAG_trace_turbo) {
+  if (FLAG_trace_turbo_graph) {
     OFStream os(stdout);
     PrintableInstructionSequence printable = {config, data->sequence()};
     os << "----- Instruction sequence after register allocation -----\n"

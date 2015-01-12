@@ -20,14 +20,14 @@ namespace internal {
 namespace compiler {
 
 AstGraphBuilder::AstGraphBuilder(Zone* local_zone, CompilationInfo* info,
-                                 JSGraph* jsgraph)
+                                 JSGraph* jsgraph, LoopAssignmentAnalysis* loop)
     : StructuredGraphBuilder(local_zone, jsgraph->graph(), jsgraph->common()),
       info_(info),
       jsgraph_(jsgraph),
       globals_(0, local_zone),
       breakable_(NULL),
       execution_context_(NULL),
-      loop_assignment_analysis_(NULL) {
+      loop_assignment_analysis_(loop) {
   InitializeAstVisitor(local_zone);
 }
 
@@ -61,12 +61,6 @@ bool AstGraphBuilder::CreateGraph() {
   // Set up the basic structure of the graph.
   int parameter_count = info()->num_parameters();
   graph()->SetStart(graph()->NewNode(common()->Start(parameter_count)));
-
-  if (FLAG_loop_assignment_analysis) {
-    // TODO(turbofan): use a temporary zone for the loop assignment analysis.
-    AstLoopAssignmentAnalyzer analyzer(zone(), info());
-    loop_assignment_analysis_ = analyzer.Analyze();
-  }
 
   // Initialize the top-level environment.
   Environment env(this, scope, graph()->start());
@@ -145,26 +139,6 @@ static LhsKind DetermineLhsKind(Expression* expr) {
                                           ? NAMED_PROPERTY
                                           : KEYED_PROPERTY;
   return lhs_kind;
-}
-
-
-// Helper to find an existing shared function info in the baseline code for the
-// given function literal. Used to canonicalize SharedFunctionInfo objects.
-static Handle<SharedFunctionInfo> SearchSharedFunctionInfo(
-    Code* unoptimized_code, FunctionLiteral* expr) {
-  int start_position = expr->start_position();
-  for (RelocIterator it(unoptimized_code); !it.done(); it.next()) {
-    RelocInfo* rinfo = it.rinfo();
-    if (rinfo->rmode() != RelocInfo::EMBEDDED_OBJECT) continue;
-    Object* obj = rinfo->target_object();
-    if (obj->IsSharedFunctionInfo()) {
-      SharedFunctionInfo* shared = SharedFunctionInfo::cast(obj);
-      if (shared->start_position() == start_position) {
-        return Handle<SharedFunctionInfo>(shared);
-      }
-    }
-  }
-  return Handle<SharedFunctionInfo>();
 }
 
 
@@ -835,8 +809,8 @@ void AstGraphBuilder::VisitFunctionLiteral(FunctionLiteral* expr) {
 
   // Build a new shared function info if we cannot find one in the baseline
   // code. We also have a stack overflow if the recursive compilation did.
-  Handle<SharedFunctionInfo> shared_info =
-      SearchSharedFunctionInfo(info()->shared_info()->code(), expr);
+  expr->InitializeSharedInfo(handle(info()->shared_info()->code()));
+  Handle<SharedFunctionInfo> shared_info = expr->shared_info();
   if (shared_info.is_null()) {
     shared_info = Compiler::BuildFunctionInfo(expr, info()->script(), info());
     CHECK(!shared_info.is_null());  // TODO(mstarzinger): Set stack overflow?

@@ -22,10 +22,10 @@ enum class GraphReducer::State : uint8_t {
 
 GraphReducer::GraphReducer(Graph* graph, Zone* zone)
     : graph_(graph),
+      state_(graph, 4),
       reducers_(zone),
       revisit_(zone),
-      stack_(zone),
-      state_(zone) {}
+      stack_(zone) {}
 
 
 void GraphReducer::AddReducer(Reducer* reducer) {
@@ -36,12 +36,8 @@ void GraphReducer::AddReducer(Reducer* reducer) {
 void GraphReducer::ReduceNode(Node* node) {
   DCHECK(stack_.empty());
   DCHECK(revisit_.empty());
-  std::fill(state_.begin(), state_.end(), State::kUnvisited);
   Push(node);
   for (;;) {
-    DCHECK(!stack_.empty() ||
-           std::find(state_.begin(), state_.end(), State::kOnStack) ==
-               state_.end());
     if (!stack_.empty()) {
       // Process the node on the top of the stack, potentially pushing more or
       // popping the node off the stack.
@@ -50,7 +46,7 @@ void GraphReducer::ReduceNode(Node* node) {
       // If the stack becomes empty, revisit any nodes in the revisit queue.
       Node* const node = revisit_.top();
       revisit_.pop();
-      if (state_[node->id()] == State::kRevisit) {
+      if (state_.Get(node) == State::kRevisit) {
         // state can change while in queue.
         Push(node);
       }
@@ -58,8 +54,6 @@ void GraphReducer::ReduceNode(Node* node) {
       break;
     }
   }
-  DCHECK(std::find(state_.begin(), state_.end(), State::kOnStack) ==
-         state_.end());
   DCHECK(revisit_.empty());
   DCHECK(stack_.empty());
 }
@@ -101,7 +95,7 @@ Reduction GraphReducer::Reduce(Node* const node) {
 void GraphReducer::ReduceTop() {
   NodeState& entry = stack_.top();
   Node* node = entry.node;
-  DCHECK(state_[node->id()] == State::kOnStack);
+  DCHECK(state_.Get(node) == State::kOnStack);
 
   if (node->IsDead()) return Pop();  // Node was killed while on stack.
 
@@ -124,74 +118,81 @@ void GraphReducer::ReduceTop() {
   // All inputs should be visited or on stack. Apply reductions to node.
   Reduction reduction = Reduce(node);
 
+  // If there was no reduction, pop {node} and continue.
+  if (!reduction.Changed()) return Pop();
+
+  // Check if the reduction is an in-place update of the {node}.
+  Node* const replacement = reduction.replacement();
+  if (replacement == node) {
+    // In-place update of {node}, may need to recurse on an input.
+    for (int i = 0; i < node->InputCount(); ++i) {
+      Node* input = node->InputAt(i);
+      entry.input_index = i + 1;
+      if (input != node && Recurse(input)) return;
+    }
+  }
+
   // After reducing the node, pop it off the stack.
   Pop();
 
-  // If there was a reduction, revisit the uses and reduce the replacement.
-  if (reduction.Changed()) {
-    for (Node* const use : node->uses()) {
-      // Don't revisit this node if it refers to itself.
-      if (use != node) Revisit(use);
-    }
-    Node* const replacement = reduction.replacement();
-    if (replacement != node) {
-      if (node == graph()->start()) graph()->SetStart(replacement);
-      if (node == graph()->end()) graph()->SetEnd(replacement);
-      // If {node} was replaced by an old node, unlink {node} and assume that
-      // {replacement} was already reduced and finish.
-      if (replacement->id() < node_count) {
-        node->ReplaceUses(replacement);
-        node->Kill();
-      } else {
-        // Otherwise {node} was replaced by a new node. Replace all old uses of
-        // {node} with {replacement}. New nodes created by this reduction can
-        // use {node}.
-        node->ReplaceUsesIf([node_count](Node* const node) {
-                              return node->id() < node_count;
-                            },
-                            replacement);
-        // Unlink {node} if it's no longer used.
-        if (node->uses().empty()) {
-          node->Kill();
-        }
+  // Revisit all uses of the node.
+  for (Node* const use : node->uses()) {
+    // Don't revisit this node if it refers to itself.
+    if (use != node) Revisit(use);
+  }
 
-        // If there was a replacement, reduce it after popping {node}.
-        Recurse(replacement);
+  // Check if we have a new replacement.
+  if (replacement != node) {
+    if (node == graph()->start()) graph()->SetStart(replacement);
+    if (node == graph()->end()) graph()->SetEnd(replacement);
+    // If {node} was replaced by an old node, unlink {node} and assume that
+    // {replacement} was already reduced and finish.
+    if (replacement->id() < node_count) {
+      node->ReplaceUses(replacement);
+      node->Kill();
+    } else {
+      // Otherwise {node} was replaced by a new node. Replace all old uses of
+      // {node} with {replacement}. New nodes created by this reduction can
+      // use {node}.
+      node->ReplaceUsesIf(
+          [node_count](Node* const node) { return node->id() < node_count; },
+          replacement);
+      // Unlink {node} if it's no longer used.
+      if (node->uses().empty()) {
+        node->Kill();
       }
+
+      // If there was a replacement, reduce it after popping {node}.
+      Recurse(replacement);
     }
   }
 }
 
 
 void GraphReducer::Pop() {
-  Node* const node = stack_.top().node;
-  state_[node->id()] = State::kVisited;
+  Node* node = stack_.top().node;
+  state_.Set(node, State::kVisited);
   stack_.pop();
 }
 
 
 void GraphReducer::Push(Node* const node) {
-  size_t const id = static_cast<size_t>(node->id());
-  if (id >= state_.size()) state_.resize(id + 1);
-  DCHECK(id < state_.size());
-  DCHECK(state_[id] != State::kOnStack);
-  state_[id] = State::kOnStack;
+  DCHECK(state_.Get(node) != State::kOnStack);
+  state_.Set(node, State::kOnStack);
   stack_.push({node, 0});
 }
 
 
-bool GraphReducer::Recurse(Node* const node) {
-  size_t const id = static_cast<size_t>(node->id());
-  if (id < state_.size() && state_[id] > State::kRevisit) return false;
+bool GraphReducer::Recurse(Node* node) {
+  if (state_.Get(node) > State::kRevisit) return false;
   Push(node);
   return true;
 }
 
 
-void GraphReducer::Revisit(Node* const node) {
-  size_t const id = static_cast<size_t>(node->id());
-  if (id < state_.size() && state_[id] == State::kVisited) {
-    state_[id] = State::kRevisit;
+void GraphReducer::Revisit(Node* node) {
+  if (state_.Get(node) == State::kVisited) {
+    state_.Set(node, State::kRevisit);
     revisit_.push(node);
   }
 }

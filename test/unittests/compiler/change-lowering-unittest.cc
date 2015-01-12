@@ -24,7 +24,7 @@ namespace compiler {
 class ChangeLoweringTest : public GraphTest {
  public:
   ChangeLoweringTest() : simplified_(zone()) {}
-  virtual ~ChangeLoweringTest() {}
+  ~ChangeLoweringTest() OVERRIDE {}
 
   virtual MachineType WordRepresentation() const = 0;
 
@@ -59,10 +59,6 @@ class ChangeLoweringTest : public GraphTest {
   int SmiValueSize() const {
     return Is32() ? SmiTagging<4>::SmiValueSize()
                   : SmiTagging<8>::SmiValueSize();
-  }
-
-  Node* Parameter(int32_t index = 0) {
-    return graph()->NewNode(common()->Parameter(index), graph()->start());
   }
 
   Reduction Reduce(Node* node) {
@@ -111,11 +107,9 @@ class ChangeLoweringCommonTest
     : public ChangeLoweringTest,
       public ::testing::WithParamInterface<MachineType> {
  public:
-  virtual ~ChangeLoweringCommonTest() {}
+  ~ChangeLoweringCommonTest() OVERRIDE {}
 
-  virtual MachineType WordRepresentation() const FINAL OVERRIDE {
-    return GetParam();
-  }
+  MachineType WordRepresentation() const FINAL { return GetParam(); }
 };
 
 
@@ -178,10 +172,8 @@ INSTANTIATE_TEST_CASE_P(ChangeLoweringTest, ChangeLoweringCommonTest,
 
 class ChangeLowering32Test : public ChangeLoweringTest {
  public:
-  virtual ~ChangeLowering32Test() {}
-  virtual MachineType WordRepresentation() const FINAL OVERRIDE {
-    return kRepWord32;
-  }
+  ~ChangeLowering32Test() OVERRIDE {}
+  MachineType WordRepresentation() const FINAL { return kRepWord32; }
 };
 
 
@@ -338,10 +330,8 @@ TARGET_TEST_F(ChangeLowering32Test, ChangeUint32ToTagged) {
 
 class ChangeLowering64Test : public ChangeLoweringTest {
  public:
-  virtual ~ChangeLowering64Test() {}
-  virtual MachineType WordRepresentation() const FINAL OVERRIDE {
-    return kRepWord64;
-  }
+  ~ChangeLowering64Test() OVERRIDE {}
+  MachineType WordRepresentation() const FINAL { return kRepWord64; }
 };
 
 

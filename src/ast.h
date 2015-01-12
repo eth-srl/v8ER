@@ -193,11 +193,9 @@ typedef ZoneList<Handle<String> > ZoneStringList;
 typedef ZoneList<Handle<Object> > ZoneObjectList;
 
 
-#define DECLARE_NODE_TYPE(type)                                \
-  virtual void Accept(AstVisitor* v) OVERRIDE;                 \
-  virtual AstNode::NodeType node_type() const FINAL OVERRIDE { \
-    return AstNode::k##type;                                   \
-  }                                                            \
+#define DECLARE_NODE_TYPE(type)                                          \
+  void Accept(AstVisitor* v) OVERRIDE;                                   \
+  AstNode::NodeType node_type() const FINAL { return AstNode::k##type; } \
   friend class AstNodeFactory;
 
 #define DECLARE_FIXED_REWRITE_NODE(type)                \
@@ -520,9 +518,7 @@ class BreakableStatement : public Statement {
   ZoneList<const AstRawString*>* labels() const { return labels_; }
 
   // Type testing & conversion.
-  virtual BreakableStatement* AsBreakableStatement() FINAL OVERRIDE {
-    return this;
-  }
+  BreakableStatement* AsBreakableStatement() FINAL { return this; }
 
   // Code generation
   Label* break_target() { return &break_target_; }
@@ -578,7 +574,7 @@ class Block FINAL : public BreakableStatement {
   static int num_ids() { return parent_num_ids() + 1; }
   BailoutId DeclsId() const { return BailoutId(local_id(0)); }
 
-  virtual bool IsJump() const OVERRIDE {
+  bool IsJump() const OVERRIDE {
     return !statements_.is_empty() && statements_.last()->IsJump()
         && labels() == NULL;  // Good enough as an approximation...
   }
@@ -635,7 +631,7 @@ class VariableDeclaration FINAL : public Declaration {
   DECLARE_NODE_TYPE(VariableDeclaration)
   DECLARE_FIXED_REWRITE_NODE(VariableDeclaration)
 
-  virtual InitializationFlag initialization() const OVERRIDE {
+  InitializationFlag initialization() const OVERRIDE {
     return mode() == VAR ? kCreatedInitialized : kNeedsInitialization;
   }
 
@@ -656,10 +652,10 @@ class FunctionDeclaration FINAL : public Declaration {
   DECLARE_FIXED_REWRITE_NODE(FunctionDeclaration)
 
   FunctionLiteral* fun() const { return fun_; }
-  virtual InitializationFlag initialization() const OVERRIDE {
+  InitializationFlag initialization() const OVERRIDE {
     return kCreatedInitialized;
   }
-  virtual bool IsInlineable() const OVERRIDE;
+  bool IsInlineable() const OVERRIDE;
 
  protected:
   FunctionDeclaration(Zone* zone,
@@ -686,7 +682,7 @@ class ModuleDeclaration FINAL : public Declaration {
   DECLARE_FIXED_REWRITE_NODE(ModuleDeclaration)
 
   Module* module() const { return module_; }
-  virtual InitializationFlag initialization() const OVERRIDE {
+  InitializationFlag initialization() const OVERRIDE {
     return kCreatedInitialized;
   }
 
@@ -711,7 +707,7 @@ class ImportDeclaration FINAL : public Declaration {
   DECLARE_FIXED_REWRITE_NODE(ImportDeclaration)
 
   Module* module() const { return module_; }
-  virtual InitializationFlag initialization() const OVERRIDE {
+  InitializationFlag initialization() const OVERRIDE {
     return kCreatedInitialized;
   }
 
@@ -735,7 +731,7 @@ class ExportDeclaration FINAL : public Declaration {
   DECLARE_NODE_TYPE(ExportDeclaration)
   DECLARE_FIXED_REWRITE_NODE(ExportDeclaration)
 
-  virtual InitializationFlag initialization() const OVERRIDE {
+  InitializationFlag initialization() const OVERRIDE {
     return kCreatedInitialized;
   }
 
@@ -855,9 +851,7 @@ class IterationStatement : public BreakableStatement {
   DECLARE_POLYMORPHIC_REWRITE_NODE(IterationStatement)
 
   // Type testing & conversion.
-  virtual IterationStatement* AsIterationStatement() FINAL OVERRIDE {
-    return this;
-  }
+  IterationStatement* AsIterationStatement() FINAL { return this; }
 
   Statement* body() const { return body_; }
 
@@ -897,10 +891,8 @@ class DoWhileStatement FINAL : public IterationStatement {
   Expression* cond() const { return cond_; }
 
   static int num_ids() { return parent_num_ids() + 2; }
-  virtual BailoutId ContinueId() const OVERRIDE {
-    return BailoutId(local_id(0));
-  }
-  virtual BailoutId StackCheckId() const OVERRIDE { return BackEdgeId(); }
+  BailoutId ContinueId() const OVERRIDE { return BailoutId(local_id(0)); }
+  BailoutId StackCheckId() const OVERRIDE { return BackEdgeId(); }
   BailoutId BackEdgeId() const { return BailoutId(local_id(1)); }
 
  protected:
@@ -928,8 +920,8 @@ class WhileStatement FINAL : public IterationStatement {
   Expression* cond() const { return cond_; }
 
   static int num_ids() { return parent_num_ids() + 1; }
-  virtual BailoutId ContinueId() const OVERRIDE { return EntryId(); }
-  virtual BailoutId StackCheckId() const OVERRIDE { return BodyId(); }
+  BailoutId ContinueId() const OVERRIDE { return EntryId(); }
+  BailoutId StackCheckId() const OVERRIDE { return BodyId(); }
   BailoutId BodyId() const { return BailoutId(local_id(0)); }
 
  protected:
@@ -964,10 +956,8 @@ class ForStatement FINAL : public IterationStatement {
   Statement* next() const { return next_; }
 
   static int num_ids() { return parent_num_ids() + 2; }
-  virtual BailoutId ContinueId() const OVERRIDE {
-    return BailoutId(local_id(0));
-  }
-  virtual BailoutId StackCheckId() const OVERRIDE { return BodyId(); }
+  BailoutId ContinueId() const OVERRIDE { return BailoutId(local_id(0)); }
+  BailoutId StackCheckId() const OVERRIDE { return BodyId(); }
   BailoutId BodyId() const { return BailoutId(local_id(1)); }
 
  protected:
@@ -1029,7 +1019,7 @@ class ForInStatement FINAL : public ForEachStatement {
       Isolate* isolate) OVERRIDE {
     return FeedbackVectorRequirements(1, 0);
   }
-  virtual void SetFirstFeedbackSlot(FeedbackVectorSlot slot) OVERRIDE {
+  void SetFirstFeedbackSlot(FeedbackVectorSlot slot) OVERRIDE {
     for_in_feedback_slot_ = slot;
   }
 
@@ -1047,8 +1037,8 @@ class ForInStatement FINAL : public ForEachStatement {
   BailoutId PrepareId() const { return BailoutId(local_id(1)); }
   BailoutId EnumId() const { return BailoutId(local_id(2)); }
   BailoutId ToObjectId() const { return BailoutId(local_id(3)); }
-  virtual BailoutId ContinueId() const OVERRIDE { return EntryId(); }
-  virtual BailoutId StackCheckId() const OVERRIDE { return BodyId(); }
+  BailoutId ContinueId() const OVERRIDE { return EntryId(); }
+  BailoutId StackCheckId() const OVERRIDE { return BodyId(); }
 
  protected:
   ForInStatement(Zone* zone, ZoneList<const AstRawString*>* labels, int pos)
@@ -1108,8 +1098,8 @@ class ForOfStatement FINAL : public ForEachStatement {
     return assign_each_;
   }
 
-  virtual BailoutId ContinueId() const OVERRIDE { return EntryId(); }
-  virtual BailoutId StackCheckId() const OVERRIDE { return BackEdgeId(); }
+  BailoutId ContinueId() const OVERRIDE { return EntryId(); }
+  BailoutId StackCheckId() const OVERRIDE { return BackEdgeId(); }
 
   static int num_ids() { return parent_num_ids() + 1; }
   BailoutId BackEdgeId() const { return BailoutId(local_id(0)); }
@@ -1140,7 +1130,7 @@ class ExpressionStatement FINAL : public Statement {
 
   void set_expression(Expression* e) { expression_ = e; }
   Expression* expression() const { return expression_; }
-  virtual bool IsJump() const OVERRIDE { return expression_->IsThrow(); }
+  bool IsJump() const OVERRIDE { return expression_->IsThrow(); }
 
  protected:
   ExpressionStatement(Zone* zone, Expression* expression, int pos)
@@ -1153,7 +1143,7 @@ class ExpressionStatement FINAL : public Statement {
 
 class JumpStatement : public Statement {
  public:
-  virtual bool IsJump() const FINAL OVERRIDE { return true; }
+  bool IsJump() const FINAL { return true; }
 
  protected:
   explicit JumpStatement(Zone* zone, int pos) : Statement(zone, pos) {}
@@ -1310,7 +1300,7 @@ class IfStatement FINAL : public Statement {
   Statement* then_statement() const { return then_statement_; }
   Statement* else_statement() const { return else_statement_; }
 
-  virtual bool IsJump() const OVERRIDE {
+  bool IsJump() const OVERRIDE {
     return HasThenStatement() && then_statement()->IsJump()
         && HasElseStatement() && else_statement()->IsJump();
   }
@@ -1359,10 +1349,10 @@ class TargetCollector FINAL : public AstNode {
   void AddTarget(Label* target, Zone* zone);
 
   // Virtual behaviour. TargetCollectors are never part of the AST.
-  virtual void Accept(AstVisitor* v) OVERRIDE { UNREACHABLE(); }
-  virtual TargetCollector* Accept(AstRewriter*) OVERRIDE { UNREACHABLE(); return 0; }
-  virtual NodeType node_type() const OVERRIDE { return kInvalid; }
-  virtual TargetCollector* AsTargetCollector() OVERRIDE { return this; }
+  void Accept(AstVisitor* v) OVERRIDE { UNREACHABLE(); }
+  TargetCollector* Accept(AstRewriter*) OVERRIDE { UNREACHABLE(); return 0; }
+  NodeType node_type() const OVERRIDE { return kInvalid; }
+  TargetCollector* AsTargetCollector() OVERRIDE { return this; }
 
   ZoneList<Label*>* targets() { return &targets_; }
 
@@ -1488,9 +1478,7 @@ class Literal FINAL : public Expression {
   DECLARE_NODE_TYPE(Literal)
   DECLARE_FIXED_REWRITE_NODE(Literal)
 
-  virtual bool IsPropertyName() const OVERRIDE {
-    return value_->IsPropertyName();
-  }
+  bool IsPropertyName() const OVERRIDE { return value_->IsPropertyName(); }
 
   Handle<String> AsPropertyName() {
     DCHECK(IsPropertyName());
@@ -1502,12 +1490,8 @@ class Literal FINAL : public Expression {
     return value_->AsString();
   }
 
-  virtual bool ToBooleanIsTrue() const OVERRIDE {
-    return value()->BooleanValue();
-  }
-  virtual bool ToBooleanIsFalse() const OVERRIDE {
-    return !value()->BooleanValue();
-  }
+  bool ToBooleanIsTrue() const OVERRIDE { return value()->BooleanValue(); }
+  bool ToBooleanIsFalse() const OVERRIDE { return !value()->BooleanValue(); }
 
   Handle<Object> value() const { return value_->value(); }
   const AstValue* raw_value() const { return value_; }
@@ -1784,7 +1768,7 @@ class VariableProxy FINAL : public Expression {
   DECLARE_NODE_TYPE(VariableProxy)
   virtual Expression *Accept(AstRewriter *);
 
-  virtual bool IsValidReferenceExpression() const OVERRIDE {
+  bool IsValidReferenceExpression() const OVERRIDE {
     return !is_resolved() || var()->IsValidReference();
   }
 
@@ -1836,12 +1820,10 @@ class VariableProxy FINAL : public Expression {
     return FeedbackVectorRequirements(0, UsesVariableFeedbackSlot() ? 1 : 0);
   }
 
-  virtual void SetFirstFeedbackICSlot(FeedbackVectorICSlot slot) OVERRIDE {
+  void SetFirstFeedbackICSlot(FeedbackVectorICSlot slot) OVERRIDE {
     variable_feedback_slot_ = slot;
   }
-  virtual Code::Kind FeedbackICSlotKind(int index) OVERRIDE {
-    return Code::LOAD_IC;
-  }
+  Code::Kind FeedbackICSlotKind(int index) OVERRIDE { return Code::LOAD_IC; }
   FeedbackVectorICSlot VariableFeedbackSlot() {
     DCHECK(!UsesVariableFeedbackSlot() || !variable_feedback_slot_.IsInvalid());
     return variable_feedback_slot_;
@@ -1877,7 +1859,7 @@ class Property FINAL : public Expression {
   virtual Expression *Accept(AstRewriter *);
   template<class> friend class AstRewriterImpl;
 
-  virtual bool IsValidReferenceExpression() const OVERRIDE { return true; }
+  bool IsValidReferenceExpression() const OVERRIDE { return true; }
 
   Expression* obj() const { return obj_; }
   Expression* key() const { return key_; }
@@ -1891,18 +1873,11 @@ class Property FINAL : public Expression {
   }
 
   // Type feedback information.
-  virtual bool IsMonomorphic() OVERRIDE {
-    return receiver_types_.length() == 1;
-  }
-  virtual SmallMapList* GetReceiverTypes() OVERRIDE {
-    return &receiver_types_;
-  }
-  virtual KeyedAccessStoreMode GetStoreMode() const OVERRIDE {
-    return STANDARD_STORE;
-  }
-  virtual IcCheckType GetKeyType() const OVERRIDE {
-    // PROPERTY key types currently aren't implemented for KeyedLoadICs.
-    return ELEMENT;
+  bool IsMonomorphic() OVERRIDE { return receiver_types_.length() == 1; }
+  SmallMapList* GetReceiverTypes() OVERRIDE { return &receiver_types_; }
+  KeyedAccessStoreMode GetStoreMode() const OVERRIDE { return STANDARD_STORE; }
+  IcCheckType GetKeyType() const OVERRIDE {
+    return KeyTypeField::decode(bit_field_);
   }
   bool IsUninitialized() const {
     return !is_for_call() && HasNoTypeInformation();
@@ -1915,6 +1890,9 @@ class Property FINAL : public Expression {
   }
   void set_is_string_access(bool b) {
     bit_field_ = IsStringAccessField::update(bit_field_, b);
+  }
+  void set_key_type(IcCheckType key_type) {
+    bit_field_ = KeyTypeField::update(bit_field_, key_type);
   }
   void mark_for_call() {
     bit_field_ = IsForCallField::update(bit_field_, true);
@@ -1929,10 +1907,10 @@ class Property FINAL : public Expression {
       Isolate* isolate) OVERRIDE {
     return FeedbackVectorRequirements(0, FLAG_vector_ics ? 1 : 0);
   }
-  virtual void SetFirstFeedbackICSlot(FeedbackVectorICSlot slot) OVERRIDE {
+  void SetFirstFeedbackICSlot(FeedbackVectorICSlot slot) OVERRIDE {
     property_feedback_slot_ = slot;
   }
-  virtual Code::Kind FeedbackICSlotKind(int index) OVERRIDE {
+  Code::Kind FeedbackICSlotKind(int index) OVERRIDE {
     return key()->IsPropertyName() ? Code::LOAD_IC : Code::KEYED_LOAD_IC;
   }
 
@@ -1958,6 +1936,7 @@ class Property FINAL : public Expression {
   class IsForCallField : public BitField8<bool, 0, 1> {};
   class IsUninitializedField : public BitField8<bool, 1, 1> {};
   class IsStringAccessField : public BitField8<bool, 2, 1> {};
+  class KeyTypeField : public BitField8<IcCheckType, 3, 1> {};
   uint8_t bit_field_;
   FeedbackVectorICSlot property_feedback_slot_;
   Expression* obj_;
@@ -1977,12 +1956,10 @@ class Call FINAL : public Expression {
   // Type feedback information.
   virtual FeedbackVectorRequirements ComputeFeedbackRequirements(
       Isolate* isolate) OVERRIDE;
-  virtual void SetFirstFeedbackICSlot(FeedbackVectorICSlot slot) OVERRIDE {
+  void SetFirstFeedbackICSlot(FeedbackVectorICSlot slot) OVERRIDE {
     call_feedback_slot_ = slot;
   }
-  virtual Code::Kind FeedbackICSlotKind(int index) OVERRIDE {
-    return Code::CALL_IC;
-  }
+  Code::Kind FeedbackICSlotKind(int index) OVERRIDE { return Code::CALL_IC; }
 
   bool HasCallFeedbackSlot() const { return !call_feedback_slot_.IsInvalid(); }
   FeedbackVectorICSlot CallFeedbackSlot() const {
@@ -1990,14 +1967,14 @@ class Call FINAL : public Expression {
     return call_feedback_slot_;
   }
 
-  virtual SmallMapList* GetReceiverTypes() OVERRIDE {
+  SmallMapList* GetReceiverTypes() OVERRIDE {
     if (expression()->IsProperty()) {
       return expression()->AsProperty()->GetReceiverTypes();
     }
     return NULL;
   }
 
-  virtual bool IsMonomorphic() OVERRIDE {
+  bool IsMonomorphic() OVERRIDE {
     if (expression()->IsProperty()) {
       return expression()->AsProperty()->IsMonomorphic();
     }
@@ -2095,7 +2072,7 @@ class CallNew FINAL : public Expression {
       Isolate* isolate) OVERRIDE {
     return FeedbackVectorRequirements(FLAG_pretenuring_call_new ? 2 : 1, 0);
   }
-  virtual void SetFirstFeedbackSlot(FeedbackVectorSlot slot) OVERRIDE {
+  void SetFirstFeedbackSlot(FeedbackVectorSlot slot) OVERRIDE {
     callnew_feedback_slot_ = slot;
   }
 
@@ -2109,7 +2086,7 @@ class CallNew FINAL : public Expression {
   }
 
   void RecordTypeFeedback(TypeFeedbackOracle* oracle);
-  virtual bool IsMonomorphic() OVERRIDE { return is_monomorphic_; }
+  bool IsMonomorphic() OVERRIDE { return is_monomorphic_; }
   Handle<JSFunction> target() const { return target_; }
   Handle<AllocationSite> allocation_site() const {
     return allocation_site_;
@@ -2165,12 +2142,10 @@ class CallRuntime FINAL : public Expression {
       Isolate* isolate) OVERRIDE {
     return FeedbackVectorRequirements(0, HasCallRuntimeFeedbackSlot() ? 1 : 0);
   }
-  virtual void SetFirstFeedbackICSlot(FeedbackVectorICSlot slot) OVERRIDE {
+  void SetFirstFeedbackICSlot(FeedbackVectorICSlot slot) OVERRIDE {
     callruntime_feedback_slot_ = slot;
   }
-  virtual Code::Kind FeedbackICSlotKind(int index) OVERRIDE {
-    return Code::LOAD_IC;
-  }
+  Code::Kind FeedbackICSlotKind(int index) OVERRIDE { return Code::LOAD_IC; }
 
   FeedbackVectorICSlot CallRuntimeFeedbackSlot() {
     DCHECK(!HasCallRuntimeFeedbackSlot() ||
@@ -2242,7 +2217,7 @@ class BinaryOperation FINAL : public Expression {
   DECLARE_NODE_TYPE(BinaryOperation)
   DECLARE_FIXED_REWRITE_NODE(BinaryOperation)
 
-  virtual bool ResultOverwriteAllowed() const OVERRIDE;
+  bool ResultOverwriteAllowed() const OVERRIDE;
 
   Token::Value op() const { return static_cast<Token::Value>(op_); }
   Expression* left() const { return left_; }
@@ -2315,16 +2290,12 @@ class CountOperation FINAL : public Expression {
 
   Expression* expression() const { return expression_; }
 
-  virtual bool IsMonomorphic() OVERRIDE {
-    return receiver_types_.length() == 1;
-  }
-  virtual SmallMapList* GetReceiverTypes() OVERRIDE {
-    return &receiver_types_;
-  }
-  virtual IcCheckType GetKeyType() const OVERRIDE {
+  bool IsMonomorphic() OVERRIDE { return receiver_types_.length() == 1; }
+  SmallMapList* GetReceiverTypes() OVERRIDE { return &receiver_types_; }
+  IcCheckType GetKeyType() const OVERRIDE {
     return KeyTypeField::decode(bit_field_);
   }
-  virtual KeyedAccessStoreMode GetStoreMode() const OVERRIDE {
+  KeyedAccessStoreMode GetStoreMode() const OVERRIDE {
     return StoreModeField::decode(bit_field_);
   }
   Type* type() const { return type_; }
@@ -2473,22 +2444,18 @@ class Assignment FINAL : public Expression {
 
   // Type feedback information.
   TypeFeedbackId AssignmentFeedbackId() { return TypeFeedbackId(local_id(1)); }
-  virtual bool IsMonomorphic() OVERRIDE {
-    return receiver_types_.length() == 1;
-  }
+  bool IsMonomorphic() OVERRIDE { return receiver_types_.length() == 1; }
   bool IsUninitialized() const {
     return IsUninitializedField::decode(bit_field_);
   }
   bool HasNoTypeInformation() {
     return IsUninitializedField::decode(bit_field_);
   }
-  virtual SmallMapList* GetReceiverTypes() OVERRIDE {
-    return &receiver_types_;
-  }
-  virtual IcCheckType GetKeyType() const OVERRIDE {
+  SmallMapList* GetReceiverTypes() OVERRIDE { return &receiver_types_; }
+  IcCheckType GetKeyType() const OVERRIDE {
     return KeyTypeField::decode(bit_field_);
   }
-  virtual KeyedAccessStoreMode GetStoreMode() const OVERRIDE {
+  KeyedAccessStoreMode GetStoreMode() const OVERRIDE {
     return StoreModeField::decode(bit_field_);
   }
   void set_is_uninitialized(bool b) {
@@ -2560,10 +2527,10 @@ class Yield FINAL : public Expression {
       Isolate* isolate) OVERRIDE {
     return FeedbackVectorRequirements(0, HasFeedbackSlots() ? 3 : 0);
   }
-  virtual void SetFirstFeedbackICSlot(FeedbackVectorICSlot slot) OVERRIDE {
+  void SetFirstFeedbackICSlot(FeedbackVectorICSlot slot) OVERRIDE {
     yield_first_feedback_slot_ = slot;
   }
-  virtual Code::Kind FeedbackICSlotKind(int index) OVERRIDE {
+  Code::Kind FeedbackICSlotKind(int index) OVERRIDE {
     return index == 0 ? Code::KEYED_LOAD_IC : Code::LOAD_IC;
   }
 
@@ -2912,12 +2879,10 @@ class SuperReference FINAL : public Expression {
       Isolate* isolate) OVERRIDE {
     return FeedbackVectorRequirements(0, FLAG_vector_ics ? 1 : 0);
   }
-  virtual void SetFirstFeedbackICSlot(FeedbackVectorICSlot slot) OVERRIDE {
+  void SetFirstFeedbackICSlot(FeedbackVectorICSlot slot) OVERRIDE {
     homeobject_feedback_slot_ = slot;
   }
-  virtual Code::Kind FeedbackICSlotKind(int index) OVERRIDE {
-    return Code::LOAD_IC;
-  }
+  Code::Kind FeedbackICSlotKind(int index) OVERRIDE { return Code::LOAD_IC; }
 
   FeedbackVectorICSlot HomeObjectFeedbackSlot() {
     DCHECK(!FLAG_vector_ics || !homeobject_feedback_slot_.IsInvalid());
@@ -2987,16 +2952,16 @@ class RegExpTree : public ZoneObject {
 class RegExpDisjunction FINAL : public RegExpTree {
  public:
   explicit RegExpDisjunction(ZoneList<RegExpTree*>* alternatives);
-  virtual void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
+  void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
   virtual RegExpNode* ToNode(RegExpCompiler* compiler,
                              RegExpNode* on_success) OVERRIDE;
-  virtual RegExpDisjunction* AsDisjunction() OVERRIDE;
-  virtual Interval CaptureRegisters() OVERRIDE;
-  virtual bool IsDisjunction() OVERRIDE;
-  virtual bool IsAnchoredAtStart() OVERRIDE;
-  virtual bool IsAnchoredAtEnd() OVERRIDE;
-  virtual int min_match() OVERRIDE { return min_match_; }
-  virtual int max_match() OVERRIDE { return max_match_; }
+  RegExpDisjunction* AsDisjunction() OVERRIDE;
+  Interval CaptureRegisters() OVERRIDE;
+  bool IsDisjunction() OVERRIDE;
+  bool IsAnchoredAtStart() OVERRIDE;
+  bool IsAnchoredAtEnd() OVERRIDE;
+  int min_match() OVERRIDE { return min_match_; }
+  int max_match() OVERRIDE { return max_match_; }
   ZoneList<RegExpTree*>* alternatives() { return alternatives_; }
  private:
   ZoneList<RegExpTree*>* alternatives_;
@@ -3008,16 +2973,16 @@ class RegExpDisjunction FINAL : public RegExpTree {
 class RegExpAlternative FINAL : public RegExpTree {
  public:
   explicit RegExpAlternative(ZoneList<RegExpTree*>* nodes);
-  virtual void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
+  void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
   virtual RegExpNode* ToNode(RegExpCompiler* compiler,
                              RegExpNode* on_success) OVERRIDE;
-  virtual RegExpAlternative* AsAlternative() OVERRIDE;
-  virtual Interval CaptureRegisters() OVERRIDE;
-  virtual bool IsAlternative() OVERRIDE;
-  virtual bool IsAnchoredAtStart() OVERRIDE;
-  virtual bool IsAnchoredAtEnd() OVERRIDE;
-  virtual int min_match() OVERRIDE { return min_match_; }
-  virtual int max_match() OVERRIDE { return max_match_; }
+  RegExpAlternative* AsAlternative() OVERRIDE;
+  Interval CaptureRegisters() OVERRIDE;
+  bool IsAlternative() OVERRIDE;
+  bool IsAnchoredAtStart() OVERRIDE;
+  bool IsAnchoredAtEnd() OVERRIDE;
+  int min_match() OVERRIDE { return min_match_; }
+  int max_match() OVERRIDE { return max_match_; }
   ZoneList<RegExpTree*>* nodes() { return nodes_; }
  private:
   ZoneList<RegExpTree*>* nodes_;
@@ -3037,15 +3002,15 @@ class RegExpAssertion FINAL : public RegExpTree {
     NON_BOUNDARY
   };
   explicit RegExpAssertion(AssertionType type) : assertion_type_(type) { }
-  virtual void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
+  void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
   virtual RegExpNode* ToNode(RegExpCompiler* compiler,
                              RegExpNode* on_success) OVERRIDE;
-  virtual RegExpAssertion* AsAssertion() OVERRIDE;
-  virtual bool IsAssertion() OVERRIDE;
-  virtual bool IsAnchoredAtStart() OVERRIDE;
-  virtual bool IsAnchoredAtEnd() OVERRIDE;
-  virtual int min_match() OVERRIDE { return 0; }
-  virtual int max_match() OVERRIDE { return 0; }
+  RegExpAssertion* AsAssertion() OVERRIDE;
+  bool IsAssertion() OVERRIDE;
+  bool IsAnchoredAtStart() OVERRIDE;
+  bool IsAnchoredAtEnd() OVERRIDE;
+  int min_match() OVERRIDE { return 0; }
+  int max_match() OVERRIDE { return 0; }
   AssertionType assertion_type() { return assertion_type_; }
  private:
   AssertionType assertion_type_;
@@ -3083,15 +3048,15 @@ class RegExpCharacterClass FINAL : public RegExpTree {
   explicit RegExpCharacterClass(uc16 type)
       : set_(type),
         is_negated_(false) { }
-  virtual void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
+  void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
   virtual RegExpNode* ToNode(RegExpCompiler* compiler,
                              RegExpNode* on_success) OVERRIDE;
-  virtual RegExpCharacterClass* AsCharacterClass() OVERRIDE;
-  virtual bool IsCharacterClass() OVERRIDE;
-  virtual bool IsTextElement() OVERRIDE { return true; }
-  virtual int min_match() OVERRIDE { return 1; }
-  virtual int max_match() OVERRIDE { return 1; }
-  virtual void AppendToText(RegExpText* text, Zone* zone) OVERRIDE;
+  RegExpCharacterClass* AsCharacterClass() OVERRIDE;
+  bool IsCharacterClass() OVERRIDE;
+  bool IsTextElement() OVERRIDE { return true; }
+  int min_match() OVERRIDE { return 1; }
+  int max_match() OVERRIDE { return 1; }
+  void AppendToText(RegExpText* text, Zone* zone) OVERRIDE;
   CharacterSet character_set() { return set_; }
   // TODO(lrn): Remove need for complex version if is_standard that
   // recognizes a mangled standard set and just do { return set_.is_special(); }
@@ -3120,15 +3085,15 @@ class RegExpCharacterClass FINAL : public RegExpTree {
 class RegExpAtom FINAL : public RegExpTree {
  public:
   explicit RegExpAtom(Vector<const uc16> data) : data_(data) { }
-  virtual void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
+  void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
   virtual RegExpNode* ToNode(RegExpCompiler* compiler,
                              RegExpNode* on_success) OVERRIDE;
-  virtual RegExpAtom* AsAtom() OVERRIDE;
-  virtual bool IsAtom() OVERRIDE;
-  virtual bool IsTextElement() OVERRIDE { return true; }
-  virtual int min_match() OVERRIDE { return data_.length(); }
-  virtual int max_match() OVERRIDE { return data_.length(); }
-  virtual void AppendToText(RegExpText* text, Zone* zone) OVERRIDE;
+  RegExpAtom* AsAtom() OVERRIDE;
+  bool IsAtom() OVERRIDE;
+  bool IsTextElement() OVERRIDE { return true; }
+  int min_match() OVERRIDE { return data_.length(); }
+  int max_match() OVERRIDE { return data_.length(); }
+  void AppendToText(RegExpText* text, Zone* zone) OVERRIDE;
   Vector<const uc16> data() { return data_; }
   int length() { return data_.length(); }
  private:
@@ -3139,15 +3104,15 @@ class RegExpAtom FINAL : public RegExpTree {
 class RegExpText FINAL : public RegExpTree {
  public:
   explicit RegExpText(Zone* zone) : elements_(2, zone), length_(0) {}
-  virtual void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
+  void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
   virtual RegExpNode* ToNode(RegExpCompiler* compiler,
                              RegExpNode* on_success) OVERRIDE;
-  virtual RegExpText* AsText() OVERRIDE;
-  virtual bool IsText() OVERRIDE;
-  virtual bool IsTextElement() OVERRIDE { return true; }
-  virtual int min_match() OVERRIDE { return length_; }
-  virtual int max_match() OVERRIDE { return length_; }
-  virtual void AppendToText(RegExpText* text, Zone* zone) OVERRIDE;
+  RegExpText* AsText() OVERRIDE;
+  bool IsText() OVERRIDE;
+  bool IsTextElement() OVERRIDE { return true; }
+  int min_match() OVERRIDE { return length_; }
+  int max_match() OVERRIDE { return length_; }
+  void AppendToText(RegExpText* text, Zone* zone) OVERRIDE;
   void AddElement(TextElement elm, Zone* zone)  {
     elements_.Add(elm, zone);
     length_ += elm.length();
@@ -3174,7 +3139,7 @@ class RegExpQuantifier FINAL : public RegExpTree {
       max_match_ = max * body->max_match();
     }
   }
-  virtual void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
+  void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
   virtual RegExpNode* ToNode(RegExpCompiler* compiler,
                              RegExpNode* on_success) OVERRIDE;
   static RegExpNode* ToNode(int min,
@@ -3184,11 +3149,11 @@ class RegExpQuantifier FINAL : public RegExpTree {
                             RegExpCompiler* compiler,
                             RegExpNode* on_success,
                             bool not_at_start = false);
-  virtual RegExpQuantifier* AsQuantifier() OVERRIDE;
-  virtual Interval CaptureRegisters() OVERRIDE;
-  virtual bool IsQuantifier() OVERRIDE;
-  virtual int min_match() OVERRIDE { return min_match_; }
-  virtual int max_match() OVERRIDE { return max_match_; }
+  RegExpQuantifier* AsQuantifier() OVERRIDE;
+  Interval CaptureRegisters() OVERRIDE;
+  bool IsQuantifier() OVERRIDE;
+  int min_match() OVERRIDE { return min_match_; }
+  int max_match() OVERRIDE { return max_match_; }
   int min() { return min_; }
   int max() { return max_; }
   bool is_possessive() { return quantifier_type_ == POSSESSIVE; }
@@ -3210,20 +3175,20 @@ class RegExpCapture FINAL : public RegExpTree {
  public:
   explicit RegExpCapture(RegExpTree* body, int index)
       : body_(body), index_(index) { }
-  virtual void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
+  void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
   virtual RegExpNode* ToNode(RegExpCompiler* compiler,
                              RegExpNode* on_success) OVERRIDE;
   static RegExpNode* ToNode(RegExpTree* body,
                             int index,
                             RegExpCompiler* compiler,
                             RegExpNode* on_success);
-  virtual RegExpCapture* AsCapture() OVERRIDE;
-  virtual bool IsAnchoredAtStart() OVERRIDE;
-  virtual bool IsAnchoredAtEnd() OVERRIDE;
-  virtual Interval CaptureRegisters() OVERRIDE;
-  virtual bool IsCapture() OVERRIDE;
-  virtual int min_match() OVERRIDE { return body_->min_match(); }
-  virtual int max_match() OVERRIDE { return body_->max_match(); }
+  RegExpCapture* AsCapture() OVERRIDE;
+  bool IsAnchoredAtStart() OVERRIDE;
+  bool IsAnchoredAtEnd() OVERRIDE;
+  Interval CaptureRegisters() OVERRIDE;
+  bool IsCapture() OVERRIDE;
+  int min_match() OVERRIDE { return body_->min_match(); }
+  int max_match() OVERRIDE { return body_->max_match(); }
   RegExpTree* body() { return body_; }
   int index() { return index_; }
   static int StartRegister(int index) { return index * 2; }
@@ -3246,15 +3211,15 @@ class RegExpLookahead FINAL : public RegExpTree {
         capture_count_(capture_count),
         capture_from_(capture_from) { }
 
-  virtual void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
+  void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
   virtual RegExpNode* ToNode(RegExpCompiler* compiler,
                              RegExpNode* on_success) OVERRIDE;
-  virtual RegExpLookahead* AsLookahead() OVERRIDE;
-  virtual Interval CaptureRegisters() OVERRIDE;
-  virtual bool IsLookahead() OVERRIDE;
-  virtual bool IsAnchoredAtStart() OVERRIDE;
-  virtual int min_match() OVERRIDE { return 0; }
-  virtual int max_match() OVERRIDE { return 0; }
+  RegExpLookahead* AsLookahead() OVERRIDE;
+  Interval CaptureRegisters() OVERRIDE;
+  bool IsLookahead() OVERRIDE;
+  bool IsAnchoredAtStart() OVERRIDE;
+  int min_match() OVERRIDE { return 0; }
+  int max_match() OVERRIDE { return 0; }
   RegExpTree* body() { return body_; }
   bool is_positive() { return is_positive_; }
   int capture_count() { return capture_count_; }
@@ -3272,13 +3237,13 @@ class RegExpBackReference FINAL : public RegExpTree {
  public:
   explicit RegExpBackReference(RegExpCapture* capture)
       : capture_(capture) { }
-  virtual void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
+  void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
   virtual RegExpNode* ToNode(RegExpCompiler* compiler,
                              RegExpNode* on_success) OVERRIDE;
-  virtual RegExpBackReference* AsBackReference() OVERRIDE;
-  virtual bool IsBackReference() OVERRIDE;
-  virtual int min_match() OVERRIDE { return 0; }
-  virtual int max_match() OVERRIDE { return capture_->max_match(); }
+  RegExpBackReference* AsBackReference() OVERRIDE;
+  bool IsBackReference() OVERRIDE;
+  int min_match() OVERRIDE { return 0; }
+  int max_match() OVERRIDE { return capture_->max_match(); }
   int index() { return capture_->index(); }
   RegExpCapture* capture() { return capture_; }
  private:
@@ -3289,13 +3254,13 @@ class RegExpBackReference FINAL : public RegExpTree {
 class RegExpEmpty FINAL : public RegExpTree {
  public:
   RegExpEmpty() { }
-  virtual void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
+  void* Accept(RegExpVisitor* visitor, void* data) OVERRIDE;
   virtual RegExpNode* ToNode(RegExpCompiler* compiler,
                              RegExpNode* on_success) OVERRIDE;
-  virtual RegExpEmpty* AsEmpty() OVERRIDE;
-  virtual bool IsEmpty() OVERRIDE;
-  virtual int min_match() OVERRIDE { return 0; }
-  virtual int max_match() OVERRIDE { return 0; }
+  RegExpEmpty* AsEmpty() OVERRIDE;
+  bool IsEmpty() OVERRIDE;
+  int min_match() OVERRIDE { return 0; }
+  int max_match() OVERRIDE { return 0; }
 };
 
 
@@ -3333,32 +3298,32 @@ class AstVisitor BASE_EMBEDDED {
 };
 
 
-#define DEFINE_AST_VISITOR_SUBCLASS_MEMBERS()                       \
-public:                                                             \
-  virtual void Visit(AstNode* node) FINAL OVERRIDE {          \
-    if (!CheckStackOverflow()) node->Accept(this);                  \
-  }                                                                 \
-                                                                    \
-  void SetStackOverflow() { stack_overflow_ = true; }               \
-  void ClearStackOverflow() { stack_overflow_ = false; }            \
-  bool HasStackOverflow() const { return stack_overflow_; }         \
-                                                                    \
-  bool CheckStackOverflow() {                                       \
-    if (stack_overflow_) return true;                               \
-    StackLimitCheck check(zone_->isolate());                        \
-    if (!check.HasOverflowed()) return false;                       \
-    return (stack_overflow_ = true);                                \
-  }                                                                 \
-                                                                    \
-private:                                                            \
-  void InitializeAstVisitor(Zone* zone) {                           \
-    zone_ = zone;                                                   \
-    stack_overflow_ = false;                                        \
-  }                                                                 \
-  Zone* zone() { return zone_; }                                    \
-  Isolate* isolate() { return zone_->isolate(); }                   \
-                                                                    \
-  Zone* zone_;                                                      \
+#define DEFINE_AST_VISITOR_SUBCLASS_MEMBERS()               \
+ public:                                                    \
+  void Visit(AstNode* node) FINAL {                         \
+    if (!CheckStackOverflow()) node->Accept(this);          \
+  }                                                         \
+                                                            \
+  void SetStackOverflow() { stack_overflow_ = true; }       \
+  void ClearStackOverflow() { stack_overflow_ = false; }    \
+  bool HasStackOverflow() const { return stack_overflow_; } \
+                                                            \
+  bool CheckStackOverflow() {                               \
+    if (stack_overflow_) return true;                       \
+    StackLimitCheck check(zone_->isolate());                \
+    if (!check.HasOverflowed()) return false;               \
+    return (stack_overflow_ = true);                        \
+  }                                                         \
+                                                            \
+ private:                                                   \
+  void InitializeAstVisitor(Zone* zone) {                   \
+    zone_ = zone;                                           \
+    stack_overflow_ = false;                                \
+  }                                                         \
+  Zone* zone() { return zone_; }                            \
+  Isolate* isolate() { return zone_->isolate(); }           \
+                                                            \
+  Zone* zone_;                                              \
   bool stack_overflow_
 
 

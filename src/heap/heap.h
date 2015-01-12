@@ -279,9 +279,12 @@ namespace internal {
   V(RegExp_string, "RegExp")
 
 #define PRIVATE_SYMBOL_LIST(V)      \
+  V(nonextensible_symbol)           \
+  V(sealed_symbol)                  \
   V(frozen_symbol)                  \
   V(nonexistent_symbol)             \
   V(elements_transition_symbol)     \
+  V(prototype_users_symbol)         \
   V(observed_symbol)                \
   V(uninitialized_symbol)           \
   V(megamorphic_symbol)             \
@@ -764,7 +767,7 @@ class Heap {
   bool IsHeapIterable();
 
   // Notify the heap that a context has been disposed.
-  int NotifyContextDisposed();
+  int NotifyContextDisposed(bool dependant_context);
 
   inline void increment_scan_on_scavenge_pages() {
     scan_on_scavenge_pages_++;
@@ -1104,6 +1107,7 @@ class Heap {
   void DisableInlineAllocation();
 
   // Implements the corresponding V8 API function.
+  bool IdleNotification(double deadline_in_seconds);
   bool IdleNotification(int idle_time_in_ms);
 
   // Declare all the root indices.  This defines the root list order.
@@ -1293,6 +1297,8 @@ class Heap {
   void FreeQueuedChunks();
 
   int gc_count() const { return gc_count_; }
+
+  bool RecentIdleNotifcationHappened();
 
   // Completely clear the Instanceof cache (to stop it keeping objects alive
   // around a GC).
@@ -1500,6 +1506,8 @@ class Heap {
   int initial_semispace_size_;
   int target_semispace_size_;
   intptr_t max_old_generation_size_;
+  intptr_t initial_old_generation_size_;
+  bool old_generation_size_configured_;
   intptr_t max_executable_size_;
   intptr_t maximum_committed_;
 
@@ -1933,6 +1941,7 @@ class Heap {
 
   // Code to be run before and after mark-compact.
   void MarkCompactPrologue();
+  void MarkCompactEpilogue();
 
   void ProcessNativeContexts(WeakObjectRetainer* retainer);
   void ProcessArrayBuffers(WeakObjectRetainer* retainer);
@@ -1986,8 +1995,10 @@ class Heap {
 
   int high_survival_rate_period_length_;
   intptr_t promoted_objects_size_;
+  double promotion_ratio_;
   double promotion_rate_;
   intptr_t semi_space_copied_object_size_;
+  intptr_t previous_semi_space_copied_object_size_;
   double semi_space_copied_rate_;
   int nodes_died_in_new_space_;
   int nodes_copied_in_new_space_;
@@ -2003,12 +2014,14 @@ class Heap {
   // Re-visit incremental marking heuristics.
   bool IsHighSurvivalRate() { return high_survival_rate_period_length_ > 0; }
 
+  void ConfigureInitialOldGenerationSize();
+
   void SelectScavengingVisitorsTable();
 
   void IdleMarkCompact(const char* message);
 
-  void TryFinalizeIdleIncrementalMarking(
-      size_t idle_time_in_ms, size_t size_of_objects,
+  bool TryFinalizeIdleIncrementalMarking(
+      double idle_time_in_ms, size_t size_of_objects,
       size_t mark_compact_speed_in_bytes_per_ms);
 
   bool WorthActivatingIncrementalMarking();
@@ -2055,6 +2068,9 @@ class Heap {
 
   // Cumulative GC time spent in sweeping
   double sweeping_time_;
+
+  // Last time an idle notification happened
+  double last_idle_notification_time_;
 
   MarkCompactCollector mark_compact_collector_;
 

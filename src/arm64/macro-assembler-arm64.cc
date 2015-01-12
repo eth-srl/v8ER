@@ -3788,20 +3788,35 @@ void MacroAssembler::CheckMap(Register obj_map,
 }
 
 
-void MacroAssembler::DispatchMap(Register obj,
-                                 Register scratch,
-                                 Handle<Map> map,
-                                 Handle<Code> success,
-                                 SmiCheckType smi_check_type) {
+void MacroAssembler::DispatchWeakMap(Register obj, Register scratch1,
+                                     Register scratch2, Handle<WeakCell> cell,
+                                     Handle<Code> success,
+                                     SmiCheckType smi_check_type) {
   Label fail;
   if (smi_check_type == DO_SMI_CHECK) {
     JumpIfSmi(obj, &fail);
   }
-  Ldr(scratch, FieldMemOperand(obj, HeapObject::kMapOffset));
-  Cmp(scratch, Operand(map));
+  Ldr(scratch1, FieldMemOperand(obj, HeapObject::kMapOffset));
+  CmpWeakValue(scratch1, cell, scratch2);
   B(ne, &fail);
   Jump(success, RelocInfo::CODE_TARGET);
   Bind(&fail);
+}
+
+
+void MacroAssembler::CmpWeakValue(Register value, Handle<WeakCell> cell,
+                                  Register scratch) {
+  Mov(scratch, Operand(cell));
+  Ldr(scratch, FieldMemOperand(scratch, WeakCell::kValueOffset));
+  Cmp(value, scratch);
+}
+
+
+void MacroAssembler::LoadWeakValue(Register value, Handle<WeakCell> cell,
+                                   Label* miss) {
+  Mov(value, Operand(cell));
+  Ldr(value, FieldMemOperand(value, WeakCell::kValueOffset));
+  JumpIfSmi(value, miss);
 }
 
 
@@ -4631,17 +4646,6 @@ void MacroAssembler::HasColor(Register object,
   }
 
   // Fall through if it does not have the right color.
-}
-
-
-void MacroAssembler::CheckMapDeprecated(Handle<Map> map,
-                                        Register scratch,
-                                        Label* if_deprecated) {
-  if (map->CanBeDeprecated()) {
-    Mov(scratch, Operand(map));
-    Ldrsw(scratch, FieldMemOperand(scratch, Map::kBitField3Offset));
-    TestAndBranchIfAnySet(scratch, Map::Deprecated::kMask, if_deprecated);
-  }
 }
 
 

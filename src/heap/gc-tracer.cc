@@ -31,6 +31,11 @@ GCTracer::ContextDisposalEvent::ContextDisposalEvent(double time) {
 }
 
 
+GCTracer::SurvivalEvent::SurvivalEvent(double survival_rate) {
+  survival_rate_ = survival_rate;
+}
+
+
 GCTracer::Event::Event(Type type, const char* gc_reason,
                        const char* collector_reason)
     : type(type),
@@ -121,7 +126,7 @@ void GCTracer::Start(GarbageCollector collector, const char* gc_reason,
   if (collector == SCAVENGER) {
     current_ = Event(Event::SCAVENGER, gc_reason, collector_reason);
   } else if (collector == MARK_COMPACTOR) {
-    if (heap_->incremental_marking()->IsMarking()) {
+    if (heap_->incremental_marking()->WasActivated()) {
       current_ =
           Event(Event::INCREMENTAL_MARK_COMPACTOR, gc_reason, collector_reason);
     } else {
@@ -252,6 +257,11 @@ void GCTracer::AddContextDisposalTime(double time) {
 }
 
 
+void GCTracer::AddSurvivalRate(double survival_rate) {
+  survival_events_.push_front(SurvivalEvent(survival_rate));
+}
+
+
 void GCTracer::AddIncrementalMarkingStep(double duration, intptr_t bytes) {
   cumulative_incremental_marking_steps_++;
   cumulative_incremental_marking_bytes_ += bytes;
@@ -339,6 +349,7 @@ void GCTracer::PrintNVP() const {
          current_.scopes[Scope::MC_UPDATE_POINTERS_BETWEEN_EVACUATED]);
   PrintF("misc_compaction=%.1f ",
          current_.scopes[Scope::MC_UPDATE_MISC_POINTERS]);
+  PrintF("weak_closure=%.1f ", current_.scopes[Scope::MC_WEAKCLOSURE]);
   PrintF("weakcollection_process=%.1f ",
          current_.scopes[Scope::MC_WEAKCOLLECTION_PROCESS]);
   PrintF("weakcollection_clear=%.1f ",
@@ -360,8 +371,10 @@ void GCTracer::PrintNVP() const {
   PrintF("nodes_died_in_new=%d ", heap_->nodes_died_in_new_space_);
   PrintF("nodes_copied_in_new=%d ", heap_->nodes_copied_in_new_space_);
   PrintF("nodes_promoted=%d ", heap_->nodes_promoted_);
+  PrintF("promotion_ratio=%.1f%% ", heap_->promotion_ratio_);
   PrintF("promotion_rate=%.1f%% ", heap_->promotion_rate_);
   PrintF("semi_space_copy_rate=%.1f%% ", heap_->semi_space_copied_rate_);
+  PrintF("average_survival_rate%.1f%% ", AverageSurvivalRate());
   PrintF("new_space_allocation_throughput=%" V8_PTR_PREFIX "d ",
          NewSpaceAllocationThroughputInBytesPerMillisecond());
   PrintF("context_disposal_rate=%.1f ", ContextDisposalRateInMilliseconds());
@@ -555,5 +568,27 @@ double GCTracer::ContextDisposalRateInMilliseconds() const {
 
   return (begin - end) / context_disposal_events_.size();
 }
+
+
+double GCTracer::AverageSurvivalRate() const {
+  if (survival_events_.size() == 0) return 0.0;
+
+  double sum_of_rates = 0.0;
+  SurvivalEventBuffer::const_iterator iter = survival_events_.begin();
+  while (iter != survival_events_.end()) {
+    sum_of_rates += iter->survival_rate_;
+    ++iter;
+  }
+
+  return sum_of_rates / static_cast<double>(survival_events_.size());
+}
+
+
+bool GCTracer::SurvivalEventsRecorded() const {
+  return survival_events_.size() > 0;
+}
+
+
+void GCTracer::ResetSurvivalEvents() { survival_events_.reset(); }
 }
 }  // namespace v8::internal

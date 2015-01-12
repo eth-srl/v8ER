@@ -2,6 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+# Because standalone V8 builds are not supported, assume this is part of a
+# Chromium build.
+import("//build/module_args/v8.gni")
+
 # TODO(jochen): These will need to be user-settable to support standalone V8
 # builds.
 v8_deprecation_warnings = false
@@ -14,7 +18,6 @@ v8_interpreted_regexp = false
 v8_object_print = false
 v8_postmortem_support = false
 v8_use_snapshot = true
-v8_use_external_startup_data = false
 v8_enable_extra_checks = is_debug
 v8_target_arch = cpu_arch
 v8_random_seed = "314159265"
@@ -197,7 +200,6 @@ action("js2c") {
     "src/debug-debugger.js",
     "src/mirror-debugger.js",
     "src/liveedit-debugger.js",
-    "src/harmony-string.js",
     "src/macros.py",
   ]
 
@@ -236,11 +238,14 @@ action("js2c_experimental") {
     "src/macros.py",
     "src/proxy.js",
     "src/generator.js",
+    "src/harmony-string.js",
     "src/harmony-array.js",
+    "src/harmony-array-includes.js",
     "src/harmony-typedarray.js",
     "src/harmony-classes.js",
     "src/harmony-tostring.js",
-    "src/harmony-templates.js"
+    "src/harmony-templates.js",
+    "src/harmony-regexp.js"
   ]
 
   outputs = [
@@ -276,7 +281,7 @@ if (v8_use_external_startup_data) {
     ]
 
     outputs = [
-      "$root_gen_dir/natives_blob.bin"
+      "$root_out_dir/natives_blob.bin"
     ]
 
     script = "tools/concatenate-files.py"
@@ -329,10 +334,10 @@ action("run_mksnapshot") {
   }
 
   if (v8_use_external_startup_data) {
-    outputs += [ "$root_gen_dir/snapshot_blob.bin" ]
+    outputs += [ "$root_out_dir/snapshot_blob.bin" ]
     args += [
       "--startup_blob",
-      rebase_path("$root_gen_dir/snapshot_blob.bin", root_build_dir)
+      rebase_path("$root_out_dir/snapshot_blob.bin", root_build_dir)
     ]
   }
 }
@@ -355,7 +360,6 @@ source_set("v8_nosnapshot") {
     "$target_gen_dir/libraries.cc",
     "$target_gen_dir/experimental-libraries.cc",
     "src/snapshot-empty.cc",
-    "src/snapshot-common.cc",
   ]
 
   configs -= [ "//build/config/compiler:chromium_code" ]
@@ -377,7 +381,6 @@ source_set("v8_snapshot") {
     "$target_gen_dir/libraries.cc",
     "$target_gen_dir/experimental-libraries.cc",
     "$target_gen_dir/snapshot.cc",
-    "src/snapshot-common.cc",
   ]
 
   configs -= [ "//build/config/compiler:chromium_code" ]
@@ -488,21 +491,20 @@ source_set("v8_base") {
     "src/compiler/code-generator.cc",
     "src/compiler/code-generator.h",
     "src/compiler/common-node-cache.h",
+    "src/compiler/common-operator-reducer.cc",
+    "src/compiler/common-operator-reducer.h",
     "src/compiler/common-operator.cc",
     "src/compiler/common-operator.h",
     "src/compiler/control-builders.cc",
     "src/compiler/control-builders.h",
+    "src/compiler/control-equivalence.h",
     "src/compiler/control-reducer.cc",
     "src/compiler/control-reducer.h",
     "src/compiler/diamond.h",
     "src/compiler/frame.h",
     "src/compiler/gap-resolver.cc",
     "src/compiler/gap-resolver.h",
-    "src/compiler/generic-algorithm-inl.h",
     "src/compiler/generic-algorithm.h",
-    "src/compiler/generic-graph.h",
-    "src/compiler/generic-node-inl.h",
-    "src/compiler/generic-node.h",
     "src/compiler/graph-builder.cc",
     "src/compiler/graph-builder.h",
     "src/compiler/graph-inl.h",
@@ -541,6 +543,10 @@ source_set("v8_base") {
     "src/compiler/linkage-impl.h",
     "src/compiler/linkage.cc",
     "src/compiler/linkage.h",
+    "src/compiler/load-elimination.cc",
+    "src/compiler/load-elimination.h",
+    "src/compiler/loop-analysis.cc",
+    "src/compiler/loop-analysis.h",
     "src/compiler/machine-operator-reducer.cc",
     "src/compiler/machine-operator-reducer.h",
     "src/compiler/machine-operator.cc",
@@ -895,6 +901,7 @@ source_set("v8_base") {
     "src/serialize.h",
     "src/small-pointer-list.h",
     "src/smart-pointers.h",
+    "src/snapshot-common.cc",
     "src/snapshot-source-sink.cc",
     "src/snapshot-source-sink.h",
     "src/snapshot.h",
@@ -1262,6 +1269,7 @@ source_set("v8_libbase") {
     "src/base/flags.h",
     "src/base/functional.cc",
     "src/base/functional.h",
+    "src/base/iterator.h",
     "src/base/lazy-instance.h",
     "src/base/logging.cc",
     "src/base/logging.h",
@@ -1404,7 +1412,7 @@ component("v8") {
     "src/v8dll-main.cc",
   ]
 
-  if (v8_use_external_startup_data) {
+  if (v8_use_snapshot && v8_use_external_startup_data) {
     deps = [
       ":v8_base",
       ":v8_external_snapshot",
@@ -1415,6 +1423,7 @@ component("v8") {
       ":v8_snapshot",
     ]
   } else {
+    assert(!v8_use_external_startup_data)
     deps = [
       ":v8_base",
       ":v8_nosnapshot",
@@ -1436,7 +1445,7 @@ component("v8") {
 } else {
 
 group("v8") {
-  if (v8_use_external_startup_data) {
+  if (v8_use_snapshot && v8_use_external_startup_data) {
     deps = [
       ":v8_base",
       ":v8_external_snapshot",
@@ -1447,6 +1456,7 @@ group("v8") {
       ":v8_snapshot",
     ]
   } else {
+    assert(!v8_use_external_startup_data)
     deps = [
       ":v8_base",
       ":v8_nosnapshot",

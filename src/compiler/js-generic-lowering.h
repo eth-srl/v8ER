@@ -22,13 +22,14 @@ class CommonOperatorBuilder;
 class MachineOperatorBuilder;
 class Linkage;
 
+
 // Lowers JS-level operators to runtime and IC calls in the "generic" case.
-class JSGenericLowering : public Reducer {
+class JSGenericLowering FINAL : public Reducer {
  public:
   JSGenericLowering(CompilationInfo* info, JSGraph* graph);
-  virtual ~JSGenericLowering() {}
+  ~JSGenericLowering() FINAL {}
 
-  virtual Reduction Reduce(Node* node);
+  Reduction Reduce(Node* node) FINAL;
 
  protected:
 #define DECLARE_LOWER(x) void Lower##x(Node* node);
@@ -41,7 +42,7 @@ class JSGenericLowering : public Reducer {
   void PatchInsertInput(Node* node, int index, Node* input);
 
   // Helpers to replace existing nodes with a generic call.
-  void ReplaceWithCompareIC(Node* node, Token::Value token, bool pure);
+  void ReplaceWithCompareIC(Node* node, Token::Value token);
   void ReplaceWithStubCall(Node* node, Callable c, CallDescriptor::Flags flags);
   void ReplaceWithBuiltinCall(Node* node, Builtins::JavaScript id, int args);
   void ReplaceWithRuntimeCall(Node* node, Runtime::FunctionId f, int args = -1);

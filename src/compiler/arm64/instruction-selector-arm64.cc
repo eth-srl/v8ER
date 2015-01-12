@@ -362,6 +362,72 @@ void InstructionSelector::VisitStore(Node* node) {
 }
 
 
+void InstructionSelector::VisitCheckedLoad(Node* node) {
+  MachineType rep = RepresentationOf(OpParameter<MachineType>(node));
+  MachineType typ = TypeOf(OpParameter<MachineType>(node));
+  Arm64OperandGenerator g(this);
+  Node* const buffer = node->InputAt(0);
+  Node* const offset = node->InputAt(1);
+  Node* const length = node->InputAt(2);
+  ArchOpcode opcode;
+  switch (rep) {
+    case kRepWord8:
+      opcode = typ == kTypeInt32 ? kCheckedLoadInt8 : kCheckedLoadUint8;
+      break;
+    case kRepWord16:
+      opcode = typ == kTypeInt32 ? kCheckedLoadInt16 : kCheckedLoadUint16;
+      break;
+    case kRepWord32:
+      opcode = kCheckedLoadWord32;
+      break;
+    case kRepFloat32:
+      opcode = kCheckedLoadFloat32;
+      break;
+    case kRepFloat64:
+      opcode = kCheckedLoadFloat64;
+      break;
+    default:
+      UNREACHABLE();
+      return;
+  }
+  Emit(opcode, g.DefineAsRegister(node), g.UseRegister(buffer),
+       g.UseRegister(offset), g.UseOperand(length, kArithmeticImm));
+}
+
+
+void InstructionSelector::VisitCheckedStore(Node* node) {
+  MachineType rep = RepresentationOf(OpParameter<MachineType>(node));
+  Arm64OperandGenerator g(this);
+  Node* const buffer = node->InputAt(0);
+  Node* const offset = node->InputAt(1);
+  Node* const length = node->InputAt(2);
+  Node* const value = node->InputAt(3);
+  ArchOpcode opcode;
+  switch (rep) {
+    case kRepWord8:
+      opcode = kCheckedStoreWord8;
+      break;
+    case kRepWord16:
+      opcode = kCheckedStoreWord16;
+      break;
+    case kRepWord32:
+      opcode = kCheckedStoreWord32;
+      break;
+    case kRepFloat32:
+      opcode = kCheckedStoreFloat32;
+      break;
+    case kRepFloat64:
+      opcode = kCheckedStoreFloat64;
+      break;
+    default:
+      UNREACHABLE();
+      return;
+  }
+  Emit(opcode, nullptr, g.UseRegister(buffer), g.UseRegister(offset),
+       g.UseOperand(length, kArithmeticImm), g.UseRegister(value));
+}
+
+
 template <typename Matcher>
 static void VisitLogical(InstructionSelector* selector, Node* node, Matcher* m,
                          ArchOpcode opcode, bool left_can_cover,
@@ -1015,7 +1081,7 @@ void InstructionSelector::VisitFloat64RoundTiesAway(Node* node) {
 
 void InstructionSelector::VisitCall(Node* node) {
   Arm64OperandGenerator g(this);
-  CallDescriptor* descriptor = OpParameter<CallDescriptor*>(node);
+  const CallDescriptor* descriptor = OpParameter<const CallDescriptor*>(node);
 
   FrameStateDescriptor* frame_state_descriptor = NULL;
   if (descriptor->NeedsFrameState()) {
@@ -1277,9 +1343,8 @@ void InstructionSelector::VisitBranch(Node* branch, BasicBlock* tbranch,
           // If the mask has only one bit set, we can use tbz/tbnz.
           DCHECK((cont.condition() == kEqual) ||
                  (cont.condition() == kNotEqual));
-          ArchOpcode opcode =
-              (cont.condition() == kEqual) ? kArm64Tbz32 : kArm64Tbnz32;
-          Emit(opcode, NULL, g.UseRegister(m.left().node()),
+          Emit(cont.Encode(kArm64TestAndBranch32), NULL,
+               g.UseRegister(m.left().node()),
                g.TempImmediate(
                    base::bits::CountTrailingZeros32(m.right().Value())),
                g.Label(cont.true_block()),
@@ -1296,9 +1361,8 @@ void InstructionSelector::VisitBranch(Node* branch, BasicBlock* tbranch,
           // If the mask has only one bit set, we can use tbz/tbnz.
           DCHECK((cont.condition() == kEqual) ||
                  (cont.condition() == kNotEqual));
-          ArchOpcode opcode =
-              (cont.condition() == kEqual) ? kArm64Tbz : kArm64Tbnz;
-          Emit(opcode, NULL, g.UseRegister(m.left().node()),
+          Emit(cont.Encode(kArm64TestAndBranch), NULL,
+               g.UseRegister(m.left().node()),
                g.TempImmediate(
                    base::bits::CountTrailingZeros64(m.right().Value())),
                g.Label(cont.true_block()),
@@ -1314,9 +1378,8 @@ void InstructionSelector::VisitBranch(Node* branch, BasicBlock* tbranch,
   }
 
   // Branch could not be combined with a compare, compare against 0 and branch.
-  DCHECK((cont.condition() == kEqual) || (cont.condition() == kNotEqual));
-  ArchOpcode opcode = (cont.condition() == kEqual) ? kArm64Cbz32 : kArm64Cbnz32;
-  Emit(opcode, NULL, g.UseRegister(value), g.Label(cont.true_block()),
+  Emit(cont.Encode(kArm64CompareAndBranch32), NULL, g.UseRegister(value),
+       g.Label(cont.true_block()),
        g.Label(cont.false_block()))->MarkAsControl();
 }
 
@@ -1458,7 +1521,9 @@ InstructionSelector::SupportedMachineOperatorFlags() {
          MachineOperatorBuilder::kFloat64Ceil |
          MachineOperatorBuilder::kFloat64RoundTruncate |
          MachineOperatorBuilder::kFloat64RoundTiesAway |
-         MachineOperatorBuilder::kWord32ShiftIsSafe;
+         MachineOperatorBuilder::kWord32ShiftIsSafe |
+         MachineOperatorBuilder::kInt32DivIsSafe |
+         MachineOperatorBuilder::kUint32DivIsSafe;
 }
 }  // namespace compiler
 }  // namespace internal

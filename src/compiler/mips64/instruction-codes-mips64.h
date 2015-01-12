@@ -53,9 +53,9 @@ namespace compiler {
   V(Mips64DivD)                    \
   V(Mips64ModD)                    \
   V(Mips64SqrtD)                   \
-  V(Mips64FloorD)                  \
-  V(Mips64CeilD)                   \
-  V(Mips64RoundTruncateD)          \
+  V(Mips64Float64Floor)            \
+  V(Mips64Float64Ceil)             \
+  V(Mips64Float64RoundTruncate)    \
   V(Mips64CvtSD)                   \
   V(Mips64CvtDS)                   \
   V(Mips64TruncWD)                 \
@@ -77,6 +77,8 @@ namespace compiler {
   V(Mips64Ldc1)                    \
   V(Mips64Sdc1)                    \
   V(Mips64Push)                    \
+  V(Mips64StoreToStackSlot)        \
+  V(Mips64StackClaim)              \
   V(Mips64StoreWriteBarrier)
 
 

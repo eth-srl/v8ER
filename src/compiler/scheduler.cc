@@ -8,6 +8,7 @@
 #include "src/compiler/scheduler.h"
 
 #include "src/bit-vector.h"
+#include "src/compiler/control-equivalence.h"
 #include "src/compiler/graph.h"
 #include "src/compiler/graph-inl.h"
 #include "src/compiler/node.h"
@@ -58,7 +59,7 @@ Schedule* Scheduler::ComputeSchedule(Zone* zone, Graph* graph) {
 
 
 Scheduler::SchedulerData Scheduler::DefaultSchedulerData() {
-  SchedulerData def = {schedule_->start(), 0, false, false, kUnknown};
+  SchedulerData def = {schedule_->start(), 0, kUnknown};
   return def;
 }
 
@@ -85,17 +86,12 @@ Scheduler::Placement Scheduler::GetPlacement(Node* node) {
         data->placement_ = (p == kFixed ? kFixed : kCoupled);
         break;
       }
-#define DEFINE_FLOATING_CONTROL_CASE(V) case IrOpcode::k##V:
-      CONTROL_OP_LIST(DEFINE_FLOATING_CONTROL_CASE)
-#undef DEFINE_FLOATING_CONTROL_CASE
+#define DEFINE_CONTROL_CASE(V) case IrOpcode::k##V:
+      CONTROL_OP_LIST(DEFINE_CONTROL_CASE)
+#undef DEFINE_CONTROL_CASE
       {
         // Control nodes that were not control-reachable from end may float.
         data->placement_ = kSchedulable;
-        if (!data->is_connected_control_) {
-          data->is_floating_control_ = true;
-          Trace("Floating control found: #%d:%s\n", node->id(),
-                node->op()->mnemonic());
-        }
         break;
       }
       default:
@@ -125,9 +121,9 @@ void Scheduler::UpdatePlacement(Node* node, Placement placement) {
         schedule_->AddNode(block, node);
         break;
       }
-#define DEFINE_FLOATING_CONTROL_CASE(V) case IrOpcode::k##V:
-      CONTROL_OP_LIST(DEFINE_FLOATING_CONTROL_CASE)
-#undef DEFINE_FLOATING_CONTROL_CASE
+#define DEFINE_CONTROL_CASE(V) case IrOpcode::k##V:
+      CONTROL_OP_LIST(DEFINE_CONTROL_CASE)
+#undef DEFINE_CONTROL_CASE
       {
         // Control nodes force coupled uses to be placed.
         Node::Uses uses = node->uses();
@@ -147,8 +143,8 @@ void Scheduler::UpdatePlacement(Node* node, Placement placement) {
     // Reduce the use count of the node's inputs to potentially make them
     // schedulable. If all the uses of a node have been scheduled, then the node
     // itself can be scheduled.
-    for (InputIter i = node->inputs().begin(); i != node->inputs().end(); ++i) {
-      DecrementUnscheduledUseCount(*i, i.index(), i.edge().from());
+    for (Edge const edge : node->input_edges()) {
+      DecrementUnscheduledUseCount(edge.to(), edge.index(), edge.from());
     }
   }
   data->placement_ = placement;
@@ -239,9 +235,10 @@ class CFGBuilder : public ZoneObject {
   CFGBuilder(Zone* zone, Scheduler* scheduler)
       : scheduler_(scheduler),
         schedule_(scheduler->schedule_),
+        queued_(scheduler->graph_, 2),
         queue_(zone),
         control_(zone),
-        component_head_(NULL),
+        component_entry_(NULL),
         component_start_(NULL),
         component_end_(NULL) {}
 
@@ -267,31 +264,37 @@ class CFGBuilder : public ZoneObject {
   }
 
   // Run the control flow graph construction for a minimal control-connected
-  // component ending in {node} and merge that component into an existing
+  // component ending in {exit} and merge that component into an existing
   // control flow graph at the bottom of {block}.
-  void Run(BasicBlock* block, Node* node) {
+  void Run(BasicBlock* block, Node* exit) {
     ResetDataStructures();
-    Queue(node);
+    Queue(exit);
 
+    component_entry_ = NULL;
     component_start_ = block;
-    component_end_ = schedule_->block(node);
+    component_end_ = schedule_->block(exit);
+    scheduler_->equivalence_->Run(exit);
     while (!queue_.empty()) {  // Breadth-first backwards traversal.
       Node* node = queue_.front();
       queue_.pop();
-      bool is_dom = true;
+
+      // Use control dependence equivalence to find a canonical single-entry
+      // single-exit region that makes up a minimal component to be scheduled.
+      if (IsSingleEntrySingleExitRegion(node, exit)) {
+        Trace("Found SESE at #%d:%s\n", node->id(), node->op()->mnemonic());
+        DCHECK_EQ(NULL, component_entry_);
+        component_entry_ = node;
+        continue;
+      }
+
       int max = NodeProperties::PastControlIndex(node);
       for (int i = NodeProperties::FirstControlIndex(node); i < max; i++) {
-        is_dom = is_dom &&
-            !scheduler_->GetData(node->InputAt(i))->is_floating_control_;
         Queue(node->InputAt(i));
       }
-      // TODO(mstarzinger): This is a hacky way to find component dominator.
-      if (is_dom) component_head_ = node;
     }
-    DCHECK_NOT_NULL(component_head_);
+    DCHECK_NE(NULL, component_entry_);
 
     for (NodeVector::iterator i = control_.begin(); i != control_.end(); ++i) {
-      scheduler_->GetData(*i)->is_floating_control_ = false;
       ConnectBlocks(*i);  // Connect block to its predecessor/successors.
     }
   }
@@ -307,15 +310,13 @@ class CFGBuilder : public ZoneObject {
 
   void Queue(Node* node) {
     // Mark the connected control nodes as they are queued.
-    Scheduler::SchedulerData* data = scheduler_->GetData(node);
-    if (!data->is_connected_control_) {
-      data->is_connected_control_ = true;
+    if (!queued_.Get(node)) {
       BuildBlocks(node);
       queue_.push(node);
+      queued_.Set(node, true);
       control_.push_back(node);
     }
   }
-
 
   void BuildBlocks(Node* node) {
     switch (node->opcode()) {
@@ -390,14 +391,14 @@ class CFGBuilder : public ZoneObject {
                                    IrOpcode::Value false_opcode) {
     buffer[0] = NULL;
     buffer[1] = NULL;
-    for (UseIter i = node->uses().begin(); i != node->uses().end(); ++i) {
-      if ((*i)->opcode() == true_opcode) {
+    for (Node* use : node->uses()) {
+      if (use->opcode() == true_opcode) {
         DCHECK_EQ(NULL, buffer[0]);
-        buffer[0] = *i;
+        buffer[0] = use;
       }
-      if ((*i)->opcode() == false_opcode) {
+      if (use->opcode() == false_opcode) {
         DCHECK_EQ(NULL, buffer[1]);
-        buffer[1] = *i;
+        buffer[1] = use;
       }
     }
     DCHECK_NE(NULL, buffer[0]);
@@ -430,7 +431,7 @@ class CFGBuilder : public ZoneObject {
         break;
     }
 
-    if (branch == component_head_) {
+    if (branch == component_entry_) {
       TraceConnect(branch, component_start_, successor_blocks[0]);
       TraceConnect(branch, component_start_, successor_blocks[1]);
       schedule_->InsertBranch(component_start_, component_end_, branch,
@@ -455,9 +456,8 @@ class CFGBuilder : public ZoneObject {
     DCHECK(block != NULL);
     // For all of the merge's control inputs, add a goto at the end to the
     // merge's basic block.
-    for (InputIter j = merge->inputs().begin(); j != merge->inputs().end();
-         ++j) {
-      BasicBlock* predecessor_block = schedule_->block(*j);
+    for (Node* const input : merge->inputs()) {
+      BasicBlock* predecessor_block = schedule_->block(input);
       TraceConnect(merge, predecessor_block, block);
       schedule_->AddGoto(predecessor_block, block);
     }
@@ -486,6 +486,12 @@ class CFGBuilder : public ZoneObject {
             node == scheduler_->graph_->end()->InputAt(0));
   }
 
+  bool IsSingleEntrySingleExitRegion(Node* entry, Node* exit) const {
+    size_t entry_class = scheduler_->equivalence_->ClassOf(entry);
+    size_t exit_class = scheduler_->equivalence_->ClassOf(exit);
+    return entry != exit && entry_class == exit_class;
+  }
+
   void ResetDataStructures() {
     control_.clear();
     DCHECK(queue_.empty());
@@ -494,16 +500,20 @@ class CFGBuilder : public ZoneObject {
 
   Scheduler* scheduler_;
   Schedule* schedule_;
-  ZoneQueue<Node*> queue_;
-  NodeVector control_;
-  Node* component_head_;
-  BasicBlock* component_start_;
-  BasicBlock* component_end_;
+  NodeMarker<bool> queued_;      // Mark indicating whether node is queued.
+  ZoneQueue<Node*> queue_;       // Queue used for breadth-first traversal.
+  NodeVector control_;           // List of encountered control nodes.
+  Node* component_entry_;        // Component single-entry node.
+  BasicBlock* component_start_;  // Component single-entry block.
+  BasicBlock* component_end_;    // Component single-exit block.
 };
 
 
 void Scheduler::BuildCFG() {
   Trace("--- CREATING CFG -------------------------------------------\n");
+
+  // Instantiate a new control equivalence algorithm for the graph.
+  equivalence_ = new (zone_) ControlEquivalence(zone_, graph_);
 
   // Build a control-flow graph for the main control-connected component that
   // is being spanned by the graph's start and end nodes.
@@ -556,20 +566,6 @@ class SpecialRPONumberer : public ZoneObject {
   void UpdateSpecialRPO(BasicBlock* entry, BasicBlock* end) {
     DCHECK_NE(NULL, order_);  // Main order to be updated is present.
     ComputeAndInsertSpecialRPO(entry, end);
-  }
-
-  // Serialize the previously computed order as an assembly order (non-deferred
-  // code first, deferred code afterwards) into the final schedule.
-  void SerializeAOIntoSchedule() {
-    int32_t number = 0;
-    for (BasicBlock* b = order_; b != NULL; b = b->rpo_next()) {
-      if (b->deferred()) continue;
-      b->set_ao_number(number++);
-    }
-    for (BasicBlock* b = order_; b != NULL; b = b->rpo_next()) {
-      if (!b->deferred()) continue;
-      b->set_ao_number(number++);
-    }
   }
 
   // Serialize the previously computed order as a special reverse-post-order
@@ -638,14 +634,12 @@ class SpecialRPONumberer : public ZoneObject {
     return block;
   }
 
-  // We are hijacking the {ao_number} to enumerate loops temporarily. Note that
-  // these numbers are only valid within this class.
-  static int GetLoopNumber(BasicBlock* block) { return block->ao_number(); }
+  static int GetLoopNumber(BasicBlock* block) { return block->loop_number(); }
   static void SetLoopNumber(BasicBlock* block, int loop_number) {
-    return block->set_ao_number(loop_number);
+    return block->set_loop_number(loop_number);
   }
   static bool HasLoopNumber(BasicBlock* block) {
-    return block->ao_number() >= 0;
+    return block->loop_number() >= 0;
   }
 
   // TODO(mstarzinger): We only need this special sentinel because some tests
@@ -663,7 +657,7 @@ class SpecialRPONumberer : public ZoneObject {
   // mutating any existing order so that the result is still valid.
   void ComputeAndInsertSpecialRPO(BasicBlock* entry, BasicBlock* end) {
     // RPO should not have been serialized for this schedule yet.
-    CHECK_EQ(kBlockUnvisited1, schedule_->start()->ao_number());
+    CHECK_EQ(kBlockUnvisited1, schedule_->start()->loop_number());
     CHECK_EQ(kBlockUnvisited1, schedule_->start()->rpo_number());
     CHECK_EQ(0, static_cast<int>(schedule_->rpo_order()->size()));
 
@@ -1021,7 +1015,6 @@ class SpecialRPONumberer : public ZoneObject {
 BasicBlockVector* Scheduler::ComputeSpecialRPO(Zone* zone, Schedule* schedule) {
   SpecialRPONumberer numberer(zone, schedule);
   numberer.ComputeSpecialRPO();
-  numberer.SerializeAOIntoSchedule();
   numberer.SerializeRPOIntoSchedule();
   numberer.PrintAndVerifySpecialRPO();
   return schedule->rpo_order();
@@ -1250,9 +1243,7 @@ class ScheduleLateNodeVisitor {
  private:
   void ProcessQueue(Node* root) {
     ZoneQueue<Node*>* queue = &(scheduler_->schedule_queue_);
-    for (InputIter i = root->inputs().begin(); i != root->inputs().end(); ++i) {
-      Node* node = *i;
-
+    for (Node* node : root->inputs()) {
       // Don't schedule coupled nodes on their own.
       if (scheduler_->GetPlacement(node) == Scheduler::kCoupled) {
         node = NodeProperties::GetControlInput(node);
@@ -1325,9 +1316,8 @@ class ScheduleLateNodeVisitor {
 
   BasicBlock* GetCommonDominatorOfUses(Node* node) {
     BasicBlock* block = NULL;
-    Node::Uses uses = node->uses();
-    for (Node::Uses::iterator i = uses.begin(); i != uses.end(); ++i) {
-      BasicBlock* use_block = GetBlockForUse(i.edge());
+    for (Edge edge : node->use_edges()) {
+      BasicBlock* use_block = GetBlockForUse(edge);
       block = block == NULL ? use_block : use_block == NULL
                                               ? block
                                               : scheduler_->GetCommonDominator(
@@ -1336,7 +1326,7 @@ class ScheduleLateNodeVisitor {
     return block;
   }
 
-  BasicBlock* GetBlockForUse(Node::Edge edge) {
+  BasicBlock* GetBlockForUse(Edge edge) {
     Node* use = edge.from();
     IrOpcode::Value opcode = use->opcode();
     if (opcode == IrOpcode::kPhi || opcode == IrOpcode::kEffectPhi) {
@@ -1367,7 +1357,6 @@ class ScheduleLateNodeVisitor {
   }
 
   void ScheduleFloatingControl(BasicBlock* block, Node* node) {
-    DCHECK(scheduler_->GetData(node)->is_floating_control_);
     scheduler_->FuseFloatingControl(block, node);
   }
 
@@ -1406,7 +1395,6 @@ void Scheduler::SealFinalSchedule() {
   Trace("--- SEAL FINAL SCHEDULE ------------------------------------\n");
 
   // Serialize the assembly order and reverse-post-order numbering.
-  special_rpo_->SerializeAOIntoSchedule();
   special_rpo_->SerializeRPOIntoSchedule();
   special_rpo_->PrintAndVerifySpecialRPO();
 

@@ -70,7 +70,6 @@ class RepresentationSelector {
         info_(zone->NewArray<NodeInfo>(count_)),
         nodes_(zone),
         replacements_(zone),
-        contains_js_nodes_(false),
         phase_(PROPAGATE),
         changer_(changer),
         queue_(zone) {
@@ -239,19 +238,19 @@ class RepresentationSelector {
   // context, effect, and control inputs, assuming that value inputs should have
   // {kRepTagged} representation and can observe all output values {kTypeAny}.
   void VisitInputs(Node* node) {
-    InputIter i = node->inputs().begin();
+    auto i = node->input_edges().begin();
     for (int j = node->op()->ValueInputCount(); j > 0; ++i, j--) {
-      ProcessInput(node, i.index(), kMachAnyTagged);  // Value inputs
+      ProcessInput(node, (*i).index(), kMachAnyTagged);  // Value inputs
     }
     for (int j = OperatorProperties::GetContextInputCount(node->op()); j > 0;
          ++i, j--) {
-      ProcessInput(node, i.index(), kMachAnyTagged);  // Context inputs
+      ProcessInput(node, (*i).index(), kMachAnyTagged);  // Context inputs
     }
     for (int j = node->op()->EffectInputCount(); j > 0; ++i, j--) {
-      Enqueue(*i);  // Effect inputs: just visit
+      Enqueue((*i).to());  // Effect inputs: just visit
     }
     for (int j = node->op()->ControlInputCount(); j > 0; ++i, j--) {
-      Enqueue(*i);  // Control inputs: just visit
+      Enqueue((*i).to());  // Control inputs: just visit
     }
     SetOutput(node, kMachAnyTagged);
   }
@@ -381,21 +380,19 @@ class RepresentationSelector {
       }
 
       // Convert inputs to the output representation of this phi.
-      Node::Inputs inputs = node->inputs();
-      for (Node::Inputs::iterator iter(inputs.begin()); iter != inputs.end();
-           ++iter, --values) {
+      for (Edge const edge : node->input_edges()) {
         // TODO(titzer): it'd be nice to have distinguished edge kinds here.
-        ProcessInput(node, iter.index(), values > 0 ? output_type : 0);
+        ProcessInput(node, edge.index(), values > 0 ? output_type : 0);
+        values--;
       }
     } else {
       // Propagate {use} of the phi to value inputs, and 0 to control.
-      Node::Inputs inputs = node->inputs();
       MachineType use_type =
           static_cast<MachineType>((use & kTypeMask) | output);
-      for (Node::Inputs::iterator iter(inputs.begin()); iter != inputs.end();
-           ++iter, --values) {
+      for (Edge const edge : node->input_edges()) {
         // TODO(titzer): it'd be nice to have distinguished edge kinds here.
-        ProcessInput(node, iter.index(), values > 0 ? use_type : 0);
+        ProcessInput(node, edge.index(), values > 0 ? use_type : 0);
+        values--;
       }
     }
   }
@@ -517,7 +514,6 @@ class RepresentationSelector {
 #define DEFINE_JS_CASE(x) case IrOpcode::k##x:
         JS_OP_LIST(DEFINE_JS_CASE)
 #undef DEFINE_JS_CASE
-        contains_js_nodes_ = true;
         VisitInputs(node);
         return SetOutput(node, kRepTagged);
 
@@ -760,30 +756,58 @@ class RepresentationSelector {
         if (lower()) lowering->DoStoreField(node);
         break;
       }
-      case IrOpcode::kLoadElement: {
-        ElementAccess access = ElementAccessOf(node->op());
-        ProcessInput(node, 0, changer_->TypeForBasePointer(access));
-        ProcessInput(node, 1, kMachInt32);  // element index
+      case IrOpcode::kLoadBuffer: {
+        BufferAccess access = BufferAccessOf(node->op());
+        ProcessInput(node, 0, kMachPtr);    // buffer
+        ProcessInput(node, 1, kMachInt32);  // offset
         ProcessInput(node, 2, kMachInt32);  // length
         ProcessRemainingInputs(node, 3);
         // Tagged overrides everything if we have to do a typed array bounds
         // check, because we may need to return undefined then.
-        MachineType output_type =
-            (access.bounds_check == kTypedArrayBoundsCheck &&
-             (use & kRepTagged))
-                ? kMachAnyTagged
-                : access.machine_type;
+        MachineType output_type;
+        if (use & kRepTagged) {
+          output_type = kMachAnyTagged;
+        } else if (use & kRepFloat64) {
+          if (access.machine_type() & kRepFloat32) {
+            output_type = access.machine_type();
+          } else {
+            output_type = kMachFloat64;
+          }
+        } else if (use & kRepFloat32) {
+          output_type = kMachFloat32;
+        } else {
+          output_type = access.machine_type();
+        }
         SetOutput(node, output_type);
-        if (lower()) lowering->DoLoadElement(node, output_type);
+        if (lower()) lowering->DoLoadBuffer(node, output_type, changer_);
+        break;
+      }
+      case IrOpcode::kStoreBuffer: {
+        BufferAccess access = BufferAccessOf(node->op());
+        ProcessInput(node, 0, kMachPtr);               // buffer
+        ProcessInput(node, 1, kMachInt32);             // offset
+        ProcessInput(node, 2, kMachInt32);             // length
+        ProcessInput(node, 3, access.machine_type());  // value
+        ProcessRemainingInputs(node, 4);
+        SetOutput(node, 0);
+        if (lower()) lowering->DoStoreBuffer(node);
+        break;
+      }
+      case IrOpcode::kLoadElement: {
+        ElementAccess access = ElementAccessOf(node->op());
+        ProcessInput(node, 0, changer_->TypeForBasePointer(access));  // base
+        ProcessInput(node, 1, kMachInt32);                            // index
+        ProcessRemainingInputs(node, 2);
+        SetOutput(node, access.machine_type);
+        if (lower()) lowering->DoLoadElement(node);
         break;
       }
       case IrOpcode::kStoreElement: {
         ElementAccess access = ElementAccessOf(node->op());
-        ProcessInput(node, 0, changer_->TypeForBasePointer(access));
-        ProcessInput(node, 1, kMachInt32);  // element index
-        ProcessInput(node, 2, kMachInt32);  // length
-        ProcessInput(node, 3, access.machine_type);
-        ProcessRemainingInputs(node, 4);
+        ProcessInput(node, 0, changer_->TypeForBasePointer(access));  // base
+        ProcessInput(node, 1, kMachInt32);                            // index
+        ProcessInput(node, 2, access.machine_type);                   // value
+        ProcessRemainingInputs(node, 3);
         SetOutput(node, 0);
         if (lower()) lowering->DoStoreElement(node);
         break;
@@ -1006,7 +1030,6 @@ class RepresentationSelector {
   NodeInfo* info_;                  // node id -> usage information
   NodeVector nodes_;                // collected nodes
   NodeVector replacements_;         // replacements to be done after lowering
-  bool contains_js_nodes_;          // {true} if a JS operator was seen
   Phase phase_;                     // current phase of algorithm
   RepresentationChanger* changer_;  // for inserting representation changes
   ZoneQueue<Node*> queue_;          // queue for traversing the graph
@@ -1113,156 +1136,95 @@ Node* SimplifiedLowering::ComputeIndex(const ElementAccess& access,
 }
 
 
-namespace {
+void SimplifiedLowering::DoLoadBuffer(Node* node, MachineType output_type,
+                                      RepresentationChanger* changer) {
+  DCHECK_EQ(IrOpcode::kLoadBuffer, node->opcode());
+  DCHECK_NE(kMachNone, RepresentationOf(output_type));
+  MachineType const type = BufferAccessOf(node->op()).machine_type();
+  if (output_type != type) {
+    Node* const buffer = node->InputAt(0);
+    Node* const offset = node->InputAt(1);
+    Node* const length = node->InputAt(2);
+    Node* const effect = node->InputAt(3);
+    Node* const control = node->InputAt(4);
+    Node* const index =
+        machine()->Is64()
+            ? graph()->NewNode(machine()->ChangeUint32ToUint64(), offset)
+            : offset;
 
-intptr_t AddressForOutOfBoundsLoad(MachineType type) {
-  switch (RepresentationOf(type)) {
-    case kRepFloat32: {
-      static const float dummy = std::numeric_limits<float>::quiet_NaN();
-      return bit_cast<intptr_t>(&dummy);
-    }
-    case kRepFloat64: {
-      static const double dummy = std::numeric_limits<double>::quiet_NaN();
-      return bit_cast<intptr_t>(&dummy);
-    }
-    case kRepBit:
-    case kRepWord8:
-    case kRepWord16:
-    case kRepWord32: {
-      static const int32_t dummy = 0;
-      return bit_cast<intptr_t>(&dummy);
-    }
-    default:
-      break;
-  }
-  UNREACHABLE();
-  return 0;
-}
+    Node* check = graph()->NewNode(machine()->Uint32LessThan(), offset, length);
+    Node* branch =
+        graph()->NewNode(common()->Branch(BranchHint::kTrue), check, control);
 
+    Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
+    Node* etrue =
+        graph()->NewNode(machine()->Load(type), buffer, index, effect, if_true);
+    Node* vtrue = changer->GetRepresentationFor(etrue, type, output_type);
 
-intptr_t AddressForOutOfBoundsStore() {
-  static volatile double dummy = 0;
-  return bit_cast<intptr_t>(&dummy);
-}
-
-}  // namespace
-
-
-void SimplifiedLowering::DoLoadElement(Node* node, MachineType output_type) {
-  const ElementAccess& access = ElementAccessOf(node->op());
-  const Operator* op = machine()->Load(access.machine_type);
-  Node* key = node->InputAt(1);
-  Node* index = ComputeIndex(access, key);
-  Node* effect = node->InputAt(3);
-  if (access.bounds_check == kNoBoundsCheck) {
-    DCHECK_EQ(access.machine_type, output_type);
-    node->set_op(op);
-    node->ReplaceInput(1, index);
-    node->ReplaceInput(2, effect);
-    node->ReplaceInput(3, graph()->start());
-  } else {
-    DCHECK_EQ(kTypedArrayBoundsCheck, access.bounds_check);
-
-    Node* base = node->InputAt(0);
-    Node* length = node->InputAt(2);
-    Node* check = graph()->NewNode(machine()->Uint32LessThan(), key, length);
-
-    IntPtrMatcher mbase(base);
-    if (mbase.HasValue() && (output_type & kRepTagged) == 0) {
-      Node* select = graph()->NewNode(
-          common()->Select(kMachIntPtr, BranchHint::kTrue), check, index,
-          jsgraph()->IntPtrConstant(AddressForOutOfBoundsLoad(output_type) -
-                                    mbase.Value()));
-
-      node->set_op(op);
-      node->ReplaceInput(1, select);
-      node->ReplaceInput(2, effect);
-      node->ReplaceInput(3, graph()->start());
+    Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
+    Node* efalse = effect;
+    Node* vfalse;
+    if (output_type & kRepTagged) {
+      vfalse = jsgraph()->UndefinedConstant();
+    } else if (output_type & kRepFloat64) {
+      vfalse =
+          jsgraph()->Float64Constant(std::numeric_limits<double>::quiet_NaN());
+    } else if (output_type & kRepFloat32) {
+      vfalse =
+          jsgraph()->Float32Constant(std::numeric_limits<float>::quiet_NaN());
     } else {
-      Diamond d(graph(), common(), check, BranchHint::kTrue);
-
-      Node* load = graph()->NewNode(op, base, index, effect, d.if_true);
-      Node* result = load;
-      if (output_type & kRepTagged) {
-        // TODO(turbofan): This is ugly as hell!
-        SimplifiedOperatorBuilder simplified(graph()->zone());
-        RepresentationChanger changer(jsgraph(), &simplified,
-                                      graph()->zone()->isolate());
-        result =
-            changer.GetTaggedRepresentationFor(result, access.machine_type);
-      }
-
-      Node* undefined;
-      if (output_type & kRepTagged) {
-        DCHECK_EQ(0, access.machine_type & kRepTagged);
-        undefined = jsgraph()->UndefinedConstant();
-      } else if (output_type & kRepFloat32) {
-        undefined =
-            jsgraph()->Float32Constant(std::numeric_limits<float>::quiet_NaN());
-      } else if (output_type & kRepFloat64) {
-        undefined = jsgraph()->Float64Constant(
-            std::numeric_limits<double>::quiet_NaN());
-      } else {
-        undefined = jsgraph()->Int32Constant(0);
-      }
-
-      // Replace effect uses of node with the effect phi.
-      NodeProperties::ReplaceWithValue(node, node, d.EffectPhi(load, effect));
-
-      d.OverwriteWithPhi(node, output_type, result, undefined);
+      vfalse = jsgraph()->Int32Constant(0);
     }
+
+    Node* merge = graph()->NewNode(common()->Merge(2), if_true, if_false);
+    Node* ephi = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, merge);
+
+    // Replace effect uses of {node} with the {ephi}.
+    NodeProperties::ReplaceWithValue(node, node, ephi);
+
+    // Turn the {node} into a Phi.
+    node->set_op(common()->Phi(output_type, 2));
+    node->ReplaceInput(0, vtrue);
+    node->ReplaceInput(1, vfalse);
+    node->ReplaceInput(2, merge);
+    node->TrimInputCount(3);
+  } else {
+    node->set_op(machine()->CheckedLoad(type));
   }
+}
+
+
+void SimplifiedLowering::DoStoreBuffer(Node* node) {
+  DCHECK_EQ(IrOpcode::kStoreBuffer, node->opcode());
+  MachineType const type = BufferAccessOf(node->op()).machine_type();
+  node->set_op(machine()->CheckedStore(type));
+}
+
+
+void SimplifiedLowering::DoLoadElement(Node* node) {
+  const ElementAccess& access = ElementAccessOf(node->op());
+  node->set_op(machine()->Load(access.machine_type));
+  node->ReplaceInput(1, ComputeIndex(access, node->InputAt(1)));
 }
 
 
 void SimplifiedLowering::DoStoreElement(Node* node) {
   const ElementAccess& access = ElementAccessOf(node->op());
-  const Operator* op = machine()->Store(StoreRepresentation(
+  node->set_op(machine()->Store(StoreRepresentation(
       access.machine_type,
       ComputeWriteBarrierKind(access.base_is_tagged, access.machine_type,
-                              access.type)));
-  Node* key = node->InputAt(1);
-  Node* index = ComputeIndex(access, key);
-  if (access.bounds_check == kNoBoundsCheck) {
-    node->set_op(op);
-    node->ReplaceInput(1, index);
-    node->RemoveInput(2);
-  } else {
-    DCHECK_EQ(kTypedArrayBoundsCheck, access.bounds_check);
-
-    Node* base = node->InputAt(0);
-    Node* length = node->InputAt(2);
-    Node* value = node->InputAt(3);
-    Node* effect = node->InputAt(4);
-    Node* control = node->InputAt(5);
-    Node* check = graph()->NewNode(machine()->Uint32LessThan(), key, length);
-
-    IntPtrMatcher mbase(base);
-    if (mbase.HasValue()) {
-      Node* select = graph()->NewNode(
-          common()->Select(kMachIntPtr, BranchHint::kTrue), check, index,
-          jsgraph()->IntPtrConstant(AddressForOutOfBoundsStore() -
-                                    mbase.Value()));
-
-      node->set_op(op);
-      node->ReplaceInput(1, select);
-      node->RemoveInput(2);
-    } else {
-      Diamond d(graph(), common(), check, BranchHint::kTrue);
-      d.Chain(control);
-      Node* store = graph()->NewNode(op, base, index, value, effect, d.if_true);
-      d.OverwriteWithEffectPhi(node, store, effect);
-    }
-  }
+                              access.type))));
+  node->ReplaceInput(1, ComputeIndex(access, node->InputAt(1)));
 }
 
 
 void SimplifiedLowering::DoStringAdd(Node* node) {
+  Operator::Properties properties = node->op()->properties();
   Callable callable = CodeFactory::StringAdd(
       zone()->isolate(), STRING_ADD_CHECK_NONE, NOT_TENURED);
   CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
-  CallDescriptor* desc =
-      Linkage::GetStubCallDescriptor(callable.descriptor(), 0, flags, zone());
+  CallDescriptor* desc = Linkage::GetStubCallDescriptor(
+      callable.descriptor(), 0, flags, properties, zone());
   node->set_op(common()->Call(desc));
   node->InsertInput(graph()->zone(), 0,
                     jsgraph()->HeapConstant(callable.code()));
