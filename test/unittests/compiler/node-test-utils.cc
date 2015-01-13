@@ -4,6 +4,7 @@
 
 #include "test/unittests/compiler/node-test-utils.h"
 
+#include "src/assembler.h"
 #include "src/compiler/node-properties-inl.h"
 #include "src/compiler/simplified-operator.h"
 
@@ -1289,6 +1290,7 @@ IS_BINOP_MATCHER(Float64Sub)
   Matcher<Node*> Is##Name(const Matcher<Node*>& input_matcher) {             \
     return MakeMatcher(new IsUnopMatcher(IrOpcode::k##Name, input_matcher)); \
   }
+IS_UNOP_MATCHER(AnyToBoolean)
 IS_UNOP_MATCHER(BooleanNot)
 IS_UNOP_MATCHER(ChangeFloat64ToInt32)
 IS_UNOP_MATCHER(ChangeFloat64ToUint32)

@@ -130,8 +130,9 @@
   JS_CONTEXT_OP_LIST(V)   \
   JS_OTHER_OP_LIST(V)
 
-// Opcodes for VirtuaMachine-level operators.
+// Opcodes for VirtualMachine-level operators.
 #define SIMPLIFIED_OP_LIST(V) \
+  V(AnyToBoolean)             \
   V(BooleanNot)               \
   V(BooleanToNumber)          \
   V(NumberEqual)              \
@@ -156,6 +157,8 @@
   V(ChangeUint32ToTagged)     \
   V(ChangeFloat64ToTagged)    \
   V(ChangeBoolToBit)          \
+  V(ChangeWord32ToBit)        \
+  V(ChangeWord64ToBit)        \
   V(ChangeBitToBool)          \
   V(LoadField)                \
   V(LoadBuffer)               \
@@ -268,18 +271,7 @@ class IrOpcode {
   };
 
   // Returns the mnemonic name of an opcode.
-  static const char* Mnemonic(Value val) {
-    // TODO(turbofan): make this a table lookup.
-    switch (val) {
-#define RETURN_NAME(x) \
-  case k##x:           \
-    return #x;
-      ALL_OP_LIST(RETURN_NAME)
-#undef RETURN_NAME
-      default:
-        return "UnknownOpcode";
-    }
-  }
+  static char const* Mnemonic(Value value);
 
   static bool IsJsOpcode(Value val) {
     switch (val) {

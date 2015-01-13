@@ -174,8 +174,11 @@ Node* JSGraph::NumberConstant(double value) {
 
 
 Node* JSGraph::Float32Constant(float value) {
-  // TODO(turbofan): cache float32 constants.
-  return graph()->NewNode(common()->Float32Constant(value));
+  Node** loc = cache_.FindFloat32Constant(value);
+  if (*loc == NULL) {
+    *loc = graph()->NewNode(common()->Float32Constant(value));
+  }
+  return *loc;
 }
 
 
@@ -194,6 +197,15 @@ Node* JSGraph::ExternalConstant(ExternalReference reference) {
     *loc = graph()->NewNode(common()->ExternalConstant(reference));
   }
   return *loc;
+}
+
+
+Type* JSGraph::ZeroOneRangeType() {
+  if (!zero_one_range_type_.is_set()) {
+    zero_one_range_type_.set(
+        Type::Range(factory()->NewNumber(0), factory()->NewNumber(1), zone()));
+  }
+  return zero_one_range_type_.get();
 }
 
 

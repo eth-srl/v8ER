@@ -158,6 +158,7 @@ const ElementAccess& ElementAccessOf(const Operator* op) {
 
 
 #define PURE_OP_LIST(V)                                \
+  V(AnyToBoolean, Operator::kNoProperties, 1)          \
   V(BooleanNot, Operator::kNoProperties, 1)            \
   V(BooleanToNumber, Operator::kNoProperties, 1)       \
   V(NumberEqual, Operator::kCommutative, 2)            \
@@ -180,8 +181,10 @@ const ElementAccess& ElementAccessOf(const Operator* op) {
   V(ChangeInt32ToTagged, Operator::kNoProperties, 1)   \
   V(ChangeUint32ToTagged, Operator::kNoProperties, 1)  \
   V(ChangeFloat64ToTagged, Operator::kNoProperties, 1) \
-  V(ChangeBoolToBit, Operator::kNoProperties, 1)       \
   V(ChangeBitToBool, Operator::kNoProperties, 1)       \
+  V(ChangeBoolToBit, Operator::kNoProperties, 1)       \
+  V(ChangeWord32ToBit, Operator::kNoProperties, 1)     \
+  V(ChangeWord64ToBit, Operator::kNoProperties, 1)     \
   V(ObjectIsSmi, Operator::kNoProperties, 1)           \
   V(ObjectIsNonNegativeSmi, Operator::kNoProperties, 1)
 

@@ -12,11 +12,12 @@ namespace v8 {
 namespace internal {
 
 // Forward declarations.
-class Heap;
+class Factory;
 
 namespace compiler {
 
 // Forward declarations.
+class CommonOperatorBuilder;
 class JSGraph;
 class MachineOperatorBuilder;
 
@@ -28,6 +29,9 @@ class SimplifiedOperatorReducer FINAL : public Reducer {
   Reduction Reduce(Node* node) FINAL;
 
  private:
+  Reduction ReduceAnyToBoolean(Node* node);
+  Reduction ReduceChangeWord32ToBit(Node* node);
+
   Reduction Change(Node* node, const Operator* op, Node* a);
   Reduction ReplaceFloat64(double value);
   Reduction ReplaceInt32(int32_t value);
@@ -40,6 +44,7 @@ class SimplifiedOperatorReducer FINAL : public Reducer {
   Graph* graph() const;
   Factory* factory() const;
   JSGraph* jsgraph() const { return jsgraph_; }
+  CommonOperatorBuilder* common() const;
   MachineOperatorBuilder* machine() const;
   SimplifiedOperatorBuilder* simplified() { return &simplified_; }
 

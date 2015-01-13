@@ -5,6 +5,7 @@
 #include "src/code-stubs.h"
 #include "src/compiler/change-lowering.h"
 #include "src/compiler/js-graph.h"
+#include "src/compiler/linkage.h"
 #include "src/compiler/node-properties-inl.h"
 #include "src/compiler/simplified-operator.h"
 #include "test/unittests/compiler/compiler-test-utils.h"
@@ -14,6 +15,7 @@
 
 using testing::_;
 using testing::AllOf;
+using testing::BitEq;
 using testing::Capture;
 using testing::CaptureEq;
 
@@ -77,7 +79,8 @@ class ChangeLoweringTest : public GraphTest {
                                       const Matcher<Node*>& control_matcher) {
     return IsCall(_, IsHeapConstant(Unique<HeapObject>::CreateImmovable(
                          AllocateHeapNumberStub(isolate()).GetCode())),
-                  IsNumberConstant(0.0), effect_matcher, control_matcher);
+                  IsNumberConstant(BitEq(0.0)), effect_matcher,
+                  control_matcher);
   }
   Matcher<Node*> IsLoadHeapNumber(const Matcher<Node*>& value_matcher,
                                   const Matcher<Node*>& control_matcher) {
@@ -129,8 +132,29 @@ TARGET_TEST_P(ChangeLoweringCommonTest, ChangeBoolToBit) {
   Node* node = graph()->NewNode(simplified()->ChangeBoolToBit(), val);
   Reduction reduction = Reduce(node);
   ASSERT_TRUE(reduction.Changed());
-
   EXPECT_THAT(reduction.replacement(), IsWordEqual(val, IsTrueConstant()));
+}
+
+
+TARGET_TEST_P(ChangeLoweringCommonTest, ChangeWord32ToBit) {
+  Node* val = Parameter(0);
+  Node* node = graph()->NewNode(simplified()->ChangeWord32ToBit(), val);
+  Reduction reduction = Reduce(node);
+  ASSERT_TRUE(reduction.Changed());
+  EXPECT_THAT(reduction.replacement(),
+              IsWord32Equal(IsWord32Equal(val, IsInt32Constant(0)),
+                            IsInt32Constant(0)));
+}
+
+
+TARGET_TEST_P(ChangeLoweringCommonTest, ChangeWord64ToBit) {
+  Node* val = Parameter(0);
+  Node* node = graph()->NewNode(simplified()->ChangeWord64ToBit(), val);
+  Reduction reduction = Reduce(node);
+  ASSERT_TRUE(reduction.Changed());
+  EXPECT_THAT(reduction.replacement(),
+              IsWord32Equal(IsWord64Equal(val, IsInt64Constant(0)),
+                            IsInt32Constant(0)));
 }
 
 
