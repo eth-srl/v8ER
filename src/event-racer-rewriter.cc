@@ -484,7 +484,8 @@ CallRuntime* EventRacerRewriter::doVisit(CallRuntime *c) {
   // Global variable initialization is a write, but it's not represented
   // with an assignment in the AST, but with a call to the runtime
   // function |initializeVarGlobal|.
-  if (c->function()->function_id == Runtime::kInitializeVarGlobal) {
+  const Runtime::Function *fn = c->function();
+  if (fn && fn->function_id == Runtime::kInitializeVarGlobal) {
     ZoneList<Expression *> *args = new(zone()) ZoneList<Expression*>(2, zone());
     args->Add(duplicate_key(c->arguments()->at(0)->AsLiteral()), zone());
     Expression *value = c->arguments()->at(2);
