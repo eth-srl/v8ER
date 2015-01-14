@@ -99,47 +99,55 @@ global.ER_writePropIdxFuncStrict = function(obj, idx, value, id) {
 }
 
 global.ER_preIncProp = function(obj, idx) {
-    return obj[idx] = global._ER_writeProp(obj, idx, obj[idx] + 1);
+    var v = ++obj[idx];
+    global._ER_writeProp(obj, idx, v);
+    return v;
 }
 
 global.ER_preIncPropStrict = function(obj, idx) {
     "use strict";
-    return obj[idx] = global._ER_writeProp(obj, idx, obj[idx] + 1);
+    var v = ++obj[idx];
+    global._ER_writeProp(obj, idx, v);
+    return v;
 }
 
 global.ER_preDecProp = function(obj, idx) {
-    return obj[idx] = global._ER_writeProp(obj, idx, obj[idx] - 1);
+    var v = --obj[idx];
+    global._ER_writeProp(obj, idx, v);
+    return v;
 }
 
 global.ER_preDecPropStrict = function(obj, idx) {
     "use strict";
-    return obj[idx] = global._ER_writeProp(obj, idx, obj[idx] - 1);
+    var v = --obj[idx];
+    global._ER_writeProp(obj, idx, v);
+    return v;
 }
 
 global.ER_postIncProp = function(obj, idx) {
-    var tmp = obj[idx];
-    obj[idx] = global._ER_writeProp(obj, idx, tmp + 1);
-    return tmp;
+    var v = obj[idx]++;
+    global._ER_writeProp(obj, idx, obj[idx]);
+    return v;
 }
 
 global.ER_postIncPropStrict = function(obj, idx) {
     "use strict";
-    var tmp = obj[idx];
-    obj[idx] = global._ER_writeProp(obj, idx, tmp + 1);
-    return tmp;
+    var v = obj[idx]++;
+    global._ER_writeProp(obj, idx, obj[idx]);
+    return v;
 }
 
 global.ER_postDecProp = function(obj, idx) {
-    var tmp = obj[idx];
-    obj[idx] = global._ER_writeProp(obj, idx, tmp - 1);
-    return tmp;
+    var v = obj[idx]--;
+    global._ER_writeProp(obj, idx, obj[idx]);
+    return v;
 }
 
 global.ER_postDecPropStrict = function(obj, idx) {
     "use strict";
-    var tmp = obj[idx];
-    obj[idx] = global._ER_writeProp(obj, idx, tmp - 1);
-    return tmp;
+    var v = obj[idx]--;
+    global._ER_writeProp(obj, idx, obj[idx]);
+    return v;
 }
 
 global.ER_deletePropIdx = function(obj, idx) {

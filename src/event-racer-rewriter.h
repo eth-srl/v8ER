@@ -183,6 +183,8 @@ private:
   Expression *log_vp(VariableProxy *, Expression *,
                      enum InstrumentationFunction,
                      enum InstrumentationFunction);
+  Expression *rewriteIncDecVariable(Token::Value, bool, VariableProxy *, int);
+  Expression *rewriteIncDecProperty(Token::Value, bool, Property *, int);
 };
 
 typedef AstRewriterImpl<EventRacerRewriterTag> EventRacerRewriter;

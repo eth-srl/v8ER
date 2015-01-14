@@ -658,6 +658,179 @@ BinaryOperation* EventRacerRewriter::doVisit(BinaryOperation *op) {
   return op;
 }
 
+Expression* EventRacerRewriter::rewriteIncDecVariable(Token::Value op, bool is_prefix,
+                                                      VariableProxy *vp, int pos) {
+  // Pre-increment/decrement of a variable is instrumented like:
+  //
+  // |++x|
+  // =>
+  // |(function() { let $v = ++x; ER_write("x", x); return $v; })()|
+  //
+  // Post-increment/decrement of a variable is instrumented like:
+  //
+  // |x++|
+  // =>
+  // |(function() { let $v = x++; ER_write("x", x); return $v; })()|
+  //
+  ScopeHack *scope = NewScope(context()->scope);
+  scope->set_start_position(vp->position());
+  scope->set_end_position(vp->position() + 1);
+
+  ZoneList<Statement*> *body = new (zone()) ZoneList<Statement*>(4, zone());
+
+  // Declare the local variable.
+  Variable *value = nullptr;
+  value = scope->DeclareLocal(v_string_, LET, kCreatedInitialized, kNotAssigned);
+  scope->AllocateStackSlot(value);
+
+  // Initialize the local variable.
+  Block *blk = factory_.NewBlock(NULL, 1, true, RelocInfo::kNoPosition);
+  blk->AddStatement(
+      factory_.NewExpressionStatement(
+          factory_.NewAssignment(
+              Token::INIT_LET,
+              factory_.NewVariableProxy(value),
+              factory_.NewCountOperation(
+                  op, is_prefix, factory_.NewVariableProxy(vp->var(), vp->position()),
+                  RelocInfo::kNoPosition),
+              RelocInfo::kNoPosition),
+          RelocInfo::kNoPosition),
+      zone());
+  body->Add(blk, zone());
+
+  // Log the write.
+  body->Add(factory_.NewExpressionStatement(log_vp(vp, vp, _ER_write, _ER_writeProp),
+                                            RelocInfo::kNoPosition),
+            zone());
+
+  // Create the return statement.
+  body->Add(factory_.NewReturnStatement(factory_.NewVariableProxy(value),
+                                        RelocInfo::kNoPosition),
+            zone());
+
+  // Define the new function and build the call.
+  FunctionLiteral *fn = make_fn(scope, body, 0, RelocInfo::kNoPosition);
+  ZoneList<Expression*> *args = new (zone()) ZoneList<Expression*>(0, zone());
+  return factory_.NewCall(fn, args, pos);
+}
+
+Expression *EventRacerRewriter::rewriteIncDecProperty(Token::Value op, bool is_prefix,
+                                                      Property *p, int pos) {
+  // Pre-increment/decrement of a property is instrumented like:
+  //
+  // |++obj.key|
+  // =>
+  // |(function($obj) {                            |
+  // |  let $v = ++$obj.key;                       |
+  // |  ER_writeProp($obj, "key", $obj.key);       |
+  // |  return $v;                                 |
+  // |})(obj)                                      |
+  //
+  // or, if the property name is a general expression, is converted into a
+  // call to one of the helper functions |ER_preIncProp| or |ER_preDecProp|
+  //
+  // |++obj[key]|
+  // =>
+  // |ER_preIncProp(obj, key)|
+  //
+  // Post-increment/decrement of a property is instrumented like:
+  //
+  // |obj.key++|
+  // =>
+  // |(function($obj) {                            |
+  // |  let $v = $obj.key++;                       |
+  // |  ER_writeProp($obj, "key", $obj.key);       |
+  // |  return $v;                                 |
+  // |})(obj)                                      |
+  //
+  // or, if the property name is a general expression, is converted into a
+  // call to one of the helper functions |ER_postIncProp| or |ER_postDecProp|
+  //
+  // |obj[key]++|
+  // =>
+  // |ER_postIncProp(obj, key)|
+  Expression *obj = p->obj_, *key = p->key_;
+  if (is_literal_key(key)) {
+    DCHECK(obj->position() < p->position());
+    DCHECK(p->position() < pos);
+
+    ScopeHack *scope = NewScope(context()->scope);
+    scope->set_start_position(p->position());
+    scope->set_end_position(p->position() + 1);
+
+    // Declare the parameter.
+    Variable *o_parm = scope->DeclareParameter(o_string_, VAR);
+    o_parm->AllocateTo(Variable::PARAMETER, 0);
+
+    // Declare the local variable.
+    Variable *value = scope->DeclareLocal(v_string_, LET,
+                                          kCreatedInitialized,
+                                          kNotAssigned);
+    scope->AllocateStackSlot(value);
+
+    // The |$obj| parameter is referenced in three places, so is
+    // the property name. The |$v| parameter is referenced
+    // once. Create separate AST nodes for each reference.
+    Expression *o[3], *k[3];
+    for(int i = 0; i < 3; ++i) {
+      o[i] = factory_.NewVariableProxy(o_parm);
+      k[i] = duplicate_key(key->AsLiteral());
+    }
+
+    // Initialize the local variable.
+    Block *blk = factory_.NewBlock(NULL, 1, true, RelocInfo::kNoPosition);
+    blk->AddStatement(
+        factory_.NewExpressionStatement(
+            factory_.NewAssignment(
+                Token::INIT_LET,
+                factory_.NewVariableProxy(value),
+                factory_.NewCountOperation(
+                    op, is_prefix,
+                    factory_.NewProperty(o[0], k[0], RelocInfo::kNoPosition),
+                    RelocInfo::kNoPosition),
+                RelocInfo::kNoPosition),
+            RelocInfo::kNoPosition),
+        zone());
+
+    ZoneList<Statement*> *body = new (zone()) ZoneList<Statement*>(2, zone());
+    body->Add(blk, zone());
+
+    // Setup arguments of the call to |ER_writeProp|.
+    ZoneList<Expression*> *args = new (zone()) ZoneList<Expression*>(2, zone());
+    args->Add(o[1], zone());
+    args->Add(k[1], zone());
+    args->Add(factory_.NewProperty(o[2], k[2], RelocInfo::kNoPosition), zone());
+
+    // Create the return statement.
+    body->Add(factory_.NewReturnStatement(factory_.NewVariableProxy(value),
+                                          RelocInfo::kNoPosition),
+              zone());
+
+    // Define the new function and build the call.
+    FunctionLiteral *fn = make_fn(scope, body, 1, RelocInfo::kNoPosition);
+    args = new (zone()) ZoneList<Expression*>(0, zone());
+    args->Add(obj, zone());
+    return factory_.NewCall(fn, args, pos);
+  } else { // not a literal key
+    static InstrumentationFunction fntab[2][2][2] = {
+      { // post
+        {ER_postIncProp, ER_postIncPropStrict},
+        {ER_postDecProp, ER_postDecPropStrict},
+      },
+      { // pre
+        {ER_preIncProp, ER_preIncPropStrict},
+        {ER_preDecProp, ER_preDecPropStrict},
+      },
+    };
+    ZoneList<Expression *> *args = new (zone()) ZoneList<Expression*>(2, zone());
+    args->Add(obj, zone());
+    args->Add(key, zone());
+    InstrumentationFunction fn =
+        fntab[is_prefix][op == Token::DEC][context()->scope->strict_mode() == STRICT];
+    return factory_.NewCall(fn_proxy(fn), args, pos);
+  }
+}
+
 Expression* EventRacerRewriter::doVisit(CountOperation *op) {
   DCHECK(op->expression_->IsVariableProxy() || op->expression_->IsProperty());
 
@@ -667,294 +840,13 @@ Expression* EventRacerRewriter::doVisit(CountOperation *op) {
   if (vp != NULL) {
     if (!is_potentially_shared(vp))
       return op;
-  } else {
-    Property *p = op->expression_->AsProperty();
-    rewrite(this, p->obj_);
-    rewrite(this, p->key_);
+    return rewriteIncDecVariable(op->op(), op->is_prefix(), vp, op->position());
   }
 
-  ZoneList<Expression*> *args;
-  ScopeHack *scope;
-  ZoneList<Statement*> *body;
-  if (op->is_prefix()) {
-    if (vp != NULL) {
-      // Pre-increment of a variable is instrumented like:
-      //
-      // |++v|
-      // =>
-      // |v = ER_write("v", v + 1)|
-      Expression *value =
-        factory_.NewBinaryOperation(
-          op->binary_op(),
-          factory_.NewVariableProxy(vp->var(), vp->position()),
-          factory_.NewSmiLiteral(1, op->position()),
-          op->position());
-      return factory_.NewAssignment(
-        Token::ASSIGN, vp, log_vp(vp, value, _ER_write, _ER_writeProp),
-        op->position());
-    } else /* vp == NULL */ {
-      // Pre-increment of a property is instrumented like:
-      //
-      // |++obj.key|
-      // =>
-      // |(function($obj) {                                            |
-      //     return $obj.key = ER_writeProp($obj, "key", $obj.key + 1);|
-      // |})(obj)                                                      |
-      //
-      // or, if the property name is a general expression, is converted into a
-      // call to one of the helper functions |ER_preIncProp| or |ER_preDecProp|
-      //
-      // |++obj[key]|
-      // =>
-      // |ER_preIncProp(obj, key)|
-      Property *p = op->expression_->AsProperty();
-      Expression *obj = p->obj_, *key = p->key_;
-      if (is_literal_key(key)) {
-        DCHECK(obj->position() < p->position());
-        scope = NewScope(context()->scope);
-        scope->set_start_position(p->position());
-        scope->set_end_position(p->position() + 1);
-
-        // Declare the parameters of the new function.
-        Variable *o_parm;
-        o_parm = scope->DeclareParameter(o_string_, VAR);
-        o_parm->AllocateTo(Variable::PARAMETER, 0);
-
-        // The |$obj| parameter is referenced in three places, so is
-        // the property name. Create separate AST nodes for each
-        // reference.
-        Expression *o[3], *k[3];
-        for (int i = 0; i < 3; ++i) {
-          o[i] = factory_.NewVariableProxy(o_parm);
-          k[i] = duplicate_key(key->AsLiteral());
-        }
-
-        // Setup arguments of the call to |ER_writeProp|.
-        args = new (zone()) ZoneList<Expression*>(3, zone());
-        args->Add(o[0], zone());
-        args->Add(k[0], zone());
-        args->Add(
-            factory_.NewBinaryOperation(
-                op->binary_op(),
-                factory_.NewProperty(o[1], k[1], RelocInfo::kNoPosition),
-                factory_.NewSmiLiteral(1, op->position()),
-                op->position()),
-            zone());
-
-        // Create the return statement.
-        body = new (zone()) ZoneList<Statement*>(1, zone());
-        body->Add(
-            factory_.NewReturnStatement(
-                factory_.NewAssignment(
-                    Token::ASSIGN,
-                    factory_.NewProperty(o[2], k[2], RelocInfo::kNoPosition),
-                    factory_.NewCall(fn_proxy(_ER_writeProp), args,
-                                     RelocInfo::kNoPosition),
-                    RelocInfo::kNoPosition),
-                RelocInfo::kNoPosition),
-            zone());
-
-        // Define the new function and build the call.
-        FunctionLiteral *fn = make_fn(scope, body, 1, RelocInfo::kNoPosition);
-        args = new (zone()) ZoneList<Expression*>(1, zone());
-        args->Add(obj, zone());
-        return factory_.NewCall(fn, args, p->position());
-      } else { // not a literal key
-        args = new (zone()) ZoneList<Expression*>(2, zone());
-        args->Add(obj, zone());
-        args->Add(key, zone());
-        InstrumentationFunction fn;
-        if (op->op() == Token::INC) {
-          fn = (context()->scope->strict_mode() == SLOPPY
-                ? ER_preIncProp
-                : ER_preIncPropStrict);
-        } else {
-          fn = (context()->scope->strict_mode() == SLOPPY
-                ? ER_preDecProp
-                : ER_preDecPropStrict);
-        }
-        return factory_.NewCall(fn_proxy(fn), args, op->position());
-      }
-    }
-  } else /* op->is_postfix() */ {
-    if (vp != NULL) {
-      // Post-increment of a variable is instrumented like:
-      //
-      // |x++|
-      // =>
-      // (function() { let $v = x; x = ER_write("x", $v + 1); return $v; })();
-      DCHECK(vp->position() < op->position());
-      scope = NewScope(context()->scope);
-      scope->set_start_position(vp->position());
-      scope->set_end_position(vp->position() + 1);
-
-      // Declare the local variable.
-      Variable *value = scope->DeclareLocal(v_string_, LET,
-                                            kCreatedInitialized,
-                                            kNotAssigned);
-      scope->AllocateStackSlot(value);
-
-      // Initialize the local variable.
-      Block *blk = factory_.NewBlock(NULL, 1, true, RelocInfo::kNoPosition);
-      blk->AddStatement(
-          factory_.NewExpressionStatement(
-              factory_.NewAssignment(
-                  Token::INIT_LET,
-                  factory_.NewVariableProxy(value),
-                  factory_.NewVariableProxy(vp->var(), vp->position()),
-                  RelocInfo::kNoPosition),
-              RelocInfo::kNoPosition),
-          zone());
-
-      body = new (zone()) ZoneList<Statement*>(2, zone());
-      body->Add(blk, zone());
-
-      // Evaluate the new value.
-      Expression *newval =
-          factory_.NewBinaryOperation(op->binary_op(),
-                                      factory_.NewVariableProxy(value),
-                                      factory_.NewSmiLiteral(1, op->position()),
-                                      op->position());
-
-      // Perform the assignment.
-      body->Add(
-          factory_.NewExpressionStatement(
-              factory_.NewAssignment(
-                  Token::ASSIGN,
-                  factory_.NewVariableProxy(vp->var(), vp->position()),
-                  log_vp(vp, newval, _ER_write, _ER_writeProp),
-                  RelocInfo::kNoPosition),
-              RelocInfo::kNoPosition),
-          zone());
-
-      // Create the return statement.
-      body->Add(
-          factory_.NewReturnStatement(
-              factory_.NewVariableProxy(value),
-              RelocInfo::kNoPosition),
-          zone());
-
-      // Define the new function and build the call.
-      FunctionLiteral *fn = make_fn(scope, body, 0, RelocInfo::kNoPosition);
-      args = new (zone()) ZoneList<Expression*>(0, zone());
-      return factory_.NewCall(fn, args, op->position());
-    } else /* vp == NULL */ {
-      // Post-increment of a property is instrumented like:
-      //
-      // |obj.key++|
-      // =>
-      // |(function($obj) {                               |
-      // |   let $t = $obj.key;                           |
-      // |   $obj.key = ER_writeProp($obj, "key", $t + 1);|
-      // |   return $t;                                   |
-      // |})(e)                                           |
-      //
-      // or, if the key is a general expression, it converted into a call
-      // to the helper functions |ER_postIncProp| or |ER_postDecProp|:
-      //
-      // |obj[key]++|
-      // =>
-      // | ER_postIncProp(obj, key)|
-      // |(function($obj, $key) {|
-      //     let $t = $obj[$key];|
-      // |   $obj[$key] = ER_writeProp($obj, $key, $t + 1);|
-      // |    return $t;|
-      // })(e, idx);
-      Property *p = op->expression_->AsProperty();
-      Expression *obj = p->obj_, *key = p->key_;
-      if (is_literal_key(key)) {
-        DCHECK(obj->position() < p->position());
-        DCHECK(p->position() < op->position());
-        scope = NewScope(context()->scope);
-        scope->set_start_position(p->position());
-        scope->set_end_position(p->position() + 1);
-
-        // Declare the parameter.
-        Variable *o_parm = scope->DeclareParameter(o_string_, VAR);
-        o_parm->AllocateTo(Variable::PARAMETER, 0);
-
-        // Declare the local variable.
-        Variable *value = scope->DeclareLocal(v_string_, LET,
-                                              kCreatedInitialized,
-                                              kNotAssigned);
-        scope->AllocateStackSlot(value);
-
-        // The |$obj| parameter is referenced in three places, so is
-        // the property name. The |$v| parameter is referenced
-        // once. Create separate AST nodes for each reference.
-        Expression *o[3], *k[3];
-        for(int i = 0; i < 3; ++i) {
-          o[i] = factory_.NewVariableProxy(o_parm);
-          k[i] = duplicate_key(key->AsLiteral());
-        }
-
-        // Initialize the local variable.
-        Block *blk = factory_.NewBlock(NULL, 1, true, RelocInfo::kNoPosition);
-        blk->AddStatement(
-            factory_.NewExpressionStatement(
-                factory_.NewAssignment(
-                    Token::INIT_LET,
-                    factory_.NewVariableProxy(value),
-                    factory_.NewProperty(o[0], k[0], RelocInfo::kNoPosition),
-                    RelocInfo::kNoPosition),
-                RelocInfo::kNoPosition),
-            zone());
-
-        body = new (zone()) ZoneList<Statement*>(2, zone());
-        body->Add(blk, zone());
-
-        // Setup arguments of the call to |ER_writeProp|.
-        args = new (zone()) ZoneList<Expression*>(2, zone());
-        args->Add(o[1], zone());
-        args->Add(k[1], zone());
-        args->Add(
-            factory_.NewBinaryOperation(
-                op->binary_op(),
-                factory_.NewVariableProxy(value),
-                factory_.NewSmiLiteral(1, op->position()),
-                op->position()),
-            zone());
-
-        // Perform the assignment.
-        body->Add(
-            factory_.NewExpressionStatement(
-                factory_.NewAssignment(
-                    Token::ASSIGN,
-                    factory_.NewProperty(o[2], k[2], RelocInfo::kNoPosition),
-                    factory_.NewCall(fn_proxy(_ER_writeProp), args,
-                                     RelocInfo::kNoPosition),
-                    RelocInfo::kNoPosition),
-                RelocInfo::kNoPosition),
-            zone());
-
-        // Create the return statement.
-        body->Add(factory_.NewReturnStatement(factory_.NewVariableProxy(value),
-                                              RelocInfo::kNoPosition),
-                  zone());
-
-        // Define the new function and build the call.
-        FunctionLiteral *fn = make_fn(scope, body, 1, RelocInfo::kNoPosition);
-        args = new (zone()) ZoneList<Expression*>(0, zone());
-        args->Add(obj, zone());
-        return factory_.NewCall(fn, args, op->position());
-      } else { // not a literal key
-        args = new (zone()) ZoneList<Expression*>(2, zone());
-        args->Add(obj, zone());
-        args->Add(key, zone());
-        InstrumentationFunction fn;
-        if (op->op() == Token::INC) {
-          fn = (context()->scope->strict_mode() == SLOPPY
-                ? ER_postIncProp
-                : ER_postIncPropStrict);
-        } else {
-          fn = (context()->scope->strict_mode() == SLOPPY
-                ? ER_postDecProp
-                : ER_postDecPropStrict);
-        }
-        return factory_.NewCall(fn_proxy(fn), args, op->position());
-      }
-    }
-  }
+  Property *p = op->expression_->AsProperty();
+  rewrite(this, p->obj_);
+  rewrite(this, p->key_);
+  return rewriteIncDecProperty(op->op(), op->is_prefix(), p, op->position());
 }
 
 CompareOperation* EventRacerRewriter::doVisit(CompareOperation *op) {
