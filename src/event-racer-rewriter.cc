@@ -635,6 +635,8 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
         FunctionLiteral *fn = make_fn(scope, body, 0, RelocInfo::kNoPosition);
         args = new (zone()) ZoneList<Expression*>(0, zone());
         return factory_.NewCall(fn, args, vp->position());
+      } else {
+        return op;
       }
     }
   }
