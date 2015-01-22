@@ -17,8 +17,9 @@ EventRacerRewriter::AstRewriterImpl(CompilationInfo *info)
   Scope &globals = *info->script_scope();
   AstValueFactory &values = *info->ast_value_factory();
 
-#define FN(fn)  \
-  instr_fn_[fn] = globals.DeclareDynamicGlobal(values.GetOneByteString(#fn));
+#define FN(fn)                                                          \
+  instr_fn_name_[fn] = values.GetOneByteString(#fn);                    \
+  instr_fn_[fn] = globals.DeclareDynamicGlobal(instr_fn_name_[fn]);
   INSTRUMENTATION_FUNCTION_LIST(FN)
 #undef FN
   o_string_ = values.GetOneByteString("$obj");
@@ -32,6 +33,13 @@ VariableProxy *EventRacerRewriter::fn_proxy(enum InstrumentationFunction fn) {
   VariableProxy *vp = factory_.NewVariableProxy(instr_fn_[fn]);
   vp->set_do_not_instrument();
   return vp;
+}
+
+Expression *EventRacerRewriter::call_runtime(enum InstrumentationFunction fn,
+                                             ZoneList<Expression*> *args,
+                                             int pos) {
+  DCHECK(fn < FN_MAX);
+  return factory_.NewCallRuntime(instr_fn_name_[fn], nullptr, args, pos);
 }
 
 FunctionLiteral *EventRacerRewriter::make_fn(Scope *scope,
@@ -68,18 +76,20 @@ Expression *EventRacerRewriter::log_vp(VariableProxy *vp, Expression *value,
     //  or
     // |v = ex| => |v = ER_write("v", ex)|
     args = new (zone()) ZoneList<Expression*>(2, zone());
-    args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()), zone());
+    args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()),
+              zone());
     args->Add(value, zone());
-    if (plain_fn == _ER_write && value->IsFunctionLiteral()) {
+    if (plain_fn == ER_write && value->IsFunctionLiteral()) {
       // Special case of function literal assignment - call
       // |ER_writeFunc|, passing as a third argument the function
       // literal identifier.
-      plain_fn = _ER_writeFunc;
-      args->Add(factory_.NewSmiLiteral(value->AsFunctionLiteral()->function_id(),
-                                       RelocInfo::kNoPosition),
-                zone());
+      plain_fn = ER_writeFunc;
+      args->Add(
+          factory_.NewSmiLiteral(value->AsFunctionLiteral()->function_id(),
+                                 RelocInfo::kNoPosition),
+          zone());
     }
-    return factory_.NewCall(fn_proxy(plain_fn), args, vp->position());
+    return call_runtime(plain_fn, args, vp->position());
   } else {
     // Read/Write of a context allocated variable is rewritten into a call to
     // ER_readProp/ER_writeProp:
@@ -100,9 +110,10 @@ Expression *EventRacerRewriter::log_vp(VariableProxy *vp, Expression *value,
                               vp->position());
     args = new (zone()) ZoneList<Expression*>(3, zone());
     args->Add(rtcall, zone());
-    args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()), zone());
+    args->Add(factory_.NewStringLiteral(vp->raw_name(), vp->position()),
+              zone());
     args->Add(value, zone());
-    return factory_.NewCall(fn_proxy(prop_fn), args, vp->position());
+    return call_runtime(prop_fn, args, vp->position());
   }
 }
 
@@ -213,9 +224,10 @@ ReturnStatement *EventRacerRewriter::doVisit(ReturnStatement *st) {
   rewrite(this, st->expression_);
   ZoneList<Expression *> *args = new(zone()) ZoneList<Expression*>(1, zone());
   args->Add(st->expression_, zone());
-  return (factory_.NewReturnStatement(
-            factory_.NewCall(fn_proxy(_ER_exitFunction), args, st->position()),
-            st->position()));
+  return
+      factory_.NewReturnStatement(
+          call_runtime(ER_exitFunction, args, st->position()),
+          st->position());
 }
 
 WithStatement *EventRacerRewriter::doVisit(WithStatement *st) {
@@ -277,7 +289,7 @@ Expression* EventRacerRewriter::doVisit(VariableProxy *vp) {
   // compiler), which aren't stack allocated.
   if (!is_potentially_shared(vp))
     return vp;
-  return log_vp(vp, vp, _ER_read, _ER_readProp);
+  return log_vp(vp, vp, ER_read, ER_readProp);
 }
 
 Expression* EventRacerRewriter::doVisit(Property *p) {
@@ -336,12 +348,11 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
     args->Add(k[0], zone());
     args->Add(factory_.NewProperty(o[1], k[1], RelocInfo::kNoPosition), zone());
 
-      // Create the return statement.
+    // Create the return statement.
     body = new (zone()) ZoneList<Statement*>(1, zone());
     body->Add(
         factory_.NewReturnStatement(
-            factory_.NewCall(fn_proxy(_ER_readProp), args,
-                             RelocInfo::kNoPosition),
+            call_runtime(ER_readProp, args, RelocInfo::kNoPosition),
             RelocInfo::kNoPosition),
         zone());
 
@@ -356,7 +367,7 @@ Expression* EventRacerRewriter::doVisit(Property *p) {
     args = new (zone()) ZoneList<Expression*>(2, zone());
     args->Add(obj, zone());
     args->Add(key, zone());
-    return factory_.NewCall(fn_proxy(ER_readPropIdx), args, obj->position());
+    return call_runtime(ER_readPropIdx, args, obj->position());
   }
 }
 
@@ -437,8 +448,7 @@ Call* EventRacerRewriter::doVisit(Call *c) {
   body = new (zone()) ZoneList<Statement*>(1, zone());
   body->Add(
       factory_.NewExpressionStatement(
-          factory_.NewCall(fn_proxy(_ER_readProp), args,
-                           RelocInfo::kNoPosition),
+          call_runtime(ER_readProp, args, RelocInfo::kNoPosition),
           RelocInfo::kNoPosition),
       zone());
 
@@ -495,14 +505,15 @@ CallRuntime* EventRacerRewriter::doVisit(CallRuntime *c) {
       // Special case of function literal assignment - call
       // |ER_writeFunc|, passing as a third argument the function
       // literal identifier.
-      fn = _ER_writeFunc;
-      args->Add(factory_.NewSmiLiteral(value->AsFunctionLiteral()->function_id(),
-                                       RelocInfo::kNoPosition),
-                zone());
+      fn = ER_writeFunc;
+      args->Add(
+          factory_.NewSmiLiteral(value->AsFunctionLiteral()->function_id(),
+                                 RelocInfo::kNoPosition),
+          zone());
     } else {
-      fn = _ER_write;
+      fn = ER_write;
     }
-    Call *call = factory_.NewCall(fn_proxy(fn), args, RelocInfo::kNoPosition);
+    Expression *call = call_runtime(fn, args, RelocInfo::kNoPosition);
     (*c->arguments())[2] = call;
   }
   return c;
@@ -559,8 +570,7 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
         body = new (zone()) ZoneList<Statement*>(2, zone());
         body->Add(
             factory_.NewExpressionStatement(
-                factory_.NewCall(fn_proxy(_ER_deleteProp), args,
-                                 RelocInfo::kNoPosition),
+                call_runtime(ER_deleteProp, args, RelocInfo::kNoPosition),
                 RelocInfo::kNoPosition),
             zone());
 
@@ -583,12 +593,10 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
         args = new (zone()) ZoneList<Expression*>(2, zone());
         args->Add(obj, zone());
         args->Add(key, zone());
-        return factory_.NewCall(
-            fn_proxy(context()->scope->strict_mode() == SLOPPY
-                     ? ER_deletePropIdx
-                     : ER_deletePropIdxStrict),
-            args,
-            op->position());
+        return call_runtime(context()->scope->strict_mode() == SLOPPY
+                            ? ER_deletePropIdx : ER_deletePropIdxStrict,
+                            args,
+                            op->position());
       }
     } else if (op->expression_->IsVariableProxy()) {
       VariableProxy *vp = op->expression_->AsVariableProxy();
@@ -616,8 +624,7 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
         body = new (zone()) ZoneList<Statement*>(2, zone());
         body->Add(
             factory_.NewExpressionStatement(
-                factory_.NewCall(fn_proxy(_ER_delete), args,
-                                 RelocInfo::kNoPosition),
+                call_runtime(ER_delete, args, RelocInfo::kNoPosition),
                 RelocInfo::kNoPosition),
             zone());
 
@@ -647,7 +654,7 @@ Expression* EventRacerRewriter::doVisit(UnaryOperation *op) {
     // of throwing an error.
     VariableProxy *vp = op->expression_->AsVariableProxy();
     if (is_potentially_shared(vp))
-      return log_vp(vp, op, _ER_read, _ER_readProp);
+      return log_vp(vp, op, ER_read, ER_readProp);
   }
 
   rewrite(this, op->expression_);
@@ -660,8 +667,8 @@ BinaryOperation* EventRacerRewriter::doVisit(BinaryOperation *op) {
   return op;
 }
 
-Expression* EventRacerRewriter::rewriteIncDecVariable(Token::Value op, bool is_prefix,
-                                                      VariableProxy *vp, int pos) {
+Expression* EventRacerRewriter::rewriteIncDecVariable(
+    Token::Value op, bool is_prefix, VariableProxy *vp, int pos) {
   // Pre-increment/decrement of a variable is instrumented like:
   //
   // |++x|
@@ -682,7 +689,8 @@ Expression* EventRacerRewriter::rewriteIncDecVariable(Token::Value op, bool is_p
 
   // Declare the local variable.
   Variable *value = nullptr;
-  value = scope->DeclareLocal(v_string_, LET, kCreatedInitialized, kNotAssigned);
+  value = scope->DeclareLocal(v_string_, LET, kCreatedInitialized,
+                              kNotAssigned);
   scope->AllocateStackSlot(value);
 
   // Initialize the local variable.
@@ -693,7 +701,8 @@ Expression* EventRacerRewriter::rewriteIncDecVariable(Token::Value op, bool is_p
               Token::INIT_LET,
               factory_.NewVariableProxy(value),
               factory_.NewCountOperation(
-                  op, is_prefix, factory_.NewVariableProxy(vp->var(), vp->position()),
+                  op, is_prefix, factory_.NewVariableProxy(vp->var(),
+                                                           vp->position()),
                   RelocInfo::kNoPosition),
               RelocInfo::kNoPosition),
           RelocInfo::kNoPosition),
@@ -701,9 +710,10 @@ Expression* EventRacerRewriter::rewriteIncDecVariable(Token::Value op, bool is_p
   body->Add(blk, zone());
 
   // Log the write.
-  body->Add(factory_.NewExpressionStatement(log_vp(vp, vp, _ER_write, _ER_writeProp),
-                                            RelocInfo::kNoPosition),
-            zone());
+  body->Add(
+      factory_.NewExpressionStatement(log_vp(vp, vp, ER_write, ER_writeProp),
+                                      RelocInfo::kNoPosition),
+      zone());
 
   // Create the return statement.
   body->Add(factory_.NewReturnStatement(factory_.NewVariableProxy(value),
@@ -716,8 +726,8 @@ Expression* EventRacerRewriter::rewriteIncDecVariable(Token::Value op, bool is_p
   return factory_.NewCall(fn, args, pos);
 }
 
-Expression *EventRacerRewriter::rewriteIncDecProperty(Token::Value op, bool is_prefix,
-                                                      Property *p, int pos) {
+Expression *EventRacerRewriter::rewriteIncDecProperty(
+    Token::Value op, bool is_prefix, Property *p, int pos) {
   // Pre-increment/decrement of a property is instrumented like:
   //
   // |++obj.key|
@@ -824,12 +834,13 @@ Expression *EventRacerRewriter::rewriteIncDecProperty(Token::Value op, bool is_p
         {ER_preDecProp, ER_preDecPropStrict},
       },
     };
-    ZoneList<Expression *> *args = new (zone()) ZoneList<Expression*>(2, zone());
+    ZoneList<Expression *> *args =
+        new (zone()) ZoneList<Expression*>(2, zone());
     args->Add(obj, zone());
     args->Add(key, zone());
     InstrumentationFunction fn =
         fntab[is_prefix][op == Token::DEC][context()->scope->strict_mode() == STRICT];
-    return factory_.NewCall(fn_proxy(fn), args, pos);
+    return call_runtime(fn, args, pos);
   }
 }
 
@@ -901,13 +912,14 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
     if (op->is_compound()) {
       BinaryOperation *binop = op->binary_operation_;
       op->binary_operation_ = NULL;
-      op->bit_field_ = Assignment::TokenField::update(op->bit_field_, Token::ASSIGN);
+      op->bit_field_ = Assignment::TokenField::update(op->bit_field_,
+                                                      Token::ASSIGN);
       op->target_ = factory_.NewVariableProxy(vp->var(), vp->position());
       value = binop;
     } else {
       value = op->value_;
     }
-    op->value_ = log_vp(vp, value, _ER_write, _ER_writeProp);
+    op->value_ = log_vp(vp, value, ER_write, ER_writeProp);
     return op;
   } else {
     DCHECK(op->target_->IsProperty());
@@ -963,7 +975,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
       }
 
       // Setup arguments of the call to |ER_writeProp|.
-      enum InstrumentationFunction fn = _ER_writeProp;
+      enum InstrumentationFunction fn = ER_writeProp;
       args = new (zone()) ZoneList<Expression*>(3, zone());
       args->Add(o[0], zone());
       args->Add(k[0], zone());
@@ -981,7 +993,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
           // Special case of function literal assignment - call
           // |ER_writePropFunc|, passing as a third argument the
           // function literal identifier.
-          fn = _ER_writePropFunc;
+          fn = ER_writePropFunc;
           args->Add(
               factory_.NewSmiLiteral(
                   op->value_->AsFunctionLiteral()->function_id(),
@@ -997,7 +1009,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
               factory_.NewAssignment(
                   Token::ASSIGN,
                   factory_.NewProperty(o[1], k[1], RelocInfo::kNoPosition),
-                  factory_.NewCall(fn_proxy(fn), args, RelocInfo::kNoPosition),
+                  call_runtime(fn, args, RelocInfo::kNoPosition),
                   RelocInfo::kNoPosition),
               RelocInfo::kNoPosition),
           zone());
@@ -1069,8 +1081,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
                 factory_.NewAssignment(
                     Token::ASSIGN,
                     factory_.NewProperty(o[1], k[1], RelocInfo::kNoPosition),
-                    factory_.NewCall(fn_proxy(_ER_writeProp), args,
-                                     RelocInfo::kNoPosition),
+                    call_runtime(ER_writeProp, args, RelocInfo::kNoPosition),
                     RelocInfo::kNoPosition),
                 RelocInfo::kNoPosition),
             zone());
@@ -1104,7 +1115,7 @@ Expression* EventRacerRewriter::doVisit(Assignment *op) {
           else
             fn = ER_writePropIdxStrict;
         }
-        return factory_.NewCall(fn_proxy(fn), args, op->position());
+        return call_runtime(fn, args, op->position());
       }
     }
   }
@@ -1147,16 +1158,25 @@ FunctionLiteral* EventRacerRewriter::doVisit(FunctionLiteral *lit) {
                                        RelocInfo::kNoPosition),
                 zone());
       lit->body()->InsertAt(
-        0,
-        factory_.NewExpressionStatement(
-          factory_.NewCall(fn_proxy(_ER_writeFunc), args, lit->position()),
-          lit->position()),
-        zone());
+          0,
+          factory_.NewExpressionStatement(
+              call_runtime(ER_writeFunc, args, lit->position()),
+              lit->position()),
+          zone());
     }
   }
 
   // Emit a statement to log a function entry.
-  int scriptId = info_->script().is_null() ? -1 : info_->script()->id()->value();
+  int scriptId = -1, startLine = -1, endLine = -1;
+  if (!info_->script().is_null()) {
+    scriptId = info_->script()->id()->value();
+    startLine = Script::GetLineNumber(info_->script(),
+                                      lit->scope()->start_position())
+                - info_->script()->line_offset()->value();
+    endLine = Script::GetLineNumber(info_->script(),
+                                    lit->scope()->end_position())
+              - info_->script()->line_offset()->value();
+  }
   ZoneList<Expression*> *args = new (zone()) ZoneList<Expression*>(3, zone());
   if (lit->raw_name()->length()) {
     args->Add(factory_.NewStringLiteral(lit->raw_name(), lit->position()),
@@ -1167,10 +1187,12 @@ FunctionLiteral* EventRacerRewriter::doVisit(FunctionLiteral *lit) {
   args->Add(factory_.NewSmiLiteral(scriptId, RelocInfo::kNoPosition), zone());
   args->Add(factory_.NewSmiLiteral(lit->function_id(), RelocInfo::kNoPosition),
             zone());
+  args->Add(factory_.NewSmiLiteral(startLine, RelocInfo::kNoPosition), zone());
+  args->Add(factory_.NewSmiLiteral(endLine, RelocInfo::kNoPosition), zone());
   Statement *st =
-    factory_.NewExpressionStatement(
-      factory_.NewCall(fn_proxy(_ER_enterFunction), args, lit->position()),
-      lit->position());
+      factory_.NewExpressionStatement(
+          call_runtime(ER_enterFunction, args, lit->position()),
+          lit->position());
   lit->body()->InsertAt(0, st, zone());
 
   // Emit a statement to log the function exit, if the last statement is
@@ -1179,11 +1201,11 @@ FunctionLiteral* EventRacerRewriter::doVisit(FunctionLiteral *lit) {
   if (!lit->body()->last()->IsReturnStatement()) {
     ZoneList<Expression *> *args = new(zone()) ZoneList<Expression*>(1, zone());
     args->Add(factory_.NewUndefinedLiteral(RelocInfo::kNoPosition), zone());
-    lit->body()->Add(factory_.NewReturnStatement(
-                       factory_.NewCall(fn_proxy(_ER_exitFunction), args,
-                                        RelocInfo::kNoPosition),
-                       RelocInfo::kNoPosition),
-                     zone());
+    lit->body()->Add(
+        factory_.NewReturnStatement(
+            call_runtime(ER_exitFunction, args, RelocInfo::kNoPosition),
+            RelocInfo::kNoPosition),
+        zone());
   }
   return lit;
 }

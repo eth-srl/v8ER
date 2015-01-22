@@ -348,11 +348,11 @@ function SimpleMove(array, start_i, del_count, len, num_additional_args) {
 
 function _ER_wrap(func, name) {
     return function() {
-        global._ER_enterFunction(name, -1, -1);
+        ER_enterFunction(name, -1, -1, -1, -1);
         try {
-            return %Apply(func, this, arguments, 0, %_ArgumentsLength());
+          return %Apply(func, this, arguments, 0, %_ArgumentsLength());
         } finally {
-            global._ER_exitFunction(null);
+          ER_exitFunction(null);
         }
     }
 }
@@ -371,7 +371,7 @@ function ArrayToString_() {
     func = array.join;
   }
   if (!IS_SPEC_FUNCTION(func)) {
-    global._ER_readArray(this);
+    ER_readArray(this);
     return %_CallFunction(array, NoSideEffectsObjectToString);
   }
   return %_CallFunction(array, func);
@@ -380,7 +380,7 @@ var ArrayToString = _ER_wrap(ArrayToString_, "array:toString");
 
 
 function ArrayToLocaleString_() {
-  global._ER_readArray(this);
+  ER_readArray(this);
   var array = ToObject(this);
   var arrayLen = array.length;
   var len = TO_UINT32(arrayLen);
@@ -392,7 +392,7 @@ var ArrayToLocaleString = _ER_wrap(ArrayToLocaleString_, "array:toLocaleString")
 
 function ArrayJoin_(separator) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.join");
-  global._ER_readArray(this);
+  ER_readArray(this);
   var array = TO_OBJECT_INLINE(this);
   var length = TO_UINT32(array.length);
   if (IS_UNDEFINED(separator)) {
@@ -436,7 +436,7 @@ function ObservedArrayPop(n) {
 // ECMA-262, section 15.4.4.6.
 function ArrayPop_() {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.pop");
-  global._ER_writeArray(this);
+  ER_writeArray(this);
   var array = TO_OBJECT_INLINE(this);
   var n = TO_UINT32(array.length);
   if (n == 0) {
@@ -476,9 +476,7 @@ function ObservedArrayPush() {
 
 // Appends the arguments to the end of the array and returns the new
 // length of the array. See ECMA-262, section 15.4.4.7.
-function ArrayPush_() {
-  CHECK_OBJECT_COERCIBLE(this, "Array.prototype.push");
-  global._ER_writeArray(this);
+function ArrayPushInternal() {
   if (%IsObserved(this))
     return ObservedArrayPush.apply(this, arguments);
 
@@ -494,6 +492,12 @@ function ArrayPush_() {
   array.length = new_length;
   return new_length;
 }
+
+function ArrayPush_() {
+  CHECK_OBJECT_COERCIBLE(this, "Array.prototype.push");
+  ER_writeArray(this);
+  return ArrayPushInternal.apply(this, arguments);
+}
 var ArrayPush = _ER_wrap(ArrayPush_, "array:push");
 
 // Returns an array containing the array elements of the object followed
@@ -506,10 +510,10 @@ function ArrayConcatJS_(arg1) {  // length == 1
   var arg_count = %_ArgumentsLength();
   var arrays = new InternalArray(1 + arg_count);
   arrays[0] = array;
-  global._ER_readArray(arrays[0]);
+  ER_readArray(arrays[0]);
   for (var i = 0; i < arg_count; i++) {
     arrays[i + 1] = %_Arguments(i);
-    global._ER_readArray(arrays[i + 1]);
+    ER_readArray(arrays[i + 1]);
   }
 
   return %ArrayConcat(arrays);
@@ -562,7 +566,7 @@ function SparseReverse(array, len) {
 
 function ArrayReverse_() {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.reverse");
-  global._ER_writeArray(this);
+  ER_writeArray(this);
   var array = TO_OBJECT_INLINE(this);
   var len = TO_UINT32(array.length);
 
@@ -613,7 +617,7 @@ function ObservedArrayShift(len) {
 
 function ArrayShift_() {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.shift");
-  global._ER_writeArray(this);
+  ER_writeArray(this);
   var array = TO_OBJECT_INLINE(this);
   var len = TO_UINT32(array.length);
 
@@ -666,7 +670,7 @@ function ObservedArrayUnshift() {
 
 function ArrayUnshift_(arg1) {  // length == 1
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.unshift");
-  global._ER_writeArray(this);
+  ER_writeArray(this);
   if (%IsObserved(this))
     return ObservedArrayUnshift.apply(this, arguments);
 
@@ -693,7 +697,7 @@ var ArrayUnshift = _ER_wrap(ArrayUnshift_, "array:unshift");
 
 function ArraySlice_(start, end) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.slice");
-  global._ER_readArray(this);
+  ER_readArray(this);
   var array = TO_OBJECT_INLINE(this);
   var len = TO_UINT32(array.length);
   var start_i = TO_INTEGER(start);
@@ -807,7 +811,7 @@ function ObservedArraySplice(start, delete_count) {
 
 function ArraySplice_(start, delete_count) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.splice");
-  global._ER_writeArray(this);
+  ER_writeArray(this);
   if (%IsObserved(this))
     return ObservedArraySplice.apply(this, arguments);
 
@@ -1148,7 +1152,7 @@ function ArraySort__(comparefn) {
 }
 
 function ArraySort_(comparefn) {
-  global._ER_writeArray(this);
+  ER_writeArray(this);
   return %_CallFunction(this, comparefn, ArraySort__);
 }
 
@@ -1159,7 +1163,7 @@ var ArraySort = _ER_wrap(ArraySort_, "array:sort");
 // or delete elements from the array.
 function ArrayFilter_(f, receiver) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.filter");
-  global._ER_readArray(this);
+  ER_readArray(this);
 
   // Pull out the length so that modifications to the length in the
   // loop will not affect the looping and side effects are visible.
@@ -1199,7 +1203,7 @@ var ArrayFilter = _ER_wrap(ArrayFilter_, "array:filter");
 
 function ArrayForEach_(f, receiver) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.forEach");
-  global._ER_readArray(this);
+  ER_readArray(this);
 
   // Pull out the length so that modifications to the length in the
   // loop will not affect the looping and side effects are visible.
@@ -1234,7 +1238,7 @@ var ArrayForEach = _ER_wrap(ArrayForEach_, "array:foreach");
 // array until it finds one where callback returns true.
 function ArraySome_(f, receiver) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.some");
-  global._ER_readArray(this);
+  ER_readArray(this);
 
   // Pull out the length so that modifications to the length in the
   // loop will not affect the looping and side effects are visible.
@@ -1268,7 +1272,7 @@ var ArraySome = _ER_wrap(ArraySome_, "array:some");
 
 function ArrayEvery_(f, receiver) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.every");
-  global._ER_readArray(this);
+  ER_readArray(this);
 
   // Pull out the length so that modifications to the length in the
   // loop will not affect the looping and side effects are visible.
@@ -1302,7 +1306,7 @@ var ArrayEvery = _ER_wrap(ArrayEvery_, "array:every");
 
 function ArrayMap_(f, receiver) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.map");
-  global._ER_readArray(this);
+  ER_readArray(this);
 
   // Pull out the length so that modifications to the length in the
   // loop will not affect the looping and side effects are visible.
@@ -1339,7 +1343,7 @@ var ArrayMap = _ER_wrap(ArrayMap_, "array:map");
 
 function ArrayIndexOf_(element, index) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.indexOf");
-  global._ER_readArray(this);
+  ER_readArray(this);
 
   var length = TO_UINT32(this.length);
   if (length == 0) return -1;
@@ -1397,7 +1401,7 @@ var ArrayIndexOf = _ER_wrap(ArrayIndexOf_, "array:indexOf");
 
 function ArrayLastIndexOf_(element, index) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.lastIndexOf");
-  global._ER_readArray(this);
+  ER_readArray(this);
 
   var length = TO_UINT32(this.length);
   if (length == 0) return -1;
@@ -1451,7 +1455,7 @@ var ArrayLastIndexOf = _ER_wrap(ArrayLastIndexOf_, "array:lastIndexOf");
 
 function ArrayReduce_(callback, current) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.reduce");
-  global._ER_readArray(this);
+  ER_readArray(this);
 
   // Pull out the length so that modifications to the length in the
   // loop will not affect the looping and side effects are visible.
@@ -1490,7 +1494,7 @@ var ArrayReduce = _ER_wrap(ArrayReduce_, "array:reduce");
 
 function ArrayReduceRight_(callback, current) {
   CHECK_OBJECT_COERCIBLE(this, "Array.prototype.reduceRight");
-  global._ER_readArray(this);
+  ER_readArray(this);
 
   // Pull out the length so that side effects are visible before the
   // callback function is checked.
@@ -1583,6 +1587,7 @@ function SetUpArray() {
     "join", getFunction("join", ArrayJoin),
     "pop", getFunction("pop", ArrayPop),
     "push", getFunction("push", ArrayPush, 1),
+    "push_", getFunction("push_", ArrayPushInternal, 1),
     "concat", getFunction("concat", ArrayConcatJS, 1),
     "reverse", getFunction("reverse", ArrayReverse),
     "shift", getFunction("shift", ArrayShift),

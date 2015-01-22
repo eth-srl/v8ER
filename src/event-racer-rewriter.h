@@ -58,16 +58,16 @@ namespace internal {
   V(SuperReference)
 
 #define INSTRUMENTATION_FUNCTION_LIST(V)         \
-  V(_ER_read)                                    \
-  V(_ER_write)                                   \
-  V(_ER_writeFunc)                               \
-  V(_ER_readProp)                                \
-  V(_ER_writeProp)                               \
-  V(_ER_writePropFunc)                           \
-  V(_ER_delete)                                  \
-  V(_ER_deleteProp)                              \
-  V(_ER_enterFunction)                           \
-  V(_ER_exitFunction)                            \
+  V(ER_read)                                    \
+  V(ER_readProp)                                \
+  V(ER_write)                                   \
+  V(ER_writeProp)                               \
+  V(ER_writeFunc)                               \
+  V(ER_writePropFunc)                           \
+  V(ER_delete)                                  \
+  V(ER_deleteProp)                              \
+  V(ER_enterFunction)                           \
+  V(ER_exitFunction)                            \
   V(ER_readPropIdx)                              \
   V(ER_writePropIdx)                             \
   V(ER_writePropIdxFunc)                         \
@@ -170,7 +170,10 @@ private:
   };
 #undef FN
   Variable *instr_fn_[FN_MAX];
+  const AstRawString *instr_fn_name_[FN_MAX];
+
   VariableProxy *fn_proxy(enum InstrumentationFunction);
+  Expression *call_runtime(enum InstrumentationFunction, ZoneList<Expression*> *, int);
 
   ScopeHack *NewScope(Scope* outer);
   void ensure_arg_names(int n);

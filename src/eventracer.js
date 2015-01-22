@@ -1,162 +1,249 @@
-// Stubs for EventRacer calls, for use with D8.
+// Operations encoding.
+const ER_OP_read          =  1;
+const ER_OP_readProp      =  2;
+const ER_OP_readArray     =  3;
+const ER_OP_write         =  4;
+const ER_OP_writeProp     =  5;
+const ER_OP_writeFunc     =  6;
+const ER_OP_writePropFunc =  7;
+const ER_OP_writeArray    =  8;
+const ER_OP_enterFunc     =  9;
+const ER_OP_exitFunc      = 10;
+const ER_OP_delete        = 11;
+const ER_OP_deleteProp    = 12;
+
+// Operations
+global.ER_op = [];
+
+// Accessed objects.
+global.ER_obj = [];
+
+// Property or function names.
+global.ER_name = [];
+
+// Read/written values; integer function id for enterFunc.
+global.ER_value = [];
+
+// Script identifiers
+global.ER_scriptId = [];
+
+// Function identifiers.
+global.ER_funcId = [];
+
+// Function start and end line number.
+global.ER_startLine = [];
+global.ER_endLine = [];
+
+// Collection enable counter.
+global.ER_enableCount = 0;
+
+// Clears the data and increments the collection enable counter.
+global.ER_enable = function() {
+    if (++global.ER_enableCount == 1) {
+        global.ER_op.length = 0;
+        global.ER_obj.length = 0;
+        global.ER_name.length = 0;
+        global.ER_value.length = 0;
+        global.ER_scriptId.length = 0;
+        global.ER_funcId.length = 0;
+        global.ER_startLine.length = 0;
+        global.ER_endLine.length = 0;
+    }
+}
+
+// Decrements the enable counter. Data is not collected if the counter
+// is zero.
+global.ER_disable = function() {
+    return --global.ER_enableCount;
+}
 
 // Core functions
-global._ER_read = function(name, value) {
-    if ("ER_read" in global)
-        return global.ER_read(name, value);
-    else
-        return value;
+function ER_read(name, value) {
+    if (global.ER_enableCount) {
+        global.ER_op.push_(ER_OP_read);
+        global.ER_name.push_(name);
+        global.ER_value.push_(value);
+    }
+    return value;
 }
 
-global._ER_readProp = function(obj, name, value) {
-    if ("ER_readProp" in global)
-        return global.ER_readProp(obj, name, value);
-    else
-        return value;
+function ER_readProp(obj, name, value) {
+    if (global.ER_enableCount) {
+        global.ER_op.push_(ER_OP_readProp);
+        global.ER_obj.push_(obj);
+        global.ER_name.push_(name);
+        global.ER_value.push_(value);
+    }
+    return value;
 }
 
-global._ER_write = function(name, value) {
-    if ("ER_write" in global)
-        return global.ER_write(name, value);
-    else
-        return value;
+function ER_readArray(array) {
+    if (global.ER_enableCount) {
+        global.ER_op.push_(ER_OP_readArray);
+        global.ER_obj.push_(array);
+    }
 }
 
-global._ER_writeFunc = function(name, value, id) {
-    if ("ER_writeFunc" in global)
-        return global.ER_writeFunc(name, value, id);
-    else
-        return value;
+function ER_write(name, value) {
+    if (global.ER_enableCount) {
+        global.ER_op.push_(ER_OP_write);
+        global.ER_name.push_(name);
+        global.ER_value.push_(value);
+    }
+    return value;
 }
 
-global._ER_writeProp = function(obj, name, value) {
-    if ("ER_writeProp" in global)
-        return global.ER_writeProp(obj, name, value);
-    else
-        return value;
+function ER_writeProp(obj, name, value) {
+    if (global.ER_enableCount) {
+        global.ER_op.push_(ER_OP_writeProp);
+        global.ER_obj.push_(obj);
+        global.ER_name.push_(name);
+        global.ER_value.push_(value);
+    }
+    return value;
 }
 
-global._ER_writePropFunc = function(obj, name, value, id) {
-    if ("ER_writePropFunc" in global)
-        return global.ER_writePropFunc(obj, name, value, id);
-    else
-        return value;
+function ER_writeFunc(name, value, id) {
+    if (global.ER_enableCount) {
+        global.ER_op.push_(ER_OP_writeFunc);
+        global.ER_name.push_(name);
+        global.ER_funcId.push_(id);
+    }
+    return value;
 }
 
-global._ER_delete = function(name) {
-    if ("ER_delete" in global)
-        global.ER_delete(name);
+function ER_writePropFunc(obj, name, value, id) {
+    if (global.ER_enableCount) {
+        global.ER_op.push_(ER_OP_writePropFunc);
+        global.ER_obj.push_(obj);
+        global.ER_name.push_(name);
+        global.ER_funcId.push_(id);
+    }
+    return value;
 }
 
-global._ER_deleteProp = function(obj, name) {
-    if ("ER_deleteProp" in global)
-        global.ER_deleteProp(obj, name);
+function ER_writeArray(array) {
+    if (global.ER_enableCount) {
+        global.ER_op.push_(ER_OP_writeArray);
+        global.ER_obj.push_(array);
+    }
 }
 
-global._ER_enterFunction = function(name, scriptId, fnId) {
-    if ("ER_enterFunction" in global)
-        global.ER_enterFunction(name, scriptId, fnId);
+
+function ER_enterFunction(name, scriptId, fnId, startLine, endLine) {
+    if (global.ER_enableCount) {
+        global.ER_op.push_(ER_OP_enterFunc);
+        global.ER_name.push_(name);
+        global.ER_scriptId.push_(scriptId);
+        global.ER_funcId.push_(fnId);
+        global.ER_startLine.push_(startLine);
+        global.ER_endLine.push_(endLine);
+    }
 }
 
-global._ER_exitFunction = function(val) {
-    if ("ER_exitFunction" in global)
-        return global.ER_exitFunction(val);
-    else
-        return val;
+function ER_exitFunction(val) {
+    if (global.ER_enableCount)
+        global.ER_op.push_(ER_OP_exitFunc);
+    return val;
 }
 
-global._ER_readArray = function(array) {
-    if ("ER_readArray" in global)
-        return global.ER_readArray(array);
+function ER_delete(name) {
+    if (global.ER_enableCount) {
+        global.ER_op.push_(ER_OP_delete);
+        global.ER_name.push_(name);
+    }
 }
 
-global._ER_writeArray = function(array) {
-    if ("ER_writeArray" in global)
-        return global.ER_writeArray(array);
+function ER_deleteProp(obj, name) {
+    if (global.ER_enableCount) {
+        global.ER_op.push_(ER_OP_deleteProp);
+        global.ER_obj.push_(obj);
+        global.ER_name.push_(name);
+    }
 }
 
 // Helper functions
-global.ER_readPropIdx = function(arr, idx) {
-    return global._ER_readProp(arr, idx, arr[idx]);
+function ER_readPropIdx(arr, idx) {
+    return ER_readProp(arr, idx, arr[idx]);
 }
 
-global.ER_writePropIdx = function(obj, idx, value) {
-    return obj[idx] = global._ER_writeProp(obj, idx, value);
+function ER_writePropIdx(obj, idx, value) {
+    return obj[idx] = ER_writeProp(obj, idx, value);
 }
 
-global.ER_writePropIdxFunc = function(obj, idx, value, id) {
-    return obj[idx] = global._ER_writePropFunc(obj, idx, value, id);
+function ER_writePropIdxFunc(obj, idx, value, id) {
+    return obj[idx] = ER_writePropFunc(obj, idx, value, id);
 }
 
-global.ER_writePropIdxStrict = function(obj, idx, value) {
+function ER_writePropIdxStrict(obj, idx, value) {
     "use strict";
-    return obj[idx] = global._ER_writeProp(obj, idx, value);
+    return obj[idx] = ER_writeProp(obj, idx, value);
 }
 
-global.ER_writePropIdxFuncStrict = function(obj, idx, value, id) {
+function ER_writePropIdxFuncStrict(obj, idx, value, id) {
     "use strict";
-    return obj[idx] = global._ER_writePropFunc(obj, idx, value, id);
+    return obj[idx] = ER_writePropFunc(obj, idx, value, id);
 }
 
-global.ER_preIncProp = function(obj, idx) {
+function ER_preIncProp(obj, idx) {
     var v = ++obj[idx];
-    global._ER_writeProp(obj, idx, v);
+    ER_writeProp(obj, idx, v);
     return v;
 }
 
-global.ER_preIncPropStrict = function(obj, idx) {
+function ER_preIncPropStrict(obj, idx) {
     "use strict";
     var v = ++obj[idx];
-    global._ER_writeProp(obj, idx, v);
+    ER_writeProp(obj, idx, v);
     return v;
 }
 
-global.ER_preDecProp = function(obj, idx) {
+function ER_preDecProp(obj, idx) {
     var v = --obj[idx];
-    global._ER_writeProp(obj, idx, v);
+    ER_writeProp(obj, idx, v);
     return v;
 }
 
-global.ER_preDecPropStrict = function(obj, idx) {
+function ER_preDecPropStrict(obj, idx) {
     "use strict";
     var v = --obj[idx];
-    global._ER_writeProp(obj, idx, v);
+    ER_writeProp(obj, idx, v);
     return v;
 }
 
-global.ER_postIncProp = function(obj, idx) {
+function ER_postIncProp(obj, idx) {
     var v = obj[idx]++;
-    global._ER_writeProp(obj, idx, obj[idx]);
+    ER_writeProp(obj, idx, obj[idx]);
     return v;
 }
 
-global.ER_postIncPropStrict = function(obj, idx) {
+function ER_postIncPropStrict(obj, idx) {
     "use strict";
     var v = obj[idx]++;
-    global._ER_writeProp(obj, idx, obj[idx]);
+    ER_writeProp(obj, idx, obj[idx]);
     return v;
 }
 
-global.ER_postDecProp = function(obj, idx) {
+function ER_postDecProp(obj, idx) {
     var v = obj[idx]--;
-    global._ER_writeProp(obj, idx, obj[idx]);
+    ER_writeProp(obj, idx, obj[idx]);
     return v;
 }
 
-global.ER_postDecPropStrict = function(obj, idx) {
+function ER_postDecPropStrict(obj, idx) {
     "use strict";
     var v = obj[idx]--;
-    global._ER_writeProp(obj, idx, obj[idx]);
+    ER_writeProp(obj, idx, obj[idx]);
     return v;
 }
 
-global.ER_deletePropIdx = function(obj, idx) {
-    global._ER_deleteProp(obj, idx);
+function ER_deletePropIdx(obj, idx) {
+    ER_deleteProp(obj, idx);
     return delete obj[idx];
 }
 
-global.ER_deletePropIdxStrict = function(obj, idx) {
+function ER_deletePropIdxStrict(obj, idx) {
     "use strict";
-    global._ER_deleteProp(obj, idx);
+    ER_deleteProp(obj, idx);
     return delete obj[idx];
 }
