@@ -1140,31 +1140,44 @@ FunctionLiteral* EventRacerRewriter::doVisit(FunctionLiteral *lit) {
 
   ContextScope _(this, lit->scope());
   rewrite(this, lit->scope()->declarations());
-  if (!lit->body() || lit->body()->length() == 0)
-    return lit;
-  rewrite(this, lit->body());
 
+  bool empty_body = !lit->body() || lit->body()->length() == 0;
+  if (!empty_body)
+    rewrite(this, lit->body());
+
+  int nfn = 0;
   ZoneList<Declaration*> &dcls = *lit->scope()->declarations();
-  for (int i = 0; i < dcls.length(); ++i) {
-    if (dcls[i]->IsFunctionDeclaration()) {
-      FunctionDeclaration *fndcl = dcls[i]->AsFunctionDeclaration();
-      ZoneList<Expression*> *args =
-        new (zone()) ZoneList<Expression*>(3, zone());
-      args->Add(factory_.NewStringLiteral(fndcl->proxy()->raw_name(),
-                                          fndcl->proxy()->position()),
-                zone());
-      args->Add(factory_.NewNullLiteral(RelocInfo::kNoPosition), zone());
-      args->Add(factory_.NewSmiLiteral(fndcl->fun()->function_id(),
-                                       RelocInfo::kNoPosition),
-                zone());
-      lit->body()->InsertAt(
-          0,
-          factory_.NewExpressionStatement(
-              call_runtime(ER_writeFunc, args, lit->position()),
-              lit->position()),
-          zone());
+  for (int i = 0; i < dcls.length(); ++i)
+    nfn += dcls[i]->IsFunctionDeclaration();
+
+  if (nfn) {
+    if (!lit->body())
+      lit->body_ = new (zone()) ZoneList<Statement*>(nfn, zone());
+
+    for (int i = 0; i < dcls.length(); ++i) {
+      if (dcls[i]->IsFunctionDeclaration()) {
+        FunctionDeclaration *fndcl = dcls[i]->AsFunctionDeclaration();
+        ZoneList<Expression*> *args =
+            new (zone()) ZoneList<Expression*>(3, zone());
+        args->Add(factory_.NewStringLiteral(fndcl->proxy()->raw_name(),
+                                            fndcl->proxy()->position()),
+                  zone());
+        args->Add(factory_.NewNullLiteral(RelocInfo::kNoPosition), zone());
+        args->Add(factory_.NewSmiLiteral(fndcl->fun()->function_id(),
+                                         RelocInfo::kNoPosition),
+                  zone());
+        lit->body()->InsertAt(
+            0,
+            factory_.NewExpressionStatement(
+                call_runtime(ER_writeFunc, args, lit->position()),
+                lit->position()),
+            zone());
+      }
     }
   }
+
+  if (empty_body)
+    return lit;
 
   // Emit a statement to log a function entry.
   int scriptId = -1, startLine = -1, endLine = -1;
